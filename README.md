@@ -195,11 +195,11 @@ Nothing runs while the app is hidden. While it is open:
 ## Limits
 
 Each provider bounds what it reads so nothing can balloon the shell's memory:
-a local note over 2 MiB is listed but opened read-only with a note saying so;
+a local note is read once with a 2 MiB ceiling and opened read-only with a note saying so if it is larger;
 the folder listing is capped at 4 MiB; Graph responses are read up to 4–8 MiB,
 page images up to 20 MiB, lists up to 500 sticky notes / 500 sections / 3000
 pages; a sticky note's text is kept to 256 KiB. The plugin's own state file is
-ignored if it exceeds 1 MiB. The numbers live at the top of each provider's
+read the same way (1 MiB ceiling) and ignored beyond it. The numbers live at the top of each provider's
 files.
 
 ## What it accesses, and why

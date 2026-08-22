@@ -483,7 +483,6 @@ Item {
 
   // ── state ───────────────────────────────────────────────────────────
   function saveState() {
-    if (!stateFile.path) stateFile.path = root.statePath
     var ps = {}
     for (var i = 0; i < root.providers.length; i++) ps[root.providers[i].id] = root.providers[i].saveState()
     stateFile.setText(JSON.stringify({ version: 2, detached: root.detached, collapsed: root.collapsed, opened: root.openedSections, providers: ps }, null, 2) + "\n")
@@ -499,25 +498,25 @@ Item {
     scanProviders.running = true
   }
   // The state file is the host's only input from disk; it holds a few flags
-  // and ids, so anything over 1 MiB is not ours to load.
+  // and ids. It is read exactly once, at most maxStateBytes+1 bytes, and
+  // those bytes are what gets parsed — no size check followed by a reopen.
   readonly property int maxStateBytes: 1024 * 1024
   Process {
-    id: stateSize
-    command: ["sh", "-c", 'stat -c %s -- "$1" 2>/dev/null || echo 0', "sh", root.statePath]
+    id: stateRead
+    command: ["sh", "-c", 'head -c "$2" -- "$1" 2>/dev/null; true', "sh", root.statePath, String(root.maxStateBytes + 1)]
     stdout: StdioCollector {
       onStreamFinished: {
-        if (Number(this.text.trim()) > root.maxStateBytes) { console.warn("note-note: state file too large, ignoring"); root.loadState(""); return }
-        stateFile.path = root.statePath
+        if (this.text.length > root.maxStateBytes) { console.warn("note-note: state file too large, ignoring"); root.loadState(""); return }
+        root.loadState(this.text)
       }
     }
   }
-  Component.onCompleted: stateSize.running = true
+  Component.onCompleted: stateRead.running = true
   FileView {
     id: stateFile
+    path: root.statePath
     atomicWrites: true
     printErrors: false
-    onLoaded: root.loadState(text())
-    onLoadFailed: root.loadState("")
   }
 
   // ── content: lives in the overlay card or the detached window ───────

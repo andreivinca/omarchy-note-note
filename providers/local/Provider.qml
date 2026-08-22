@@ -137,16 +137,36 @@ Item {
   }
 
   // ── notes ───────────────────────────────────────────────────────────
-  property var pendingLoad: null
+  // A note is read exactly once, at most maxNoteBytes+1 bytes, and those
+  // bytes are what is shown: no size check followed by a reopen, so a file
+  // that grows between listing and opening cannot exceed the cap.
+  property var loadQueue: []
   function load(path, cb) {
-    var n = noteAt(path)
-    if (n && n.size > root.maxNoteBytes) {
-      cb({ title: n.title, body: "This file is " + Math.round(n.size / 1048576) + " MB — too large to open as a note. Edit it in an editor instead.", editable: false })
-      return
+    root.loadQueue.push({ path: path, cb: cb })
+    if (!readProc.running) nextRead()
+  }
+  function nextRead() {
+    if (root.loadQueue.length === 0) return
+    var job = root.loadQueue[0]
+    readProc.command = ["sh", "-c", 'head -c "$2" -- "$1" 2>/dev/null; true', "sh", fileOf(job.path), String(root.maxNoteBytes + 1)]
+    readProc.running = true
+  }
+  Process {
+    id: readProc
+    stdout: StdioCollector {
+      onStreamFinished: {
+        var job = root.loadQueue.shift()
+        if (!job) return
+        var e = root.noteAt(job.path), ver = e ? e.version || "" : ""
+        if (this.text.length > root.maxNoteBytes) {
+          job.cb({ title: e ? e.title : "", body: "This file is larger than " + Math.round(root.maxNoteBytes / 1048576) + " MB — too large to open as a note. Edit it in an editor instead.", editable: false, version: ver })
+        } else {
+          var n = root.parseNote(this.text)
+          job.cb({ title: n.title, body: n.body, editable: true, version: ver })
+        }
+      }
     }
-    root.pendingLoad = { path: path, cb: cb }
-    noteFile.path = fileOf(path)
-    noteFile.reload()
+    onExited: Qt.callLater(root.nextRead)
   }
 
   // Our own writes fire inotify too; ignore events that follow one closely.
@@ -255,20 +275,6 @@ Item {
     orderFile.setText(root.notebooks.filter(function(b) { return b.key }).map(function(b) { return b.key }).join("\n") + "\n")
   }
 
-  FileView {
-    id: noteFile
-    printErrors: false
-    onLoaded: {
-      var p = root.pendingLoad; root.pendingLoad = null
-      if (!p) return
-      var n = root.parseNote(text()), e = root.noteAt(p.path)
-      p.cb({ title: n.title, body: n.body, editable: true, version: e ? e.version || "" : "" })
-    }
-    onLoadFailed: {
-      var p = root.pendingLoad; root.pendingLoad = null
-      if (p) p.cb({ title: "", body: "", editable: true })
-    }
-  }
   FileView { id: writeFile; atomicWrites: true; printErrors: false }
   FileView { id: orderFile; atomicWrites: true; printErrors: false }
   Process { id: rmProc }
