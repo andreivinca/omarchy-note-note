@@ -115,7 +115,18 @@ Item {
     for (var i = 0; i < root.msNotes.length; i++) if (root.msNotes[i].id === id) return root.msNotes[i]
     return null
   }
+  // Local notebooks are open unless folded; the remote ones (Sticky Notes,
+  // OneNote) are folded unless the user opened them.
   property var collapsed: []
+  property var openedRemote: []
+  function isRemoteKey(key) { return key === root.msKey || key === root.onKey }
+  function isFolded(key) {
+    return isRemoteKey(key) ? root.openedRemote.indexOf(key) < 0 : root.collapsed.indexOf(key) >= 0
+  }
+  // Every folded key, for the sidebar's chevrons.
+  function foldedKeys() {
+    return root.notebooks.map(function(b) { return b.key }).filter(isFolded)
+  }
   readonly property string statePath: Quickshell.env("HOME") + "/.local/state/omarchy/note-note.json"
 
   // Current note. `currentPath` drives the FileView; `loadingNote` guards
@@ -281,7 +292,7 @@ Item {
     var out = []
     for (var b = 0; b < root.notebooks.length; b++) {
       var key = root.notebooks[b].key
-      var folded = !root.filterText && root.collapsed.indexOf(key) >= 0
+      var folded = !root.filterText && isFolded(key)
       if (key === root.onKey && !folded && !root.filterText && root.msSignedIn && root.msOneNote) {
         appendOneNoteTree(out)
         continue
@@ -349,10 +360,15 @@ Item {
   }
 
   function toggleSection(key) {
-    var i = root.collapsed.indexOf(key)
-    var next = root.collapsed.slice()
-    if (i >= 0) next.splice(i, 1); else next.push(key)
-    root.collapsed = next
+    if (isRemoteKey(key)) {
+      var j = root.openedRemote.indexOf(key), nextOpen = root.openedRemote.slice()
+      if (j >= 0) nextOpen.splice(j, 1); else nextOpen.push(key)
+      root.openedRemote = nextOpen
+    } else {
+      var i = root.collapsed.indexOf(key), next = root.collapsed.slice()
+      if (i >= 0) next.splice(i, 1); else next.push(key)
+      root.collapsed = next
+    }
     rebuildModel()
     saveState()
   }
@@ -563,7 +579,7 @@ Item {
     var entry = { path: path, notebook: key, title: "", preview: "" }
     arr.splice(at, 0, entry)
     root.notes = arr
-    if (root.collapsed.indexOf(key) >= 0) { root.collapsed = root.collapsed.filter(function(k) { return k !== key }); saveState() }
+    if (isFolded(key)) { toggleSection(key) }
     rebuildModel()
     saveOrder(key)
     var mi = modelIndexOf(path)
@@ -711,14 +727,15 @@ Item {
   Timer { id: saveTimer; interval: 500; onTriggered: root.flushSave() }
 
   function saveState() {
-    stateFile.setText(JSON.stringify({ version: 1, detached: root.detached, collapsed: root.collapsed, onExpanded: root.onExpanded }, null, 2) + "\n")
+    stateFile.setText(JSON.stringify({ version: 1, detached: root.detached, collapsed: root.collapsed, openedRemote: root.openedRemote, onExpanded: root.onExpanded }, null, 2) + "\n")
   }
 
   function loadState(raw) {
     try {
       var parsed = JSON.parse(raw || "{}")
       if (parsed.detached === true) root.detached = true
-      if (Array.isArray(parsed.collapsed)) root.collapsed = parsed.collapsed
+      if (Array.isArray(parsed.collapsed)) root.collapsed = parsed.collapsed.filter(function(k) { return k !== "ms:" && k !== "on:" })
+      if (Array.isArray(parsed.openedRemote)) root.openedRemote = parsed.openedRemote
       if (Array.isArray(parsed.onExpanded)) root.onExpanded = parsed.onExpanded
     } catch (e) { /* a corrupt state file costs nothing */ }
   }
@@ -1180,7 +1197,7 @@ Item {
           model: root.rows
           currentPath: root.currentPath
           filtering: root.filterText.length > 0
-          collapsed: root.collapsed
+          collapsed: root.revision < 0 ? [] : root.foldedKeys()
           foreground: root.foreground
           accent: root.accent
           selectedBackground: root.selectedBackground

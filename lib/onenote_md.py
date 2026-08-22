@@ -17,6 +17,7 @@ TAG_PREFIX = {
 PREFIX_TAG = {v.strip(): k for k, v in TAG_PREFIX.items()}
 BLOCK_TAGS = {"p", "div", "h1", "h2", "h3", "h4", "h5", "h6", "ul", "ol", "li", "table", "tr", "td", "th", "br", "cite", "body", "html", "head", "title"}
 LOSSY_TAGS = {"object", "iframe", "video", "audio", "math", "svg"}
+GAP = "\u00a0"   # an empty line, see Converter.block("br")
 
 
 class Node:
@@ -58,6 +59,10 @@ class TreeBuilder(HTMLParser):
 class Converter:
     def __init__(self, image_path_for=None):
         self.lines = []
+        # What the previous emitted block was: consecutive plain paragraphs
+        # are joined with hard line breaks, because OneNote writes one <p>
+        # per visual line and Markdown would otherwise flow them together.
+        self.last = None
         self.editable = True
         self.images = []          # [(src, alt)]
         # (src, declared width or 0) -> url/path to show
@@ -139,6 +144,8 @@ class Converter:
 
     def block(self, node, depth=0):
         t = node.tag
+        if t not in ("p", "cite", None):
+            self.last = None
         if t is None:
             txt = node.text.strip()
             if txt:
@@ -159,7 +166,13 @@ class Converter:
                 text = "*%s*" % text if text else ""
                 prefix = ""
             if text or prefix.startswith("- ["):
+                plain = not prefix
+                if plain and self.last == "p" and self.lines and self.lines[-1] != "":
+                    self.lines[-1] = self.lines[-1] + "  "        # hard break
+                elif self.last is not None and self.last != ("p" if plain else "item") and self.lines and self.lines[-1] != "":
+                    self.lines.append("")                          # text <-> list boundary
                 self.lines.append(prefix + text.replace("\n", "  \n"))
+                self.last = "p" if plain else "item"
             return
         if t in ("h1", "h2", "h3", "h4", "h5", "h6"):
             text = self.inline(node).strip()
@@ -189,8 +202,14 @@ class Converter:
             self.table(node)
             return
         if t == "br":
-            if self.lines and self.lines[-1] != "":
+            # A bare <br/> between blocks is a visual empty line in OneNote.
+            # Markdown has no such thing, so it becomes a paragraph holding a
+            # single non-breaking space, which the editor draws as a blank line.
+            if self.lines and self.lines[-1] not in ("", GAP):
                 self.lines.append("")
+                self.lines.append(GAP)
+                self.lines.append("")
+            self.last = None
             return
         if t == "img":
             self.lines.append(self.inline(Node("span", children_of=None) if False else _wrap(node)).strip())
@@ -240,11 +259,11 @@ class Converter:
     def result(self):
         out, blank = [], True
         for l in self.lines:
-            if l.strip():
-                out.append(l.rstrip()); blank = False
+            if l.strip() or l == GAP:
+                out.append(l if l == GAP else l[:len(l.rstrip()) + (2 if l.endswith("  ") else 0)]); blank = False
             elif not blank:
                 out.append(""); blank = True
-        while out and not out[-1]:
+        while out and out[-1] in ("", GAP):
             out.pop()
         return "\n".join(out)
 
@@ -327,6 +346,7 @@ def markdown_to_onenote_html(md):
     lines = md.replace("\r", "").split("\n")
     out, i = [], 0
     list_stack = []   # [(indent, kind)]
+    prev_plain, gap = False, False     # a blank line between two plain paragraphs is a visual gap
 
     def close_lists(to_indent=-1):
         while list_stack and list_stack[-1][0] > to_indent:
@@ -336,12 +356,18 @@ def markdown_to_onenote_html(md):
         line = lines[i]
         if not line.strip():
             close_lists()
+            if GAP in line:                 # an explicit empty line (see GAP)
+                out.append("<br/>")
+                prev_plain, gap = False, False
+            else:
+                gap = True
             i += 1
             continue
         m = _HEAD.match(line)
         if m:
             close_lists()
             out.append("<h%d>%s</h%d>" % (len(m.group(1)), md_inline(m.group(2).strip()), len(m.group(1))))
+            prev_plain, gap = False, False
             i += 1
             continue
         if line.lstrip().startswith("|") and i + 1 < len(lines) and re.match(r"^\s*\|?\s*:?-+", lines[i + 1]):
@@ -356,6 +382,7 @@ def markdown_to_onenote_html(md):
             for r in rows:
                 out.append("<tr>" + "".join('<td style="border:1px solid">%s</td>' % (md_inline(c) or "<br/>") for c in r) + "</tr>")
             out.append("</table>")
+            prev_plain, gap = False, False
             continue
         m = _LIST.match(line)
         if m:
@@ -365,6 +392,7 @@ def markdown_to_onenote_html(md):
             if indent == 0 and tag and tag.startswith("to-do") and not list_stack:
                 # A top-level checkbox is a OneNote to-do paragraph, not a bullet.
                 out.append('<p data-tag="%s">%s</p>' % (tag, md_inline(text)))
+                prev_plain, gap = False, False
                 i += 1
                 continue
             if list_stack and indent > list_stack[-1][0]:
@@ -380,6 +408,7 @@ def markdown_to_onenote_html(md):
                     list_stack.append((indent, kind))
             content = md_inline(text)
             out.append('<span data-tag="%s">%s</span>' % (tag, content) if tag else content)
+            prev_plain, gap = False, False
             # mark the li as open; closed by the next sibling or close_lists
             out[-1] = out[-1]  # no-op for clarity
             i += 1
@@ -387,7 +416,10 @@ def markdown_to_onenote_html(md):
         close_lists()
         tag, text = _tagged(line.strip())
         para = md_inline(text.replace("  \n", "<br/>"))
+        if not tag and prev_plain and gap:
+            out.append("<br/>")
         out.append('<p data-tag="%s">%s</p>' % (tag, para) if tag else "<p>%s</p>" % para)
+        prev_plain, gap = not tag, False
         i += 1
     close_lists()
     # The list builder emits "<ul><li>" ... "</li></ul>" with "</li><li>" between

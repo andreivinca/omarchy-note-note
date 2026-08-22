@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "id": "io.github.andreivinca.note-note",
   "name": "Note Note",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "author": "Andrei Vinca",
   "description": "Notes for the Omarchy shell: Markdown notebooks on disk, plus your Microsoft Sticky Notes and OneNote, in one Toolroll-style overlay with search, rich text and checklists.",
   "kinds": [

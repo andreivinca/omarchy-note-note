@@ -45,6 +45,10 @@ Item {
 
   readonly property int rowHeight: Style.spacing.controlHeight + Style.spacing.xs
 
+  // Rows start where a heading's label starts: after its chevron.
+  TextMetrics { id: chevronMetrics; text: "󰅀"; font.family: Style.fontFamily; font.pixelSize: Style.font.iconSmall }
+  readonly property real rowIndent: chevronMetrics.width + Style.spacing.xs
+
   function isCollapsed(nb) { return root.collapsed.indexOf(nb) >= 0 }
   // Section strings are "key\u001fname\u001fcount" (see Notes.qml groupOf);
   // the root notebook's key is written as "/".
@@ -189,7 +193,7 @@ Item {
 
             Row {
               anchors.fill: parent
-              anchors.leftMargin: Style.spacing.sm + slot.indent
+              anchors.leftMargin: Style.spacing.sm + root.rowIndent + slot.indent
               anchors.rightMargin: Style.spacing.sm
               spacing: Style.spacing.md
 
@@ -348,7 +352,7 @@ Item {
 
       Row {
         anchors.fill: parent
-        anchors.leftMargin: Style.spacing.sm
+        anchors.leftMargin: Style.spacing.sm + root.rowIndent
         anchors.rightMargin: Style.spacing.sm
         spacing: Style.spacing.md
 
