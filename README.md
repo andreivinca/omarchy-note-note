@@ -2,8 +2,8 @@
 
 Notes for the Omarchy shell, in the shape of Toolroll: a searchable sidebar of
 notebooks on the left, the note on the right — always editable, autosaved.
-Local Markdown notebooks, your Microsoft Sticky Notes and your OneNote
-notebooks all live in the same list.
+Local Markdown notebooks, your Microsoft Sticky Notes, OneNote and Notion pages
+all live in the same list.
 
 ![Note Note showing a OneNote checklist, with local notebooks, Sticky Notes and the OneNote tree down the left](preview.png)
 
@@ -122,6 +122,24 @@ OneNote has its own sign-in (token in `~/.local/state/omarchy/note-note-ms-oneno
 independent of Sticky Notes. If its token lacks the `Notes.ReadWrite` scope the
 notebook shows `Sign in again to enable OneNote…`.
 
+## Notion
+
+A **Notion** notebook lists the pages you share with an integration of your
+own: `Set up…` in the sidebar explains the three steps (create an internal
+integration at notion.so/profile/integrations, paste its secret, connect pages
+to it in Notion). The secret is stored owner-only in
+`~/.local/state/omarchy/note-note-notion.json`; `Settings…` changes or removes
+it. Pages are shown as Markdown — headings, bullet/numbered lists, to-dos,
+quotes, code, dividers, nested blocks, bold/italic/underline/strike/code/links —
+and saving replaces the page's blocks. Pages with other block types (images,
+tables, databases, embeds…) or more than 300 blocks open read-only. `New note…`
+creates a page under the page you are on (Notion's API cannot create top-level
+pages); `×` archives a page. Listings are cached for five minutes; `Refresh`
+forces a fetch. Limits: 1000 pages, 300 blocks per page, 4 MiB per response.
+This provider is new: the API error paths and the block ↔ Markdown conversion
+are tested, the full round-trip against a live workspace is not yet — please
+report anything odd.
+
 ## Providers
 
 Every source of notes is a *provider* — a self-contained folder with a
@@ -132,6 +150,7 @@ contract: sections and rows for the sidebar, `load` / `save` / `create` /
 - `providers/local/` — Markdown notebooks on disk
 - `providers/sticky/` — Microsoft Sticky Notes (`sticky.py`)
 - `providers/onenote/` — OneNote (`onenote.py`, `onenote_md.py`)
+- `providers/notion/` — Notion (`notion.py`, `notion_md.py`)
 - `services/microsoft/` — the Microsoft sign-in code they share (`Account.qml`,
   `msgraph.py`). Each provider signs in on its own: its own token file and only
   its own scope, so signing out of Sticky Notes leaves OneNote signed in and

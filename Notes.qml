@@ -147,7 +147,8 @@ Item {
   function loadProviders(externalDirs) {
     var urls = [Qt.resolvedUrl("providers/local/Provider.qml"),
                 Qt.resolvedUrl("providers/sticky/Provider.qml"),
-                Qt.resolvedUrl("providers/onenote/Provider.qml")]
+                Qt.resolvedUrl("providers/onenote/Provider.qml"),
+                Qt.resolvedUrl("providers/notion/Provider.qml")]
     for (var i = 0; i < externalDirs.length; i++) urls.push("file://" + externalDirs[i] + "/Provider.qml")
     for (var u = 0; u < urls.length; u++) addProvider(urls[u])
     root.providersLoaded = true
@@ -265,6 +266,10 @@ Item {
       if (root.rows[i].kind === "action" && root.rows[i].path === id) { var p = providerById(root.rows[i].provider); if (p) p.action(id); return true }
     return false
   }
+  function rowsOf(providerId) {
+    return JSON.stringify(root.rows.filter(function(r) { return r.provider === providerId }).map(function(r) { return r.kind + ":" + r.path.substring(0, 24) }))
+  }
+  function sectionsOf(providerId) { var p = providerById(providerId); return p ? JSON.stringify(p.sections.map(function(s) { return s.key + "(" + s.rows.length + ")" })) : "no provider" }
   function treeToggle(id) {
     for (var i = 0; i < root.rows.length; i++)
       if (root.rows[i].kind === "tree" && root.rows[i].path === id) { var p = providerById(root.rows[i].provider); if (p) p.toggleTree(id); return true }
