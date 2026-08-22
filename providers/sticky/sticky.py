@@ -96,6 +96,17 @@ def cmd_create():
 
 
 
+def cmd_delete(note_id):
+    status, res = graph("DELETE", "/me/messages/" + urllib.parse.quote(note_id, safe=""))
+    if status not in (204, 200, 404):
+        fail((res.get("error") or {}).get("message", "Graph error %s" % status) if isinstance(res.get("error"), dict)
+             else str(res.get("error", status)))
+    c = load_json(CACHE, {"notes": []})
+    c["notes"] = [n for n in c.get("notes", []) if n["id"] != note_id]
+    save_private(CACHE, c)
+    out({"ok": True})
+
+
 def main(argv):
     cmd = argv[1] if len(argv) > 1 else ""
     if cmd == "list":

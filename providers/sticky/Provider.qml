@@ -107,10 +107,10 @@ Item {
     rebuild()
     root.saveCb = cb
     saveProc.command = ["python3", root.script, "update", idOf(path), "-"]
+    saveProc.stdinEnabled = true
     saveProc.running = true
     saveProc.write(JSON.stringify({ title: title, body: body }))
-    saveProc.stdinEnabled = false          // closes stdin so the script can read it
-    saveProc.stdinEnabled = true
+    saveProc.stdinEnabled = false          // close stdin: the script reads to EOF
   }
 
   property var createCb: null
