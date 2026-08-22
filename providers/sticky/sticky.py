@@ -15,6 +15,10 @@ sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."
 from msgraph import graph, fail, out, load_json, save_private, CACHE_DIR  # noqa: E402
 
 CACHE = os.path.join(CACHE_DIR, "note-note-sticky.json")
+# This provider's limits: what it will read from Graph and keep around.
+MAX_NOTES = 500                 # sticky notes listed
+MAX_LIST_BODY = 4 * 1024 * 1024  # one page of the listing
+MAX_NOTE_BODY = 256 * 1024      # a single note's text (longer is truncated)
 
 
 def to_note(m):
@@ -24,7 +28,7 @@ def to_note(m):
     return {
         "id": m["id"],
         "title": "",
-        "body": body.replace("\r\n", "\n").rstrip("\n"),
+        "body": body.replace("\r\n", "\n").rstrip("\n")[:MAX_NOTE_BODY],
         "modified": m.get("lastModifiedDateTime", ""),
     }
 
@@ -40,13 +44,14 @@ def cmd_list(cached):
     notes = []
     url = ("/me/mailFolders/notes/messages?$select=id,subject,body,lastModifiedDateTime"
            "&$orderby=lastModifiedDateTime%20desc&$top=100")
-    while url:
-        status, res = graph("GET", url, extra_headers={"Prefer": 'outlook.body-content-type="text"'})
+    while url and len(notes) < MAX_NOTES:
+        status, res = graph("GET", url, extra_headers={"Prefer": 'outlook.body-content-type="text"'}, max_bytes=MAX_LIST_BODY)
         if status != 200:
             fail((res.get("error") or {}).get("message", "Graph error %s" % status) if isinstance(res.get("error"), dict)
                  else str(res.get("error", status)))
         notes.extend(to_note(m) for m in res.get("value", []))
         url = res.get("@odata.nextLink")
+    notes = notes[:MAX_NOTES]
     os.makedirs(CACHE_DIR, exist_ok=True)
     save_private(CACHE, {"notes": notes, "fetched": time.time()})
     out({"notes": notes, "cached": False})

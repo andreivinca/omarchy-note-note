@@ -156,6 +156,16 @@ Everything ships with a stock Omarchy install:
 
 No sudo or pkexec is required, no packages are installed, and no user configuration is modified — the plugin writes only its own files under `~/Notes` (your notes), `~/.local/state/omarchy/note-note*` and `~/.cache/omarchy/note-note-*`.
 
+## Limits
+
+Each provider bounds what it reads so nothing can balloon the shell's memory:
+a local note over 2 MiB is listed but opened read-only with a note saying so;
+the folder listing is capped at 4 MiB; Graph responses are read up to 4–8 MiB,
+page images up to 20 MiB, lists up to 500 sticky notes / 500 sections / 3000
+pages; a sticky note's text is kept to 256 KiB. The plugin's own state file is
+ignored if it exceeds 1 MiB. The numbers live at the top of each provider's
+files.
+
 ## What it accesses, and why
 
 - **Your notes on disk**: `~/Notes` (or `NOTE_NOTE_DIR`) — read and written as plain Markdown files; nothing else on the filesystem beyond its own state and cache under `~/.local/state/omarchy/` and `~/.cache/omarchy/`.

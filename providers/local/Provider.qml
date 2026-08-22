@@ -23,6 +23,10 @@ Item {
   property var services: null
 
   readonly property string notesDir: Quickshell.env("NOTE_NOTE_DIR") || (Quickshell.env("HOME") + "/Notes")
+  // This provider's limits: a note bigger than this is listed but not loaded
+  // (it is almost certainly not a note), and the listing itself is capped.
+  readonly property int maxNoteBytes: 2 * 1024 * 1024
+  readonly property int maxListBytes: 4 * 1024 * 1024
 
   signal updated()
   signal statusRequested(string text)
@@ -116,7 +120,7 @@ Item {
       if (p[0] === "D") dirs.push(p[1] || "")
       else if (p[0] === "O") (orders[p[1] || ""] = orders[p[1] || ""] || []).push(p[2])
       else if (p[0] === "B") bookOrder.push(p[1])
-      else if (p[0] === "N") entries.push({ key: p[1] || "", file: p[2], path: pathOf(p[2]), title: p[3] || "", preview: p[4] || "" })
+      else if (p[0] === "N") entries.push({ key: p[1] || "", file: p[2], path: pathOf(p[2]), title: p[3] || "", preview: p[4] || "", size: Number(p[5] || 0) })
     }
     var books = dirs.filter(function(k) { return k !== "" || entries.some(function(e) { return e.key === "" }) })
       .map(function(k) { return { key: k, name: k || "Notes", dir: dirOf(k) } })
@@ -135,6 +139,11 @@ Item {
   // ── notes ───────────────────────────────────────────────────────────
   property var pendingLoad: null
   function load(path, cb) {
+    var n = noteAt(path)
+    if (n && n.size > root.maxNoteBytes) {
+      cb({ title: n.title, body: "This file is " + Math.round(n.size / 1048576) + " MB — too large to open as a note. Edit it in an editor instead.", editable: false })
+      return
+    }
     root.pendingLoad = { path: path, cb: cb }
     noteFile.path = fileOf(path)
     noteFile.reload()
@@ -145,7 +154,7 @@ Item {
     writeFile.setText(serializeNote(title, body))
     var arr = root.notes.slice()
     for (var i = 0; i < arr.length; i++) if (arr[i].path === path)
-      arr[i] = { key: arr[i].key, file: arr[i].file, path: path, title: title.trim(), preview: previewOf(body) }
+      arr[i] = { key: arr[i].key, file: arr[i].file, path: path, title: title.trim(), preview: previewOf(body), size: body.length }
     root.notes = arr
     rebuild()
     if (cb) cb({})
@@ -156,7 +165,7 @@ Item {
     var file = dirOf(key) + "/note-" + Date.now() + ".md"
     writeFile.path = file
     writeFile.setText(serializeNote("", ""))
-    var entry = { key: key, file: file, path: pathOf(file), title: "", preview: "" }
+    var entry = { key: key, file: file, path: pathOf(file), title: "", preview: "", size: 0 }
     var arr = root.notes.slice(), at = arr.length
     for (var i = arr.length - 1; i >= 0; i--) if (arr[i].key === key) { at = i + 1; break }
     if (at === arr.length && !arr.some(function(n) { return n.key === key })) {
@@ -265,15 +274,15 @@ Item {
         [ -f "$dir/.order" ] && while IFS= read -r n; do [ -n "$n" ] && printf "O\\t%s\\t%s\\n" "$key" "$n"; done < "$dir/.order"
         for f in "$dir"/*.md; do
           [ -e "$f" ] || continue
-          printf "%s\\t%s\\n" "$(stat -c %W -- "$f")" "$f"
-        done | sort -n | cut -f2- | while IFS= read -r f; do
-          awk -v key="$key" -v p="$f" \'
+          printf "%s\\t%s\\t%s\\n" "$(stat -c %W -- "$f")" "$(stat -c %s -- "$f")" "$f"
+        done | sort -n | cut -f2- | while IFS="$(printf "\\t")" read -r size f; do
+          head -c 4096 -- "$f" | awk -v key="$key" -v p="$f" -v size="$size" \'
             NR==1 && $0=="---" { fm=1; next }
             fm && $0=="---"    { fm=0; next }
             fm && /^title:/    { t=substr($0,7); next }
-            !fm && !pv && NF   { pv=$0; sub(/^[#>*\\- \\t]+/, "", pv); gsub(/[*_`]/, "", pv) }
-            END { gsub(/\\t/," ",t); gsub(/\\t/," ",pv); sub(/^ +/,"",t); printf "N\\t%s\\t%s\\t%s\\t%s\\n", key, p, t, pv }
-          \' "$f"
+            !fm && !pv && NF   { pv=substr($0,1,200); sub(/^[#>*\\- \\t]+/, "", pv); gsub(/[*_`]/, "", pv) }
+            END { gsub(/\\t/," ",t); gsub(/\\t/," ",pv); sub(/^ +/,"",t); printf "N\\t%s\\t%s\\t%s\\t%s\\t%s\\n", key, p, t, pv, size }
+          \'
         done
       }
       [ -f .notebooks ] && while IFS= read -r n; do [ -n "$n" ] && printf "B\\t%s\\n" "$n"; done < .notebooks
@@ -284,7 +293,7 @@ Item {
         case "$d" in .*) continue;; esac
         emit "$PWD/$d" "$d"
       done
-    ', "sh", root.notesDir]
+    ' + " | head -c " + root.maxListBytes, "sh", root.notesDir]
     stdout: StdioCollector { onStreamFinished: root.loadList(this.text) }
   }
 }

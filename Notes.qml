@@ -429,6 +429,7 @@ Item {
 
   // ── state ───────────────────────────────────────────────────────────
   function saveState() {
+    if (!stateFile.path) stateFile.path = root.statePath
     var ps = {}
     for (var i = 0; i < root.providers.length; i++) ps[root.providers[i].id] = root.providers[i].saveState()
     stateFile.setText(JSON.stringify({ version: 2, detached: root.detached, collapsed: root.collapsed, opened: root.openedSections, providers: ps }, null, 2) + "\n")
@@ -443,9 +444,22 @@ Item {
     } catch (e) { /* a corrupt state file costs nothing */ }
     scanProviders.running = true
   }
+  // The state file is the host's only input from disk; it holds a few flags
+  // and ids, so anything over 1 MiB is not ours to load.
+  readonly property int maxStateBytes: 1024 * 1024
+  Process {
+    id: stateSize
+    command: ["sh", "-c", 'stat -c %s -- "$1" 2>/dev/null || echo 0', "sh", root.statePath]
+    stdout: StdioCollector {
+      onStreamFinished: {
+        if (Number(this.text.trim()) > root.maxStateBytes) { console.warn("note-note: state file too large, ignoring"); root.loadState(""); return }
+        stateFile.path = root.statePath
+      }
+    }
+  }
+  Component.onCompleted: stateSize.running = true
   FileView {
     id: stateFile
-    path: root.statePath
     atomicWrites: true
     printErrors: false
     onLoaded: root.loadState(text())

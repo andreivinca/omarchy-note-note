@@ -20,13 +20,19 @@ import onenote_md  # noqa: E402
 
 ONENOTE_CACHE = os.path.join(CACHE_DIR, "note-note-onenote.json")
 ONENOTE_IMG_DIR = os.path.join(CACHE_DIR, "note-note-onenote-img")
+# This provider's limits: what it will read from Graph and keep around.
+MAX_SECTIONS = 500
+MAX_PAGES = 3000
+MAX_LIST_BODY = 4 * 1024 * 1024   # one page of a listing
+MAX_PAGE_HTML = 4 * 1024 * 1024   # a page's content
+MAX_IMAGE = 20 * 1024 * 1024      # one cached image
 
 
 # ---------------------------------------------------------------- OneNote
 
 
 
-def graph_raw(method, path, data=None, content_type=None, extra_headers=None):
+def graph_raw(method, path, data=None, content_type=None, extra_headers=None, max_bytes=MAX_PAGE_HTML):
     """Graph call with a non-JSON body (OneNote HTML) and a text response."""
     headers = {"Authorization": "Bearer " + access_token()}
     if content_type:
@@ -37,9 +43,12 @@ def graph_raw(method, path, data=None, content_type=None, extra_headers=None):
     for attempt in range(3):
         try:
             with urllib.request.urlopen(req, timeout=60) as r:
-                return r.status, r.read().decode(errors="replace")
+                raw = r.read(max_bytes + 1)
+                if len(raw) > max_bytes:
+                    fail("response larger than %d bytes" % max_bytes)
+                return r.status, raw.decode(errors="replace")
         except urllib.error.HTTPError as e:
-            body = e.read().decode(errors="replace")
+            body = e.read(max_bytes + 1)[:max_bytes].decode(errors="replace")
             if e.code in (429, 503) and attempt < 2:
                 try:
                     wait = float(e.headers.get("Retry-After", "3"))
@@ -67,8 +76,8 @@ def cmd_onenote_list(cached, max_age=0):
         return
     sections = []
     url = "/me/onenote/sections?$select=id,displayName,parentNotebook&$expand=parentNotebook($select=id,displayName)&$top=100"
-    while url:
-        status, res = graph("GET", url)
+    while url and len(sections) < MAX_SECTIONS:
+        status, res = graph("GET", url, max_bytes=MAX_LIST_BODY)
         if status != 200:
             fail(graph_err(res, status))
         for sct in res.get("value", []):
@@ -76,6 +85,7 @@ def cmd_onenote_list(cached, max_age=0):
                              "notebook": (sct.get("parentNotebook") or {}).get("displayName", ""),
                              "notebookId": (sct.get("parentNotebook") or {}).get("id", "")})
         url = res.get("@odata.nextLink")
+    sections = sections[:MAX_SECTIONS]
     # Pages are listed per section: the account-wide /me/onenote/pages call
     # refuses accounts with many sections. Each call takes a couple of
     # seconds, so sections are fetched in parallel.
@@ -87,9 +97,9 @@ def cmd_onenote_list(cached, max_age=0):
         found = []
         url = ("/me/onenote/sections/%s/pages?$select=id,title,lastModifiedDateTime&$orderby=lastModifiedDateTime%%20desc&$top=100"
                % urllib.parse.quote(sct["id"], safe=""))
-        while url:
+        while url and len(found) < MAX_PAGES:
             status, res = http("GET", url if url.startswith("http") else GRAPH + url, headers={
-                "Authorization": "Bearer " + token, "Accept": "application/json"})
+                "Authorization": "Bearer " + token, "Accept": "application/json"}, max_bytes=MAX_LIST_BODY)
             if status != 200:
                 return {"error": graph_err(res, status)}
             for pg in res.get("value", []):
@@ -104,6 +114,7 @@ def cmd_onenote_list(cached, max_age=0):
             if isinstance(result, dict):
                 fail(result["error"])
             pages.extend(result)
+    pages = pages[:MAX_PAGES]
     os.makedirs(CACHE_DIR, exist_ok=True)
     save_private(ONENOTE_CACHE, {"sections": sections, "pages": pages, "fetched": time.time()})
     out({"sections": sections, "pages": pages, "cached": False})
@@ -122,7 +133,10 @@ def cached_image(src, width=0):
         req = urllib.request.Request(src, headers={"Authorization": "Bearer " + access_token()})
         try:
             with urllib.request.urlopen(req, timeout=60) as r, open(path + ".tmp", "wb") as f:
-                f.write(r.read())
+                raw = r.read(MAX_IMAGE + 1)
+                if len(raw) > MAX_IMAGE:
+                    return src            # shown as a link, not downloaded
+                f.write(raw)
         except (urllib.error.URLError, OSError):
             return src
         magick = shutil.which("magick") or shutil.which("convert")

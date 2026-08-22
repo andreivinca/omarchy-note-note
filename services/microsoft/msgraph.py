@@ -71,7 +71,19 @@ def config():
     return client_id, tenant
 
 
-def http(method, url, data=None, headers=None, form=False):
+# Default ceiling for a response body; callers pass their own max_bytes.
+MAX_BODY = 8 * 1024 * 1024
+
+
+def read_bounded(resp, max_bytes):
+    """Read at most max_bytes (+1 to detect overflow) from a response."""
+    raw = resp.read(max_bytes + 1)
+    if len(raw) > max_bytes:
+        raise OverflowError("response larger than %d bytes" % max_bytes)
+    return raw
+
+
+def http(method, url, data=None, headers=None, form=False, max_bytes=MAX_BODY):
     body = None
     hdrs = dict(headers or {})
     if data is not None:
@@ -85,10 +97,12 @@ def http(method, url, data=None, headers=None, form=False):
     for attempt in range(3):
         try:
             with urllib.request.urlopen(req, timeout=30) as r:
-                raw = r.read()
+                raw = read_bounded(r, max_bytes)
                 return r.status, (json.loads(raw) if raw else {})
+        except OverflowError as e:
+            fail(str(e))
         except urllib.error.HTTPError as e:
-            raw = e.read()
+            raw = e.read(max_bytes + 1)[:max_bytes]
             # Throttled: Graph says how long to wait. Honour it (bounded) and retry.
             if e.code in (429, 503) and attempt < 2:
                 try:
@@ -132,11 +146,11 @@ def access_token():
     return tok["access_token"]
 
 
-def graph(method, path, data=None, extra_headers=None):
+def graph(method, path, data=None, extra_headers=None, max_bytes=MAX_BODY):
     headers = {"Authorization": "Bearer " + access_token(), "Accept": "application/json"}
     headers.update(extra_headers or {})
     url = path if path.startswith("http") else GRAPH + path
-    return http(method, url, data, headers)
+    return http(method, url, data, headers, max_bytes=max_bytes)
 
 
 # ---------------------------------------------------------------- commands

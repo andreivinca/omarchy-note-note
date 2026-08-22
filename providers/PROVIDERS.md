@@ -79,6 +79,18 @@ it to `~/.config/omarchy/note-note/providers/hello/` to see it load. Put
 `focus: true` on the field that should receive the keyboard when a view
 opens; the host focuses the view once it is in the scene.
 
+## Limits
+
+Everything a provider reads is the provider's responsibility to bound — file
+sizes, HTTP response bodies, list lengths, cached downloads — before it
+reaches the host. The host never reads provider data from disk or network
+itself; it only retains what `sections` and `load()` hand it, so an unbounded
+provider means unbounded shell memory. Each built-in declares its limits at
+the top of its files (`maxNoteBytes` in `providers/local/Provider.qml`,
+`MAX_*` in `sticky.py` / `onenote.py`); a note that is too large should be
+listed but returned as `editable: false` with an explanatory body rather
+than loaded. The host guards only its own state file.
+
 ## Services
 
 `services.microsoft.create(providerId, scopes)` returns an account of the
