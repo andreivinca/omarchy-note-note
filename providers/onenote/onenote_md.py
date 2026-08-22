@@ -94,7 +94,7 @@ class Converter:
         self.editable = True
         self.images = []          # [(src, alt)]
         # (src, declared width or 0) -> url/path to show
-        self.image_path_for = image_path_for or (lambda src, width: src)
+        self.image_path_for = image_path_for or (lambda src, width: None)
 
     # -- inline --------------------------------------------------------
     def inline(self, node):
@@ -128,7 +128,8 @@ class Converter:
                     width = int(float(c.attrs.get("width", "0") or 0))
                 except ValueError:
                     width = 0
-                out.append("![%s](%s)" % (alt, self.image_path_for(src, width)))
+                local = self.image_path_for(src, width)
+                out.append("![%s](%s)" % (alt, local) if local else "[image: %s]" % (alt or "not shown"))
             elif c.tag in LOSSY_TAGS:
                 self.editable = False
                 out.append("[unsupported: %s]" % c.tag)

@@ -120,31 +120,85 @@ def cmd_onenote_list(cached, max_age=0):
     out({"sections": sections, "pages": pages, "cached": False})
 
 
+# Page images are only ever fetched from Graph's own resource endpoint, with
+# the bearer token, and never across a redirect: an <img src> in page content
+# is untrusted and must not be able to send our token (or any request)
+# anywhere else. Anything else is shown as text, not loaded.
+IMAGE_HOST = "graph.microsoft.com"
+IMAGE_PATH_RE = re.compile(r"^/v1\.0/(?:me|users\('[^']*'\))/onenote/resources/[A-Za-z0-9!._-]+/\$value$")
+MAX_IMAGE_WIDTH = 4000
+MAGICK_TIMEOUT = 20
+
+
+class _NoRedirect(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        return None
+
+
+_image_opener = urllib.request.build_opener(_NoRedirect)
+
+
+def image_allowed(src):
+    try:
+        u = urllib.parse.urlsplit(src)
+    except ValueError:
+        return False
+    return u.scheme == "https" and u.netloc.lower() == IMAGE_HOST and bool(IMAGE_PATH_RE.match(u.path)) and not u.query and not u.fragment
+
+
 def cached_image(src, width=0):
-    """Download a page image through Graph (the src needs our token) into the
-    cache and return a file:// URL the editor can show. The editor draws
-    images at their natural size, so the file is scaled to the width OneNote
-    declares (when ImageMagick is around to do it)."""
-    import hashlib, shutil, subprocess
-    os.makedirs(ONENOTE_IMG_DIR, exist_ok=True)
+    """A page image, fetched through Graph into the cache; returns a file://
+    URL the editor can show, or None when the source is not Graph's resource
+    endpoint (then the page shows the image's alt text instead)."""
+    import hashlib, shutil, subprocess, tempfile
+    if not image_allowed(src):
+        return None
+    try:
+        width = int(width)
+    except (TypeError, ValueError):
+        width = 0
+    width = max(0, min(width, MAX_IMAGE_WIDTH))
+    os.makedirs(ONENOTE_IMG_DIR, mode=0o700, exist_ok=True)
     name = hashlib.sha1(("%s@%d" % (src, width)).encode()).hexdigest()
     path = os.path.join(ONENOTE_IMG_DIR, name)
-    if not os.path.exists(path):
-        req = urllib.request.Request(src, headers={"Authorization": "Bearer " + access_token()})
-        try:
-            with urllib.request.urlopen(req, timeout=60) as r, open(path + ".tmp", "wb") as f:
-                raw = r.read(MAX_IMAGE + 1)
-                if len(raw) > MAX_IMAGE:
-                    return src            # shown as a link, not downloaded
-                f.write(raw)
-        except (urllib.error.URLError, OSError):
-            return src
+    if os.path.exists(path):
+        return "file://" + path
+    req = urllib.request.Request(src, headers={"Authorization": "Bearer " + access_token()})
+    fd, tmp = tempfile.mkstemp(prefix=".", suffix=".tmp", dir=ONENOTE_IMG_DIR)   # fresh, 0600, never a symlink
+    try:
+        with _image_opener.open(req, timeout=60) as r, os.fdopen(fd, "wb") as f:
+            raw = r.read(MAX_IMAGE + 1)
+            if len(raw) > MAX_IMAGE:
+                raise OverflowError("image too large")
+            f.write(raw)
         magick = shutil.which("magick") or shutil.which("convert")
         if width > 0 and magick:
-            subprocess.run([magick, path + ".tmp", "-resize", "%dx>" % width, path + ".tmp"],
-                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        os.replace(path + ".tmp", path)
-    return "file://" + path
+            # Bounded decode: memory/area/size limits and a timeout, so a crafted
+            # image cannot exhaust the machine or hang the provider. Only the
+            # first frame is read.
+            scaled = tmp + ".out"
+            try:
+                subprocess.run([magick, "-limit", "memory", "128MiB", "-limit", "map", "256MiB", "-limit", "area", "50MP",
+                                "-limit", "width", "16000", "-limit", "height", "16000", "-limit", "time", str(MAGICK_TIMEOUT),
+                                tmp + "[0]", "-resize", "%dx>" % width, "png:" + scaled],
+                               stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=MAGICK_TIMEOUT + 5)
+                if os.path.exists(scaled) and os.path.getsize(scaled) > 0:
+                    os.chmod(scaled, 0o600)          # ImageMagick created it with the umask
+                    os.replace(scaled, tmp)
+            except (subprocess.TimeoutExpired, OSError):
+                pass
+            try:
+                os.remove(scaled)
+            except OSError:
+                pass
+        os.replace(tmp, path)
+        return "file://" + path
+    except (urllib.error.URLError, OSError, OverflowError):
+        try:
+            os.remove(tmp)
+        except OSError:
+            pass
+        return None
 
 
 def cmd_onenote_pages(section_ids):
