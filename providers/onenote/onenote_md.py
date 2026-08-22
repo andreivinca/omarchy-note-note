@@ -18,6 +18,9 @@ PREFIX_TAG = {v.strip(): k for k, v in TAG_PREFIX.items()}
 BLOCK_TAGS = {"p", "div", "h1", "h2", "h3", "h4", "h5", "h6", "ul", "ol", "li", "table", "tr", "td", "th", "br", "cite", "body", "html", "head", "title"}
 LOSSY_TAGS = {"object", "iframe", "video", "audio", "math", "svg"}
 GAP = "\u00a0"   # an empty line, see Converter.block("br")
+# OneNote's own paragraphs are written with zero margins; without a style it
+# applies 5.5pt above and below, which reads as extra spacing on every line.
+P_STYLE = ' style="margin-top:0pt;margin-bottom:0pt"'
 
 
 class Node:
@@ -54,6 +57,29 @@ class TreeBuilder(HTMLParser):
         self.stack[-1].children.append(Node(None, text=data))
 
 
+
+# Plain text from the backend must not be read as Markdown by the editor:
+# escape inline markers, and line starts that would become a heading, list,
+# quote, rule or table. Qt re-escapes on save; our parser unescapes.
+_INLINE_ESC = re.compile(r"([\\*_`~\[\]<>|])")
+_LINE_ESC = re.compile(r"^(\s*)([#>+\-*]|[-=]{3,}\s*$|\|)")
+_LINE_NUM = re.compile(r"^(\s*\d+)([.)])")
+
+
+def escape_text(text):
+    return _INLINE_ESC.sub(r"\\\1", text)
+
+
+def escape_line_start(text):
+    m = _LINE_NUM.match(text)
+    if m:                      # "1. x" -> "1\. x"
+        return text[:m.start(2)] + "\\" + text[m.start(2):]
+    m = _LINE_ESC.match(text)
+    if not m:
+        return text
+    return text[:m.start(2)] + "\\" + text[m.start(2):]
+
+
 # ---------------------------------------------------------------- HTML -> Markdown
 
 class Converter:
@@ -73,7 +99,7 @@ class Converter:
         out = []
         for c in node.children:
             if c.tag is None:
-                out.append(re.sub(r"\s+", " ", c.text))
+                out.append(escape_text(re.sub(r"\s+", " ", c.text)))
             elif c.tag in ("b", "strong"):
                 inner = self.inline(c).strip()
                 out.append("**%s**" % inner if inner else "")
@@ -121,6 +147,8 @@ class Converter:
                         core = "_%s_" % core
                     if "text-decoration:line-through" in style or c.tag in ("s", "strike", "del"):
                         core = "~~%s~~" % core
+                    if "background-color:" in style and "background-color:transparent" not in style:
+                        core = "==%s==" % core           # highlight
                     inner = lead + core + trail
                 if tag.startswith("to-do"):
                     inner = ("[x] " if tag.endswith("completed") else "[ ] ") + inner.lstrip()
@@ -159,12 +187,17 @@ class Converter:
             for c in node.children:
                 self.block(c, depth)
             return
+        if t == "p" and not self.inline(node).strip() and any(c.tag == "br" for c in node.children):
+            self.block(Node("br"), depth)      # <p><br/></p>: an empty line
+            return
         if t == "p" or t == "cite":
             text = self.inline(node).strip()
             prefix = self.para_prefix(node) if t == "p" else "*"
             if t == "cite":
                 text = "*%s*" % text if text else ""
                 prefix = ""
+            if text and not prefix and node.children and node.children[0].tag is None:
+                text = escape_line_start(text)
             if text or prefix.startswith("- ["):
                 plain = not prefix
                 if plain and self.last == "p" and self.lines and self.lines[-1] != "":
@@ -232,6 +265,8 @@ class Converter:
         marker = ("%d. " % n) if kind == "ol" else "- "
         if text.startswith("[ ] ") or text.startswith("[x] "):
             marker = "- "
+        elif inline_nodes and inline_nodes[0].tag is None:
+            text = escape_line_start(text)
         self.lines.append("  " * depth + marker + text.replace("\n", " "))
         for s in sublists:
             self.block(s, depth + 1)
@@ -297,38 +332,53 @@ def html_to_markdown(html, image_path_for=None):
 
 
 # ---------------------------------------------------------------- Markdown -> OneNote HTML
+#
+# Markdown is parsed by the vendored mistune (services/markdown/parse.py);
+# this is only the renderer into the HTML OneNote accepts.
 
-_INLINE_RULES = [
-    (re.compile(r"\*\*(.+?)\*\*"), r"<b>\1</b>"),
-    (re.compile(r"(?<![\w*])\*(?!\s)(.+?)(?<!\s)\*(?![\w*])"), r"<i>\1</i>"),
-    (re.compile(r"(?<!\w)_(?!\s)(.+?)(?<!\s)_(?!\w)"), r"<u>\1</u>"),
-    (re.compile(r"~~(.+?)~~"), r"<s>\1</s>"),
-    (re.compile(r"`(.+?)`"), r"<span style=\"font-family:Consolas\">\1</span>"),
-]
-_LINK = re.compile(r"\[([^\]]*)\]\(([^)\s]+)\)")
+import os as _os
+import sys as _sys
+_sys.path.insert(0, _os.path.join(_os.path.dirname(_os.path.abspath(__file__)), "..", "..", "services", "markdown"))
+from parse import parse as _parse  # noqa: E402
 
-
-def md_inline(text):
-    text = text.replace("\\|", "|")
-    # links first (their URL must not be touched by the emphasis rules)
-    parts, pos = [], 0
-    for m in _LINK.finditer(text):
-        parts.append(_inline_plain(text[pos:m.start()]))
-        parts.append('<a href="%s">%s</a>' % (_html.escape(m.group(2), quote=True), _inline_plain(m.group(1))))
-        pos = m.end()
-    parts.append(_inline_plain(text[pos:]))
-    return "".join(parts)
+_QUOTE_STYLE = ' style="margin-left:20pt;color:#595959"'
 
 
-def _inline_plain(text):
-    s = _html.escape(text, quote=False)
-    for rx, rep in _INLINE_RULES:
-        s = rx.sub(rep, s)
-    return s
+def _inline_html(tokens):
+    out = []
+    for t in tokens or []:
+        ty = t["type"]
+        if ty == "text":
+            out.append(_html.escape(t.get("raw", ""), quote=False))
+        elif ty == "softbreak":
+            out.append(" ")
+        elif ty == "linebreak":
+            out.append("\n")                    # paragraph split, see _paragraphs()
+        elif ty == "strong":
+            out.append("<b>%s</b>" % _inline_html(t.get("children")))
+        elif ty == "emphasis":
+            out.append("<i>%s</i>" % _inline_html(t.get("children")))
+        elif ty == "underline":
+            out.append("<u>%s</u>" % _inline_html(t.get("children")))
+        elif ty == "strikethrough":
+            out.append("<s>%s</s>" % _inline_html(t.get("children")))
+        elif ty == "mark":
+            out.append('<span style="background-color:#FFFF00">%s</span>' % _inline_html(t.get("children")))
+        elif ty == "codespan":
+            out.append('<span style="font-family:Consolas">%s</span>' % _html.escape(t.get("raw", ""), quote=False))
+        elif ty == "link":
+            out.append('<a href="%s">%s</a>' % (_html.escape(t.get("attrs", {}).get("url", ""), quote=True), _inline_html(t.get("children"))))
+        elif ty == "image":
+            out.append(_html.escape(t.get("attrs", {}).get("url", ""), quote=False))
+        elif ty == "inline_html":
+            out.append(_html.escape(t.get("raw", ""), quote=False))
+        else:
+            out.append(_inline_html(t.get("children")) if t.get("children") else _html.escape(t.get("raw", ""), quote=False))
+    return "".join(out)
 
 
 def _tagged(text):
-    """Split a leading note-tag prefix / checkbox off a paragraph's text."""
+    """Split a leading checkbox / note-tag prefix off plain text -> (tag, rest)."""
     m = re.match(r"\[( |x|X)\] ?(.*)$", text)
     if m:
         return ("to-do:completed" if m.group(1).lower() == "x" else "to-do"), m.group(2)
@@ -338,90 +388,145 @@ def _tagged(text):
     return None, text
 
 
-_LIST = re.compile(r"^(\s*)([-*+]|\d+[.)])\s+(.*)$")
-_HEAD = re.compile(r"^(#{1,6})\s+(.*)$")
+def _tag_prefix(tokens):
+    """A leading note-tag prefix (⭐ …) or checkbox in plain text -> (tag, tokens)."""
+    if tokens and tokens[0]["type"] == "text":
+        raw = tokens[0].get("raw", "")
+        tag, rest = _tagged(raw)
+        if tag:
+            rest_tok = dict(tokens[0]); rest_tok["raw"] = rest
+            return tag, [rest_tok] + list(tokens[1:])
+    return None, tokens
+
+
+def _paragraphs(tokens):
+    """A paragraph's inline tokens -> list of (tag, html) per visual line:
+    a hard line break starts a new OneNote paragraph."""
+    out, cur = [], []
+    for t in tokens or []:
+        if t["type"] == "linebreak":
+            out.append(cur); cur = []
+        else:
+            cur.append(t)
+    out.append(cur)
+    result = []
+    for line in out:
+        tag, line = _tag_prefix(line)
+        result.append((tag, _inline_html(line)))
+    return result
+
+
+def _p(tag, html):
+    if tag:
+        return '<p data-tag="%s"%s>%s</p>' % (tag, P_STYLE, html)
+    return "<p%s>%s</p>" % (P_STYLE, html)
+
+
+def _render_blocks(tokens, out, depth=0):
+    for t in tokens or []:
+        ty = t["type"]
+        if ty == "blank_line":
+            continue
+        if ty == "paragraph":
+            text = walk_text_local(t.get("children"))
+            if text.strip() == "" and GAP in text:
+                out.append("<br/>")               # an explicit empty line
+                continue
+            for tag, html in _paragraphs(t.get("children")):
+                out.append(_p(tag, html))
+        elif ty == "heading":
+            lvl = min(max(t.get("attrs", {}).get("level", 1), 1), 6)
+            out.append("<h%d>%s</h%d>" % (lvl, _inline_html(t.get("children")), lvl))
+        elif ty == "thematic_break":
+            out.append("<p%s>———</p>" % P_STYLE)
+        elif ty == "block_code":
+            code = _html.escape(t.get("raw", "").rstrip("\n"), quote=False).replace("\n", "<br/>")
+            out.append('<p%s><span style="font-family:Consolas">%s</span></p>' % (P_STYLE, code))
+        elif ty == "block_quote":
+            inner = []
+            _render_blocks(t.get("children"), inner, depth)
+            out.extend(i.replace("<p" + P_STYLE, "<p" + _QUOTE_STYLE, 1) if i.startswith("<p") else i for i in inner)
+        elif ty == "list":
+            _render_list(t, out, depth)
+        elif ty == "table":
+            _render_table(t, out)
+        elif ty in ("block_text",):
+            for tag, html in _paragraphs(t.get("children")):
+                out.append(_p(tag, html))
+        else:
+            if t.get("children"):
+                _render_blocks(t["children"], out, depth)
+
+
+def _render_list(t, out, depth):
+    items = t.get("children") or []
+    ordered = t.get("attrs", {}).get("ordered", False)
+    # A top-level list made only of checkboxes is how OneNote's own to-do
+    # paragraphs come back from the editor; write them as such.
+    if depth == 0 and items and all(i["type"] == "task_list_item" for i in items) and not any(_has_sublist(i) for i in items):
+        for i in items:
+            tag = "to-do:completed" if i.get("attrs", {}).get("checked") else "to-do"
+            out.append(_p(tag, _item_inline(i)))
+        return
+    out.append("<ol>" if ordered else "<ul>")
+    for i in items:
+        li = ["<li>"]
+        if i["type"] == "task_list_item":
+            tag = "to-do:completed" if i.get("attrs", {}).get("checked") else "to-do"
+            li.append('<span data-tag="%s">%s</span>' % (tag, _item_inline(i)))
+        else:
+            li.append(_item_inline(i))
+        for c in i.get("children") or []:
+            if c["type"] == "list":
+                sub = []
+                _render_list(c, sub, depth + 1)
+                li.extend(sub)
+        li.append("</li>")
+        out.append("".join(li))
+    out.append("</ol>" if ordered else "</ul>")
+
+
+def _has_sublist(item):
+    return any(c["type"] == "list" for c in item.get("children") or [])
+
+
+def _item_inline(item):
+    parts = []
+    for c in item.get("children") or []:
+        if c["type"] in ("block_text", "paragraph"):
+            parts.append(" ".join(h for _, h in _paragraphs(c.get("children"))))
+    return " ".join(parts)
+
+
+def _render_table(t, out):
+    rows = []
+    for part in t.get("children") or []:
+        if part["type"] == "table_head":
+            rows.append([_inline_html(c.get("children")) for c in part.get("children") or []])
+        elif part["type"] == "table_body":
+            for r in part.get("children") or []:
+                rows.append([_inline_html(c.get("children")) for c in r.get("children") or []])
+    out.append('<table style="border:1px solid;border-collapse:collapse">')
+    for r in rows:
+        out.append("<tr>" + "".join('<td style="border:1px solid">%s</td>' % (c or "<br/>") for c in r) + "</tr>")
+    out.append("</table>")
+
+
+def walk_text_local(tokens):
+    out = []
+    for t in tokens or []:
+        if t["type"] in ("text", "codespan"):
+            out.append(t.get("raw", ""))
+        elif t["type"] == "softbreak":
+            out.append(" ")
+        elif t["type"] == "linebreak":
+            out.append("\n")
+        else:
+            out.append(walk_text_local(t.get("children")))
+    return "".join(out)
 
 
 def markdown_to_onenote_html(md):
-    lines = md.replace("\r", "").split("\n")
-    out, i = [], 0
-    list_stack = []   # [(indent, kind)]
-    prev_plain, gap = False, False     # a blank line between two plain paragraphs is a visual gap
-
-    def close_lists(to_indent=-1):
-        while list_stack and list_stack[-1][0] > to_indent:
-            out.append("</li></%s>" % list_stack.pop()[1])
-
-    while i < len(lines):
-        line = lines[i]
-        if not line.strip():
-            close_lists()
-            if GAP in line:                 # an explicit empty line (see GAP)
-                out.append("<br/>")
-                prev_plain, gap = False, False
-            else:
-                gap = True
-            i += 1
-            continue
-        m = _HEAD.match(line)
-        if m:
-            close_lists()
-            out.append("<h%d>%s</h%d>" % (len(m.group(1)), md_inline(m.group(2).strip()), len(m.group(1))))
-            prev_plain, gap = False, False
-            i += 1
-            continue
-        if line.lstrip().startswith("|") and i + 1 < len(lines) and re.match(r"^\s*\|?\s*:?-+", lines[i + 1]):
-            close_lists()
-            rows = []
-            while i < len(lines) and lines[i].lstrip().startswith("|"):
-                cells = [c.strip() for c in lines[i].strip().strip("|").split("|")]
-                rows.append(cells)
-                i += 1
-            rows = [r for k, r in enumerate(rows) if k != 1]     # drop the separator row
-            out.append('<table style="border:1px solid;border-collapse:collapse">')
-            for r in rows:
-                out.append("<tr>" + "".join('<td style="border:1px solid">%s</td>' % (md_inline(c) or "<br/>") for c in r) + "</tr>")
-            out.append("</table>")
-            prev_plain, gap = False, False
-            continue
-        m = _LIST.match(line)
-        if m:
-            indent = len(m.group(1).expandtabs(4))
-            kind = "ol" if m.group(2)[0].isdigit() else "ul"
-            tag, text = _tagged(m.group(3).strip())
-            if indent == 0 and tag and tag.startswith("to-do") and not list_stack:
-                # A top-level checkbox is a OneNote to-do paragraph, not a bullet.
-                out.append('<p data-tag="%s">%s</p>' % (tag, md_inline(text)))
-                prev_plain, gap = False, False
-                i += 1
-                continue
-            if list_stack and indent > list_stack[-1][0]:
-                out[-1] = out[-1][:-len("</li>")] if out and out[-1].endswith("</li>") else out[-1]
-                out.append("<%s><li>" % kind)
-                list_stack.append((indent, kind))
-            else:
-                close_lists(indent)
-                if list_stack and list_stack[-1][0] == indent:
-                    out.append("</li><li>")
-                else:
-                    out.append("<%s><li>" % kind)
-                    list_stack.append((indent, kind))
-            content = md_inline(text)
-            out.append('<span data-tag="%s">%s</span>' % (tag, content) if tag else content)
-            prev_plain, gap = False, False
-            # mark the li as open; closed by the next sibling or close_lists
-            out[-1] = out[-1]  # no-op for clarity
-            i += 1
-            continue
-        close_lists()
-        tag, text = _tagged(line.strip())
-        para = md_inline(text.replace("  \n", "<br/>"))
-        if not tag and prev_plain and gap:
-            out.append("<br/>")
-        out.append('<p data-tag="%s">%s</p>' % (tag, para) if tag else "<p>%s</p>" % para)
-        prev_plain, gap = not tag, False
-        i += 1
-    close_lists()
-    # The list builder emits "<ul><li>" ... "</li></ul>" with "</li><li>" between
-    # items; join with newlines for readability.
-    return "\n".join(out) or "<p></p>"
+    out = []
+    _render_blocks(_parse(md), out)
+    return "\n".join(out) or "<p%s></p>" % P_STYLE

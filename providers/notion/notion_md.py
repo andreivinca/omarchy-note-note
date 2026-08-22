@@ -11,6 +11,29 @@ SUPPORTED = {"paragraph", "heading_1", "heading_2", "heading_3", "bulleted_list_
              "numbered_list_item", "to_do", "quote", "code", "divider", "toggle"}
 
 
+
+# Plain text from the backend must not be read as Markdown by the editor:
+# escape inline markers, and line starts that would become a heading, list,
+# quote, rule or table. Qt re-escapes on save; our parser unescapes.
+_INLINE_ESC = re.compile(r"([\\*_`~\[\]<>|])")
+_LINE_ESC = re.compile(r"^(\s*)([#>+\-*]|[-=]{3,}\s*$|\|)")
+_LINE_NUM = re.compile(r"^(\s*\d+)([.)])")
+
+
+def escape_text(text):
+    return _INLINE_ESC.sub(r"\\\1", text)
+
+
+def escape_line_start(text):
+    m = _LINE_NUM.match(text)
+    if m:                      # "1. x" -> "1\. x"
+        return text[:m.start(2)] + "\\" + text[m.start(2):]
+    m = _LINE_ESC.match(text)
+    if not m:
+        return text
+    return text[:m.start(2)] + "\\" + text[m.start(2):]
+
+
 # ---------------------------------------------------------------- blocks -> markdown
 
 def rich_to_md(rich):
@@ -20,6 +43,7 @@ def rich_to_md(rich):
         a = r.get("annotations", {})
         if not t:
             continue
+        t = escape_text(t)
         lead = t[:len(t) - len(t.lstrip())]
         trail = t[len(t.rstrip()):]
         core = t.strip()
@@ -34,6 +58,8 @@ def rich_to_md(rich):
                 core = "_%s_" % core
             if a.get("strikethrough"):
                 core = "~~%s~~" % core
+            if str(a.get("color", "")).endswith("_background"):
+                core = "==%s==" % core
             href = r.get("href")
             if href:
                 core = "[%s](%s)" % (core, href)
@@ -69,19 +95,22 @@ def blocks_to_markdown(blocks, depth=0):
                 lines[-1] = lines[-1] + "  "      # consecutive paragraphs: hard break
             elif prev not in (None, "paragraph") and lines and lines[-1] != "":
                 lines.append("")
-            lines.append(pad + text if text else pad + " ")
+            first = (body.get("rich_text") or [{}])[0]
+            ann = first.get("annotations") or {}
+            plain_start = not ann.get("bold") and not ann.get("italic") and not ann.get("code") and not first.get("href")
+            lines.append((pad + (escape_line_start(text) if plain_start else text)) if text else pad + " ")
         elif t == "bulleted_list_item" or t == "toggle":
             if prev not in ("bulleted_list_item", "numbered_list_item", "to_do", "toggle") and lines and lines[-1] != "":
                 lines.append("")
-            lines.append(pad + "- " + text)
+            lines.append(pad + "- " + escape_line_start(text))
         elif t == "numbered_list_item":
             if prev not in ("bulleted_list_item", "numbered_list_item", "to_do", "toggle") and lines and lines[-1] != "":
                 lines.append("")
-            lines.append(pad + "1. " + text)
+            lines.append(pad + "1. " + escape_line_start(text))
         elif t == "to_do":
             if prev not in ("bulleted_list_item", "numbered_list_item", "to_do", "toggle") and lines and lines[-1] != "":
                 lines.append("")
-            lines.append(pad + ("- [x] " if body.get("checked") else "- [ ] ") + text)
+            lines.append(pad + ("- [x] " if body.get("checked") else "- [ ] ") + escape_line_start(text))
         elif t == "quote":
             if lines and lines[-1] != "":
                 lines.append("")
@@ -117,149 +146,154 @@ def blocks_to_markdown(blocks, depth=0):
 
 
 # ---------------------------------------------------------------- markdown -> blocks
+#
+# Markdown is parsed by the vendored mistune (services/markdown/parse.py);
+# this is only the renderer into Notion blocks.
 
-_LINK = re.compile(r"\[([^\]]*)\]\(([^)\s]+)\)")
-_TOKEN = re.compile(r"(\*\*.+?\*\*|~~.+?~~|`[^`]+`|(?<![\w*])\*(?!\s)[^*]+?(?<!\s)\*(?![\w*])|(?<!\w)_(?!\s)[^_]+?(?<!\s)_(?!\w))")
+import os as _os
+import sys as _sys
+_sys.path.insert(0, _os.path.join(_os.path.dirname(_os.path.abspath(__file__)), "..", "..", "services", "markdown"))
+from parse import parse as _parse  # noqa: E402
 
 
-def md_to_rich(text, link=None, ann=None):
-    """Inline Markdown -> Notion rich_text array."""
+def _rich(tokens, ann=None, link=None):
+    """Inline tokens -> Notion rich_text array."""
     out = []
     ann = dict(ann or {})
 
-    def emit(s, a, href=None):
-        if not s:
+    def emit(text):
+        if not text:
             return
-        item = {"type": "text", "text": {"content": s}}
-        if href:
-            item["text"]["link"] = {"url": href}
-        if a:
-            item["annotations"] = dict(a)
+        item = {"type": "text", "text": {"content": text[:2000]}}
+        if link:
+            item["text"]["link"] = {"url": link}
+        if ann:
+            item["annotations"] = dict(ann)
         out.append(item)
 
-    pos = 0
-    for m in _LINK.finditer(text):
-        out.extend(md_to_rich(text[pos:m.start()], None, ann))
-        out.extend(md_to_rich(m.group(1), m.group(2), ann))
-        pos = m.end()
-    rest = text[pos:]
-    if pos and not rest:
-        return out
-    if link is not None:
-        # inside a link: no further link parsing, annotations still apply
-        for piece, a in _split_tokens(rest, ann):
-            emit(piece, a, link)
-        return out
-    for piece, a in _split_tokens(rest, ann):
-        emit(piece, a)
+    for t in tokens or []:
+        ty = t["type"]
+        if ty == "text":
+            emit(t.get("raw", ""))
+        elif ty == "softbreak":
+            emit(" ")
+        elif ty == "linebreak":
+            emit("\n")
+        elif ty == "codespan":
+            a = dict(ann); a["code"] = True
+            item = {"type": "text", "text": {"content": t.get("raw", "")[:2000]}, "annotations": a}
+            if link:
+                item["text"]["link"] = {"url": link}
+            out.append(item)
+        elif ty in ("strong", "emphasis", "underline", "strikethrough"):
+            a = dict(ann); a[{"strong": "bold", "emphasis": "italic", "underline": "underline", "strikethrough": "strikethrough"}[ty]] = True
+            out.extend(_rich(t.get("children"), a, link))
+        elif ty == "mark":
+            a = dict(ann); a["color"] = "yellow_background"
+            out.extend(_rich(t.get("children"), a, link))
+        elif ty == "link":
+            out.extend(_rich(t.get("children"), ann, t.get("attrs", {}).get("url", "") or link))
+        elif ty == "image":
+            emit(t.get("attrs", {}).get("url", ""))
+        else:
+            out.extend(_rich(t.get("children"), ann, link) if t.get("children") else [])
+            if not t.get("children") and t.get("raw"):
+                emit(t["raw"])
     return out
 
 
-def _split_tokens(text, ann):
-    pieces, pos = [], 0
-    for m in _TOKEN.finditer(text):
-        if m.start() > pos:
-            pieces.append((text[pos:m.start()], ann))
-        tok = m.group(0)
-        a = dict(ann)
-        if tok.startswith("**"):
-            a["bold"] = True; inner = tok[2:-2]
-        elif tok.startswith("~~"):
-            a["strikethrough"] = True; inner = tok[2:-2]
-        elif tok.startswith("`"):
-            a["code"] = True; inner = tok[1:-1]
-            pieces.append((inner, a)); pos = m.end(); continue
-        elif tok.startswith("*"):
-            a["italic"] = True; inner = tok[1:-1]
+def _split_lines(tokens):
+    """Inline tokens split at hard line breaks -> list of token lists."""
+    out, cur = [], []
+    for t in tokens or []:
+        if t["type"] == "linebreak":
+            out.append(cur); cur = []
         else:
-            a["underline"] = True; inner = tok[1:-1]
-        pieces.extend(_split_tokens(inner, a))
-        pos = m.end()
-    if pos < len(text):
-        pieces.append((text[pos:], ann))
-    return pieces
+            cur.append(t)
+    out.append(cur)
+    return out
 
 
-_LIST = re.compile(r"^(\s*)([-*+]|\d+[.)])\s+(.*)$")
-_HEAD = re.compile(r"^(#{1,3})\s+(.*)$")
+def _para_blocks(tokens):
+    blocks = []
+    for line in _split_lines(tokens):
+        rich = _rich(line)
+        blocks.append({"type": "paragraph", "paragraph": {"rich_text": rich}})
+    return blocks
+
+
+def _list_blocks(t):
+    blocks = []
+    ordered = t.get("attrs", {}).get("ordered", False)
+    for item in t.get("children") or []:
+        inline, kids = [], []
+        for c in item.get("children") or []:
+            if c["type"] in ("block_text", "paragraph"):
+                inline.extend(c.get("children") or [])
+            elif c["type"] == "list":
+                kids.extend(_list_blocks(c))
+            else:
+                kids.extend(_blocks([c]))
+        text = [x for x in inline if x["type"] != "linebreak"]
+        if item["type"] == "task_list_item":
+            b = {"type": "to_do", "to_do": {"rich_text": _rich(text), "checked": bool(item.get("attrs", {}).get("checked"))}}
+        elif ordered:
+            b = {"type": "numbered_list_item", "numbered_list_item": {"rich_text": _rich(text)}}
+        else:
+            b = {"type": "bulleted_list_item", "bulleted_list_item": {"rich_text": _rich(text)}}
+        if kids:
+            b[b["type"]]["children"] = kids
+        blocks.append(b)
+    return blocks
+
+
+def _blocks(tokens):
+    out = []
+    for t in tokens or []:
+        ty = t["type"]
+        if ty == "blank_line":
+            continue
+        if ty == "paragraph":
+            if "".join(x.get("raw", "") for x in t.get("children") or [] if x["type"] == "text").strip() == "" and " " in "".join(x.get("raw", "") for x in t.get("children") or []):
+                out.append({"type": "paragraph", "paragraph": {"rich_text": []}})
+            else:
+                out.extend(_para_blocks(t.get("children")))
+        elif ty == "heading":
+            lvl = min(max(t.get("attrs", {}).get("level", 1), 1), 3)
+            key = "heading_%d" % lvl
+            out.append({"type": key, key: {"rich_text": _rich(t.get("children"))}})
+        elif ty == "thematic_break":
+            out.append({"type": "divider", "divider": {}})
+        elif ty == "block_code":
+            lang = (t.get("attrs", {}).get("info") or "plain text").strip() or "plain text"
+            out.append({"type": "code", "code": {"language": lang, "rich_text": [{"type": "text", "text": {"content": t.get("raw", "").rstrip("\n")[:2000]}}]}})
+        elif ty == "block_quote":
+            inner = _blocks(t.get("children"))
+            for b in inner:
+                if b["type"] == "paragraph":
+                    out.append({"type": "quote", "quote": {"rich_text": b["paragraph"]["rich_text"]}})
+                else:
+                    out.append(b)
+        elif ty == "list":
+            out.extend(_list_blocks(t))
+        elif ty == "table":
+            # Notion tables need a table block with typed rows; keep it simple and readable.
+            for part in t.get("children") or []:
+                rows = [part] if part["type"] == "table_head" else (part.get("children") or [])
+                for r in rows:
+                    cells = [_rich(c.get("children")) for c in r.get("children") or []]
+                    rich = []
+                    for k, c in enumerate(cells):
+                        if k:
+                            rich.append({"type": "text", "text": {"content": " | "}})
+                        rich.extend(c)
+                    out.append({"type": "paragraph", "paragraph": {"rich_text": rich}})
+        elif ty == "block_text":
+            out.extend(_para_blocks(t.get("children")))
+        elif t.get("children"):
+            out.extend(_blocks(t["children"]))
+    return out
 
 
 def markdown_to_blocks(md):
-    lines = md.replace("\r", "").split("\n")
-    root = []
-    stack = []   # [(indent, children_list)] for nested lists
-    i = 0
-    while i < len(lines):
-        line = lines[i]
-        if not line.strip() and " " not in line:
-            stack = []
-            i += 1
-            continue
-        if line.strip() == " ":
-            root.append({"type": "paragraph", "paragraph": {"rich_text": []}})
-            stack = []
-            i += 1
-            continue
-        if line.strip().startswith("```"):
-            lang = line.strip()[3:].strip() or "plain text"
-            code = []
-            i += 1
-            while i < len(lines) and not lines[i].strip().startswith("```"):
-                code.append(lines[i])
-                i += 1
-            i += 1
-            root.append({"type": "code", "code": {"language": lang, "rich_text": [{"type": "text", "text": {"content": "\n".join(code)[:2000]}}]}})
-            stack = []
-            continue
-        if line.strip() in ("---", "***"):
-            root.append({"type": "divider", "divider": {}})
-            stack = []
-            i += 1
-            continue
-        m = _HEAD.match(line)
-        if m:
-            t = "heading_%d" % len(m.group(1))
-            root.append({"type": t, t: {"rich_text": md_to_rich(m.group(2).strip())}})
-            stack = []
-            i += 1
-            continue
-        if line.lstrip().startswith("> "):
-            root.append({"type": "quote", "quote": {"rich_text": md_to_rich(line.lstrip()[2:])}})
-            stack = []
-            i += 1
-            continue
-        m = _LIST.match(line)
-        if m:
-            indent = len(m.group(1).expandtabs(4))
-            text = m.group(3).strip()
-            todo = re.match(r"\[( |x|X)\] ?(.*)$", text)
-            if todo:
-                block = {"type": "to_do", "to_do": {"rich_text": md_to_rich(todo.group(2)), "checked": todo.group(1).lower() == "x"}}
-            elif m.group(2)[0].isdigit():
-                block = {"type": "numbered_list_item", "numbered_list_item": {"rich_text": md_to_rich(text)}}
-            else:
-                block = {"type": "bulleted_list_item", "bulleted_list_item": {"rich_text": md_to_rich(text)}}
-            while stack and stack[-1][0] >= indent:
-                stack.pop()
-            target = stack[-1][1] if stack else root
-            target.append(block)
-            kids = block[block["type"]].setdefault("children", [])
-            stack.append((indent, kids))
-            i += 1
-            continue
-        # paragraph; trailing two spaces were a hard break -> separate paragraphs already
-        root.append({"type": "paragraph", "paragraph": {"rich_text": md_to_rich(line.strip())}})
-        stack = []
-        i += 1
-    return _strip_empty_children(root)
-
-
-def _strip_empty_children(blocks):
-    for b in blocks:
-        body = b.get(b["type"], {})
-        if "children" in body:
-            if body["children"]:
-                _strip_empty_children(body["children"])
-            else:
-                del body["children"]
-    return blocks
+    return _blocks(_parse(md))

@@ -35,6 +35,9 @@ Item {
   signal viewRequested(string title, var component, var props)
   signal viewCleared()
   signal persistRequested()
+  // Graph does not reliably bump a page's lastModifiedDateTime, so the open
+  // page is re-read on poll and reported when its text differs.
+  signal noteChanged(string path)
 
   property var onSections: []    // [{ id, name, notebook, notebookId }]
   property var pages: []         // [{ id, sectionId, title, modified }]
@@ -84,7 +87,7 @@ Item {
           for (var p = 0; p < root.pages.length; p++) {
             var pg = root.pages[p]
             if (pg.sectionId !== sec.id) continue
-            rows.push({ kind: "note", path: pathOf(pg.id), title: pg.title, preview: "", level: 2, fixed: true })
+            rows.push({ kind: "note", path: pathOf(pg.id), title: pg.title, preview: "", level: 2, fixed: true, version: pg.modified || "" })
           }
           rows.push({ kind: "new", path: "section:" + sec.id, level: 2 })
         }
@@ -136,8 +139,9 @@ Item {
   // ── pages ───────────────────────────────────────────────────────────
   property var loadQueue: ({})   // path -> cb
   function load(path, cb) {
-    var id = idOf(path), cached = root.bodies[id]
-    if (cached) { cb({ title: cached.title, body: cached.body, editable: cached.editable }); return }
+    var id = idOf(path), cached = root.bodies[id], pg = pageAt(path)
+    // A cached body is only good while the page's modified time matches.
+    if (cached && (!pg || cached.version === (pg.modified || ""))) { cb({ title: cached.title, body: cached.body, editable: cached.editable, version: cached.version || "" }); return }
     root.loadQueue[path] = cb
     if (pageProc.running) return
     pageProc.path = path
@@ -149,7 +153,7 @@ Item {
   function save(path, title, body, cb) {
     var id = idOf(path), b = root.bodies
     var original = b[id] && b[id].originalTitle !== undefined ? b[id].originalTitle : title
-    b[id] = { title: title, body: body, editable: true, originalTitle: original }
+    b[id] = { title: title, body: body, editable: true, originalTitle: original, version: "" }
     root.bodies = b
     var pgs = root.pages.slice()
     for (var i = 0; i < pgs.length; i++) if (pgs[i].id === id) pgs[i] = { id: id, sectionId: pgs[i].sectionId, title: title, modified: pgs[i].modified }
@@ -182,6 +186,57 @@ Item {
   }
 
   function setOrder(sectionKey, paths) {}
+
+  // Polling: every minute, re-list only the sections the user has open —
+  // one small request each; the account-wide listing stays on its cache.
+  property int pollTick: 0
+  function poll(currentPath) {
+    if (!root.ready) return
+    root.pollTick++
+    if (root.pollTick % 3 !== 0) return
+    if (currentPath && currentPath.indexOf(root.id + ":") === 0 && !checkProc.running && !pageProc.running) {
+      checkProc.path = currentPath
+      checkProc.command = ["python3", root.script, "page", idOf(currentPath)]
+      checkProc.running = true
+    }
+    if (pagesProc.running) return
+    var open = root.onSections.filter(function(s) { return root.expanded.indexOf(s.id) >= 0 }).map(function(s) { return s.id })
+    if (open.length === 0) return
+    pagesProc.command = ["python3", root.script, "pages"].concat(open.slice(0, 10))
+    pagesProc.running = true
+  }
+  Process {
+    id: checkProc
+    property string path: ""
+    environment: root.ms ? root.ms.env : ({})
+    stdout: StdioCollector {
+      onStreamFinished: {
+        var r = root.parse(this.text)
+        if (r.error) return
+        var id = root.idOf(checkProc.path), old = root.bodies[id]
+        if (old && old.body === (r.body || "") && old.title === (r.title || old.title)) return
+        var pg = root.pageAt(checkProc.path)
+        var b = root.bodies
+        b[id] = { title: r.title || (pg ? pg.title : ""), body: r.body || "", editable: r.editable === true,
+                  originalTitle: r.title || (pg ? pg.title : ""), version: pg ? pg.modified || "" : "" }
+        root.bodies = b
+        root.noteChanged(checkProc.path)
+      }
+    }
+  }
+  Process {
+    id: pagesProc
+    environment: root.ms ? root.ms.env : ({})
+    stdout: StdioCollector {
+      onStreamFinished: {
+        var r = root.parse(this.text)
+        if (r.error || !Array.isArray(r.pages)) return
+        var ids = {}; r.sections.forEach(function(id) { ids[id] = true })
+        var merged = root.pages.filter(function(p) { return !ids[p.sectionId] }).concat(r.pages)
+        if (JSON.stringify(merged) !== JSON.stringify(root.pages)) { root.pages = merged; root.rebuild() }
+      }
+    }
+  }
   function parse(text) { try { return JSON.parse(text) } catch (e) { return { error: "unexpected reply" } } }
 
   // A full listing is ~40 Graph calls; do it at most every ten minutes unless
@@ -219,8 +274,9 @@ Item {
         var r = root.parse(this.text)
         if (!r.error) {
           var pg = root.pageAt(path), title = r.title || (pg ? pg.title : "")
-          var b = root.bodies; b[root.idOf(path)] = { title: title, body: r.body || "", editable: r.editable === true, originalTitle: title }; root.bodies = b
-          if (cb) cb({ title: title, body: r.body || "", editable: r.editable === true })
+          var ver = pg ? pg.modified || "" : ""
+          var b = root.bodies; b[root.idOf(path)] = { title: title, body: r.body || "", editable: r.editable === true, originalTitle: title, version: ver }; root.bodies = b
+          if (cb) cb({ title: title, body: r.body || "", editable: r.editable === true, version: ver })
         } else if (cb) cb({ error: r.error })
       }
     }

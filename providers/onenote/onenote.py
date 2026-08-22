@@ -147,6 +147,26 @@ def cached_image(src, width=0):
     return "file://" + path
 
 
+def cmd_onenote_pages(section_ids):
+    """Pages of a few sections (one request each) — for cheap refreshes."""
+    found = []
+    for sid in section_ids[:10]:
+        url = ("/me/onenote/sections/%s/pages?$select=id,title,lastModifiedDateTime&$orderby=lastModifiedDateTime%%20desc&$top=100"
+               % urllib.parse.quote(sid, safe=""))
+        while url and len(found) < MAX_PAGES:
+            status, res = graph("GET", url, max_bytes=MAX_LIST_BODY)
+            if status != 200:
+                fail(graph_err(res, status))
+            for pg in res.get("value", []):
+                found.append({"id": pg["id"], "title": pg.get("title", "") or "", "sectionId": sid, "modified": pg.get("lastModifiedDateTime", "")})
+            url = res.get("@odata.nextLink")
+    c = load_json(ONENOTE_CACHE, None)
+    if c:
+        c["pages"] = [p for p in c.get("pages", []) if p["sectionId"] not in section_ids] + found
+        save_private(ONENOTE_CACHE, c)
+    out({"sections": section_ids[:10], "pages": found})
+
+
 def cmd_onenote_page(page_id):
     status, html = graph_raw("GET", "/me/onenote/pages/" + urllib.parse.quote(page_id, safe="") + "/content")
     if status != 200:
@@ -232,6 +252,8 @@ def main(argv):
             except (IndexError, ValueError):
                 age = 0
         cmd_onenote_list("--cached" in argv[2:], age)
+    elif cmd == "pages" and len(argv) >= 3:
+        cmd_onenote_pages(argv[2:])
     elif cmd == "page" and len(argv) >= 3:
         cmd_onenote_page(argv[2])
     elif cmd == "update" and len(argv) >= 4:

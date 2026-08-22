@@ -187,7 +187,9 @@ Item {
             readonly property bool current: slot.isNote && slot.modelData.path === root.currentPath
             color: current ? root.selectedBackground
               : (rowHover.hovered ? Style.hoverFill : "transparent")
-            opacity: dragArea.drag.active ? 0.85 : 1
+            // Action rows ("New note…", sign in/out, settings) are dimmed so
+            // notes stand out from the things you can do; hover lifts them.
+            opacity: dragArea.drag.active ? 0.85 : ((slot.isNew || slot.isAction) && !rowHover.hovered ? 0.55 : 1)
 
             HoverHandler { id: rowHover }
 

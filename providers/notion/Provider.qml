@@ -54,7 +54,7 @@ Item {
     if (!root.configured) rows.push({ kind: "action", path: "setup", title: "Set up…", icon: "󰒓" })
     else {
       for (var i = 0; i < root.pages.length; i++)
-        rows.push({ kind: "note", path: pathOf(root.pages[i].id), title: root.pages[i].title, preview: "", fixed: true })
+        rows.push({ kind: "note", path: pathOf(root.pages[i].id), title: root.pages[i].title, preview: "", fixed: true, version: root.pages[i].edited || "" })
       rows.push({ kind: "new", path: "new" })
       rows.push({ kind: "action", path: "refresh", title: "Refresh", icon: "󰑐" })
       rows.push({ kind: "action", path: "settings", title: "Settings…" + (root.workspace ? " (" + root.workspace + ")" : ""), icon: "󰒓" })
@@ -75,6 +75,14 @@ Item {
   function saveState() { return {} }
   function toggleTree(id) {}
   function setOrder(sectionKey, paths) {}
+  // One search request per minute while open.
+  property int pollTick: 0
+  function poll() {
+    if (!root.configured) return
+    root.pollTick++
+    if (root.pollTick % 3 !== 0 || listProc.running) return
+    listProc.cached = false; listProc.force = true; listProc.running = true
+  }
 
   function action(id) {
     if (id === "setup" || id === "settings") root.viewRequested(root.configured ? "Notion — settings" : "Set up Notion", setupView, {})
@@ -86,8 +94,8 @@ Item {
   // ── notes ───────────────────────────────────────────────────────────
   property var loadQueue: ({})
   function load(path, cb) {
-    var id = idOf(path), cached = root.bodies[id]
-    if (cached) { cb({ title: cached.title, body: cached.body, editable: cached.editable }); return }
+    var id = idOf(path), cached = root.bodies[id], pg = pageAt(path)
+    if (cached && (!pg || cached.version === (pg.edited || ""))) { cb({ title: cached.title, body: cached.body, editable: cached.editable, version: cached.version || "" }); return }
     root.loadQueue[path] = cb
     if (pageProc.running) return
     pageProc.path = path
@@ -98,7 +106,7 @@ Item {
   property var saveCb: null
   function save(path, title, body, cb) {
     var id = idOf(path), b = root.bodies
-    b[id] = { title: title, body: body, editable: true }
+    b[id] = { title: title, body: body, editable: true, version: "" }
     root.bodies = b
     var pgs = root.pages.slice()
     for (var i = 0; i < pgs.length; i++) if (pgs[i].id === id) pgs[i] = { id: id, title: title, parent: pgs[i].parent, edited: pgs[i].edited }
@@ -175,8 +183,9 @@ Item {
         delete root.loadQueue[path]
         var r = root.parse(this.text)
         if (!r.error) {
-          var b = root.bodies; b[root.idOf(path)] = { title: r.title || "", body: r.body || "", editable: r.editable === true }; root.bodies = b
-          if (cb) cb({ title: r.title || "", body: r.body || "", editable: r.editable === true })
+          var pg = root.pageAt(path), ver = pg ? pg.edited || "" : ""
+          var b = root.bodies; b[root.idOf(path)] = { title: r.title || "", body: r.body || "", editable: r.editable === true, version: ver }; root.bodies = b
+          if (cb) cb({ title: r.title || "", body: r.body || "", editable: r.editable === true, version: ver })
         } else if (cb) cb({ error: r.error })
       }
     }

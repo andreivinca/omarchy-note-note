@@ -68,9 +68,10 @@ row (asks for confirmation). Rename or remove a notebook by renaming or
 removing its folder.
 
 The body renders Markdown live (headings, lists, emphasis) and is saved back
-as Markdown. `Ctrl+B` / `Ctrl+I` / `Ctrl+U` toggle bold / italic / underline
-on the selection, or for the text you type next. Underline has no standard
-Markdown form; Qt stores it as `_text_` (and italic as `*text*`).
+as Markdown. `Ctrl+B` / `Ctrl+I` / `Ctrl+U` / `Ctrl+S` toggle bold / italic / underline / strikethrough
+on the selection, or for the text you type next. Highlight is written as `==text==` (shown with the markers; OneNote and Notion
+turn it into their real highlight). Strikethrough is stored as `~~text~~`; underline has no standard
+Markdown form and is stored as `_text_` (italic as `*text*`).
 
 The search field filters notes by title and body. **Detach** turns the overlay
 into an ordinary window you can keep open beside your work; **Overlay** brings
@@ -169,11 +170,27 @@ minimal provider to start from.
 Everything ships with a stock Omarchy install:
 
 - `omarchy-shell` (Quickshell) — the plugin is QML loaded by the shell.
-- `python3` — standard library only — for the Microsoft providers (`services/microsoft/msgraph.py`, `providers/*/`*.py`); not used until you sign in.
+- `python3` — standard library only — for the online providers (`services/microsoft/msgraph.py`, `providers/*/*.py`); not used until you sign in. Markdown parsing uses a vendored copy of [mistune](https://github.com/lepture/mistune) (BSD-3-Clause, `services/markdown/mistune/`), so nothing is installed.
 - `wl-copy` (copy the sign-in code) and `xdg-open` (open the sign-in page) — used by the two buttons on the sign-in screen.
 - ImageMagick (`magick`) — optional; when present, OneNote page images are downscaled to the size OneNote declares. Without it they are shown at full resolution.
 
 No sudo or pkexec is required, no packages are installed, and no user configuration is modified — the plugin writes only its own files under `~/Notes` (your notes), `~/.local/state/omarchy/note-note*` and `~/.cache/omarchy/note-note-*`.
+
+## Staying in sync
+
+Nothing runs while the app is hidden. While it is open:
+
+- Local notebooks are watched with one `inotifywait` process (part of Omarchy's
+  base install) — event-driven, no polling, ~4 MB, idle at 0 % CPU. A note
+  created, changed or deleted by another program shows up within half a second;
+  if it is the note you have open and you have no unsaved edits, it is reloaded
+  in place.
+- Every 20 s the app asks each online provider to do its cheapest check:
+  Sticky Notes re-lists (one request), OneNote re-lists only the sections you
+  have expanded (one request each, every 60 s), Notion runs one search (every
+  60 s). A page whose modified time moved is fetched again when you open it.
+- Opening the app (`SUPER+.`) always re-lists everything that is cheap to
+  re-list; the big OneNote listing stays on its ten-minute cache.
 
 ## Limits
 
@@ -200,6 +217,7 @@ files.
 | `Ctrl+Shift+N` | new notebook |
 | `Ctrl+K` | search |
 | `Ctrl+D` | delete current note |
-| `Ctrl+B` / `Ctrl+I` / `Ctrl+U` | bold / italic / underline |
+| `Ctrl+B` / `Ctrl+I` / `Ctrl+U` / `Ctrl+S` | bold / italic / underline / strikethrough |
+| `Ctrl+Shift+H` | highlight the selection (`==text==`) |
 | `Ctrl+↓` / `Ctrl+J` | next note |
 | `Ctrl+↑` | previous note |

@@ -59,13 +59,15 @@ Item {
     root.deleteConfirmOpen = false
     editor.clearNotice()
     for (var a = 0; a < root.accounts.length; a++) root.accounts[a].refresh()
-    for (var i = 0; i < root.providers.length; i++) root.providers[i].refresh()
+    for (var i = 0; i < root.providers.length; i++) { root.providers[i].refresh(); if (typeof root.providers[i].watch === "function") root.providers[i].watch(true) }
     Qt.callLater(function() { editor.focusEditor() })
   }
-  function close() { root.flushSave(); root.opened = false }
+  function stopWatching() { for (var i = 0; i < root.providers.length; i++) if (typeof root.providers[i].watch === "function") root.providers[i].watch(false) }
+  function close() { root.flushSave(); root.opened = false; stopWatching() }
   function dismiss() {
     root.flushSave()
     root.opened = false
+    stopWatching()
     if (root.shell && typeof root.shell.hide === "function") root.shell.hide(root.pluginId)
   }
   function toggle() { if (root.opened) root.dismiss(); else root.open("{}") }
@@ -90,6 +92,16 @@ Item {
   }
 
   function showStatus(text) { root.statusText = text; if (text) statusTimer.restart() }
+
+  // While the app is visible, ask each provider every 20 s whether something
+  // changed behind our back. Providers decide what is cheap (see poll()).
+  Timer {
+    id: pollTimer
+    interval: 20000
+    repeat: true
+    running: root.opened && root.providersLoaded
+    onTriggered: { for (var i = 0; i < root.providers.length; i++) if (typeof root.providers[i].poll === "function") root.providers[i].poll(root.currentPath) }
+  }
   Timer { id: statusTimer; interval: 3500; onTriggered: root.statusText = "" }
 
   // ── services & providers ────────────────────────────────────────────
@@ -139,6 +151,9 @@ Item {
     p.viewRequested.connect(function(title, component, props) { editor.showNotice(title, " ", "", []); editor.showView(component, props) })
     p.viewCleared.connect(function() { editor.clearNotice() })
     p.persistRequested.connect(function() { root.saveState() })
+    if (p.noteChanged) p.noteChanged.connect(function(path) {
+      if (path === root.currentPath && !root.dirty && !root.saving && !root.loadingNote) root.reloadCurrent()
+    })
     if (root.providerState[p.id]) p.restoreState(root.providerState[p.id])
     root.providers = root.providers.concat([p])
     return p
@@ -203,7 +218,8 @@ Item {
   function row(provider, key, group, r) {
     return { provider: provider.id, notebook: key, group: group, kind: r.kind || "note", path: r.path || "",
              title: r.title || "", preview: r.preview || "", icon: r.icon || "",
-             fixed: r.fixed === true || !provider.canReorder, level: r.level || 0, expanded: r.expanded === true }
+             fixed: r.fixed === true || !provider.canReorder, level: r.level || 0, expanded: r.expanded === true,
+             version: r.version || "" }
   }
   function rebuildRows() {
     root.revision++
@@ -231,7 +247,35 @@ Item {
     }
     // A note that vanished from its provider (deleted elsewhere, signed out)
     // is deselected; one merely hidden by folding is kept.
-    if (root.currentPath && !root.filterText && !noteExists(root.currentPath)) selectPath("")
+    if (root.currentPath && !root.filterText && !noteExists(root.currentPath)) { selectPath(""); return }
+    // The open note changed elsewhere (its version moved): reload it, unless
+    // there are unsaved edits here.
+    var v = versionOf(root.currentPath)
+    if (root.currentPath && v && root.loadedVersion !== "" && v !== root.loadedVersion && !root.dirty && !root.saving && !root.loadingNote) reloadCurrent()
+    else if (v && root.loadedVersion === "") root.loadedVersion = v
+  }
+  property string loadedVersion: ""
+  function versionOf(path) {
+    var v = ""
+    eachSection(function(prov, s, key) { (s.rows || []).forEach(function(r) { if (r.kind === "note" && r.path === path && r.version) v = r.version }) })
+    return v
+  }
+  function reloadCurrent() {
+    var path = root.currentPath, p = providerOf(path)
+    if (!p) return
+    root.loadingNote = true
+    root.loadedVersion = versionOf(path)
+    p.load(path, function(r) {
+      if (root.currentPath !== path) return
+      if (r.error) { root.loadingNote = false; return }
+      var pos = editor.cursorPosition()
+      editor.setNote(r.title || "", r.body || "")
+      editor.setCursorPosition(pos)
+      editor.readOnly = r.editable === false
+      root.loadingNote = false
+      root.dirty = false
+      showStatus(p.name + ": reloaded, changed elsewhere")
+    })
   }
   function noteExists(path) {
     var found = false
@@ -291,10 +335,12 @@ Item {
     root.loadingPath = path
     editor.setNote("", "")
     editor.readOnly = true
+    root.loadedVersion = ""
     p.load(path, function(r) {
       if (root.currentPath !== path) return
       root.loadingPath = ""
       if (r.error) { root.loadingNote = false; showStatus(p.name + ": " + r.error); return }
+      root.loadedVersion = r.version || versionOf(path)
       editor.setNote(r.title || "", r.body || "")
       editor.readOnly = r.editable === false
       root.loadingNote = false
@@ -385,6 +431,8 @@ Item {
       if (event.key === Qt.Key_B) { editor.toggleFormat("bold"); return true }
       if (event.key === Qt.Key_I) { editor.toggleFormat("italic"); return true }
       if (event.key === Qt.Key_U) { editor.toggleFormat("underline"); return true }
+      if (event.key === Qt.Key_S) { editor.toggleFormat("strikeout"); return true }
+      if (event.key === Qt.Key_H && (event.modifiers & Qt.ShiftModifier)) { editor.wrapSelection("=="); return true }
     }
     return false
   }
@@ -416,6 +464,7 @@ Item {
     var path = root.currentPath, title = editor.title, body = p.markdown ? editor.text : editor.plainText()
     root.dirty = false
     root.saving = true
+    root.loadedVersion = ""
     p.save(path, title, body, function(r) {
       root.saving = false
       if (r.error) {

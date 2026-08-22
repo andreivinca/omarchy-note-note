@@ -75,7 +75,21 @@ Item {
     area.cursorPosition = area.length
   }
 
+  // Highlight has no Markdown of its own and the editor cannot keep a
+  // background colour through a save, so it is written as ==text==, the
+  // common extension; providers turn it into their real highlight.
+  function wrapSelection(marker) {
+    var s = area.selectionStart, e = area.selectionEnd
+    if (s === e) return
+    var inner = area.getText(s, e)
+    area.remove(s, e)
+    area.insert(s, marker + inner + marker)
+    area.select(s, s + inner.length + marker.length * 2)
+    root.edited()
+  }
   function focusEditor() { area.forceActiveFocus() }
+  function cursorPosition() { return area.cursorPosition }
+  function setCursorPosition(pos) { area.cursorPosition = Math.max(0, Math.min(pos, area.length)) }
   function focusTitle() { titleField.forceActiveFocus() }
 
   readonly property int wordCount: {
@@ -95,7 +109,7 @@ Item {
   function clearPending() { pending = null; pendingCursor = -1 }
 
   function toggleFormat(kind) {
-    if (!(kind === "bold" || kind === "italic" || kind === "underline")) return
+    if (!(kind === "bold" || kind === "italic" || kind === "underline" || kind === "strikeout")) return
     var f = area.cursorSelection.font
     if (area.selectionStart !== area.selectionEnd) {
       f[kind] = !f[kind]
@@ -103,7 +117,7 @@ Item {
       root.edited()
       return
     }
-    if (!pending) pending = { bold: f.bold, italic: f.italic, underline: f.underline }
+    if (!pending) pending = { bold: f.bold, italic: f.italic, underline: f.underline, strikeout: f.strikeout }
     pending[kind] = !pending[kind]
     pendingLen = area.length
     pendingCursor = area.cursorPosition
@@ -118,7 +132,7 @@ Item {
     applying = true
     area.select(pos - n, pos)
     var f = area.cursorSelection.font
-    f.bold = pending.bold; f.italic = pending.italic; f.underline = pending.underline
+    f.bold = pending.bold; f.italic = pending.italic; f.underline = pending.underline; f.strikeout = pending.strikeout
     area.cursorSelection.font = f
     area.deselect()
     area.cursorPosition = pos

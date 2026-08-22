@@ -80,7 +80,7 @@ Item {
       for (var i = 0; i < root.notes.length; i++) {
         var n = root.notes[i]
         if (n.key !== nb.key) continue
-        rows.push({ kind: "note", path: n.path, title: n.title, preview: n.preview })
+        rows.push({ kind: "note", path: n.path, title: n.title, preview: n.preview, version: n.version || "" })
       }
       rows.push({ kind: "new", path: "section:" + nb.key })
       out.push({ key: nb.key, name: nb.name, collapsedByDefault: false, rows: rows })
@@ -120,7 +120,7 @@ Item {
       if (p[0] === "D") dirs.push(p[1] || "")
       else if (p[0] === "O") (orders[p[1] || ""] = orders[p[1] || ""] || []).push(p[2])
       else if (p[0] === "B") bookOrder.push(p[1])
-      else if (p[0] === "N") entries.push({ key: p[1] || "", file: p[2], path: pathOf(p[2]), title: p[3] || "", preview: p[4] || "", size: Number(p[5] || 0) })
+      else if (p[0] === "N") entries.push({ key: p[1] || "", file: p[2], path: pathOf(p[2]), title: p[3] || "", preview: p[4] || "", size: Number(p[5] || 0), version: p[6] || "" })
     }
     var books = dirs.filter(function(k) { return k !== "" || entries.some(function(e) { return e.key === "" }) })
       .map(function(k) { return { key: k, name: k || "Notes", dir: dirOf(k) } })
@@ -149,12 +149,15 @@ Item {
     noteFile.reload()
   }
 
+  // Our own writes fire inotify too; ignore events that follow one closely.
+  property double lastOwnWrite: 0
   function save(path, title, body, cb) {
+    root.lastOwnWrite = Date.now()
     writeFile.path = fileOf(path)
     writeFile.setText(serializeNote(title, body))
     var arr = root.notes.slice()
     for (var i = 0; i < arr.length; i++) if (arr[i].path === path)
-      arr[i] = { key: arr[i].key, file: arr[i].file, path: path, title: title.trim(), preview: previewOf(body), size: body.length }
+      arr[i] = { key: arr[i].key, file: arr[i].file, path: path, title: title.trim(), preview: previewOf(body), size: body.length, version: "" }
     root.notes = arr
     rebuild()
     if (cb) cb({})
@@ -163,6 +166,7 @@ Item {
   function create(target, cb) {
     var key = target.indexOf("section:") === 0 ? target.substring(8) : ""
     var file = dirOf(key) + "/note-" + Date.now() + ".md"
+    root.lastOwnWrite = Date.now()
     writeFile.path = file
     writeFile.setText(serializeNote("", ""))
     var entry = { key: key, file: file, path: pathOf(file), title: "", preview: "", size: 0 }
@@ -220,12 +224,33 @@ Item {
     persistOrder(sectionKey)
   }
 
+  // ── watching: inotify while the app is open (event-driven, no polling) ──
+  function watch(on) {
+    if (on && !watchProc.running) watchProc.running = true
+    else if (!on && watchProc.running) watchProc.running = false
+  }
+  function poll() {}   // inotify covers it
+  Timer { id: relistDebounce; interval: 400; onTriggered: listProc.running = true }
+  Process {
+    id: watchProc
+    command: ["inotifywait", "-m", "-r", "-q", "-e", "create,delete,move,close_write", "--format", "%e %w%f", "--", root.notesDir]
+    stdout: SplitParser {
+      onRead: function(line) {
+        if (Date.now() - root.lastOwnWrite < 1500) return       // our own saves
+        if (/\/\.(order|notebooks)(\s|$)/.test(line)) return   // our bookkeeping files
+        relistDebounce.restart()
+      }
+    }
+  }
+
   function persistOrder(key) {
+    root.lastOwnWrite = Date.now()
     var names = root.notes.filter(function(n) { return n.key === key }).map(function(n) { return baseName(n.file) })
     orderFile.path = dirOf(key) + "/.order"
     orderFile.setText(names.join("\n") + "\n")
   }
   function persistNotebookOrder() {
+    root.lastOwnWrite = Date.now()
     orderFile.path = root.notesDir + "/.notebooks"
     orderFile.setText(root.notebooks.filter(function(b) { return b.key }).map(function(b) { return b.key }).join("\n") + "\n")
   }
@@ -236,8 +261,8 @@ Item {
     onLoaded: {
       var p = root.pendingLoad; root.pendingLoad = null
       if (!p) return
-      var n = root.parseNote(text())
-      p.cb({ title: n.title, body: n.body, editable: true })
+      var n = root.parseNote(text()), e = root.noteAt(p.path)
+      p.cb({ title: n.title, body: n.body, editable: true, version: e ? e.version || "" : "" })
     }
     onLoadFailed: {
       var p = root.pendingLoad; root.pendingLoad = null
@@ -274,14 +299,14 @@ Item {
         [ -f "$dir/.order" ] && while IFS= read -r n; do [ -n "$n" ] && printf "O\\t%s\\t%s\\n" "$key" "$n"; done < "$dir/.order"
         for f in "$dir"/*.md; do
           [ -e "$f" ] || continue
-          printf "%s\\t%s\\t%s\\n" "$(stat -c %W -- "$f")" "$(stat -c %s -- "$f")" "$f"
-        done | sort -n | cut -f2- | while IFS="$(printf "\\t")" read -r size f; do
-          head -c 4096 -- "$f" | awk -v key="$key" -v p="$f" -v size="$size" \'
+          printf "%s\\t%s\\t%s\\t%s\\n" "$(stat -c %W -- "$f")" "$(stat -c %s -- "$f")" "$(stat -c %Y -- "$f")" "$f"
+        done | sort -n | cut -f2- | while IFS="$(printf "\\t")" read -r size mtime f; do
+          head -c 4096 -- "$f" | awk -v key="$key" -v p="$f" -v size="$size" -v mtime="$mtime" \'
             NR==1 && $0=="---" { fm=1; next }
             fm && $0=="---"    { fm=0; next }
             fm && /^title:/    { t=substr($0,7); next }
             !fm && !pv && NF   { pv=substr($0,1,200); sub(/^[#>*\\- \\t]+/, "", pv); gsub(/[*_`]/, "", pv) }
-            END { gsub(/\\t/," ",t); gsub(/\\t/," ",pv); sub(/^ +/,"",t); printf "N\\t%s\\t%s\\t%s\\t%s\\t%s\\n", key, p, t, pv, size }
+            END { gsub(/\\t/," ",t); gsub(/\\t/," ",pv); sub(/^ +/,"",t); printf "N\\t%s\\t%s\\t%s\\t%s\\t%s\\t%s\\n", key, p, t, pv, size, mtime }
           \'
         done
       }

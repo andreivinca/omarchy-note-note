@@ -21,9 +21,14 @@ is enough). The host instantiates each with `host` and `services` set.
 | `microsoftScopes`   | list   | Graph scopes the provider asks for when it creates its own Microsoft account |
 | `sections`          | list   | `[{ key, name, collapsedByDefault, rows, count? }]` — `count` overrides the heading's note count |
 
-A row is `{ kind, path, title, preview, icon, level, expanded, fixed }` with
+A row is `{ kind, path, title, preview, icon, level, expanded, fixed, version }` with
 `kind` one of `note`, `new` (path = create target), `action` (path = action
 id), `tree` (path = tree id, `expanded`), `placeholder`.
+
+`version` (optional) is an opaque change marker for a note — a file mtime,
+a `lastModifiedDateTime`, an etag. The host compares it with the `version`
+returned by `load()`: when a listing shows a newer version for the note that
+is open (and it has no unsaved edits), the host reloads it.
 
 ## Functions
 
@@ -38,6 +43,13 @@ id), `tree` (path = tree id, `expanded`), `placeholder`.
 - `crumb(path)` → string for the editor's description line
 - `createTargetFor(path)` → target for Ctrl+N while `path` is open, or ""
 - `restoreState(obj)`, `saveState()` → obj (kept in the host's state file)
+- `watch(on)` (optional) — the app became visible / hidden; start or stop
+  whatever event source is cheap (the local provider runs one `inotifywait`).
+- `poll(currentPath)` (optional) — called every 20 s while the app is
+  visible with the path of the open note; do the cheapest check for external
+  changes (one small request), or nothing. A provider whose backend has no
+  trustworthy change marker (OneNote) may re-read the open note and emit
+  `noteChanged(path)`; the host reloads it if it has no unsaved edits.
 
 ## Signals
 

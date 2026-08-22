@@ -59,7 +59,7 @@ Item {
     else if (!ms.hasScope("Mail.ReadWrite")) rows.push({ kind: "action", path: "relogin", title: ms.loggingIn ? "Signing in…" : "Sign in again to enable Sticky Notes…", icon: "󰊻" })
     else {
       for (var i = 0; i < root.notes.length; i++)
-        rows.push({ kind: "note", path: pathOf(root.notes[i].id), title: "", preview: previewOf(root.notes[i].body), fixed: true })
+        rows.push({ kind: "note", path: pathOf(root.notes[i].id), title: "", preview: previewOf(root.notes[i].body), fixed: true, version: root.notes[i].modified || "" })
       rows.push({ kind: "new", path: "new" })
       rows.push({ kind: "action", path: "logout", title: "Sign out" + (ms.account ? " (" + ms.account + ")" : ""), icon: "󰍃" })
     }
@@ -98,7 +98,7 @@ Item {
 
   function load(path, cb) {
     var n = noteAt(path)
-    cb(n ? { title: "", body: n.body, editable: true } : { error: "unknown note" })
+    cb(n ? { title: "", body: n.body, editable: true, version: n.modified || "" } : { error: "unknown note" })
   }
 
   property var saveCb: null
@@ -130,6 +130,8 @@ Item {
   }
 
   function setOrder(sectionKey, paths) {}
+  // One listing request per poll; nothing else is needed to spot changes.
+  function poll() { if (root.ready && !listProc.running) { listProc.cached = false; listProc.running = true } }
 
   function parse(text) { try { return JSON.parse(text) } catch (e) { return { error: "unexpected reply" } } }
 
