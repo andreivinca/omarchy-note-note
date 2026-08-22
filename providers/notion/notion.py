@@ -57,14 +57,36 @@ def load_json(path, default):
 
 
 def save_private(path, obj):
-    os.makedirs(os.path.dirname(path), exist_ok=True)
-    tmp = path + ".tmp"
-    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-    with os.fdopen(fd, "w") as f:
-        json.dump(obj, f)
-    os.replace(tmp, path)
+    """Write a private file atomically: a fresh O_EXCL temp file (mkstemp,
+    0600, never a pre-existing path or symlink), then rename over the target."""
+    import tempfile
+    d = os.path.dirname(path)
+    os.makedirs(d, mode=0o700, exist_ok=True)   # the files themselves are 0600
+    fd, tmp = tempfile.mkstemp(prefix=".", suffix=".tmp", dir=d)
+    try:
+        with os.fdopen(fd, "w") as f:
+            json.dump(obj, f)
+        os.replace(tmp, path)
+    except BaseException:
+        try:
+            os.remove(tmp)
+        except OSError:
+            pass
+        raise
 
 
+def read_payload(path):
+    """A JSON payload: from stdin when path is "-" (how the plugin passes
+    secrets and note bodies — nothing touches a shared temp directory)."""
+    if path == "-":
+        raw = sys.stdin.read(8 * 1024 * 1024 + 1)
+        if len(raw) > 8 * 1024 * 1024:
+            fail("payload too large")
+        try:
+            return json.loads(raw)
+        except ValueError:
+            return None
+    return load_json(path, None)
 def token():
     t = load_json(TOKEN_FILE, {}).get("token", "")
     if not t:
@@ -128,7 +150,7 @@ def cmd_status():
 
 
 def cmd_setup(path):
-    payload = load_json(path, {}) or {}
+    payload = read_payload(path) or {}
     tok = (payload.get("token") or "").strip()
     if not tok:
         fail("paste the integration secret")
@@ -211,7 +233,7 @@ def cmd_page(page_id):
 
 
 def cmd_update(page_id, path):
-    payload = load_json(path, None)
+    payload = read_payload(path)
     if payload is None:
         fail("cannot read payload")
     # Title: the page's title property (name varies; find it).
@@ -238,7 +260,7 @@ def cmd_update(page_id, path):
 
 
 def cmd_create(parent_id, path):
-    payload = load_json(path, None) or {}
+    payload = read_payload(path) or {}
     body = {"parent": {"page_id": parent_id}, "properties": {"title": {"title": [{"type": "text", "text": {"content": payload.get("title", "") or ""}}]}},
             "children": notion_md.markdown_to_blocks(payload.get("body", ""))[:100]}
     status, res = api("POST", "/pages", body)

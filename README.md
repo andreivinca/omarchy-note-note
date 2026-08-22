@@ -73,6 +73,16 @@ on the selection, or for the text you type next. Highlight is written as `==text
 turn it into their real highlight). Strikethrough is stored as `~~text~~`; underline has no standard
 Markdown form and is stored as `_text_` (italic as `*text*`).
 
+A formatting toolbar sits above the note (Markdown notes only): bold, italic,
+underline, strikethrough, highlight, inline code; heading 1–3 and normal text;
+bullet, numbered and checkbox lists; indent/outdent (nests list items, indents
+plain text — stored as leading non-breaking spaces, shown as a real paragraph
+indent in OneNote); quote, code block,
+table (insert, then +Row / +Col / −Row / −Col with the cursor in a cell),
+horizontal rule and link (a small text + URL bar). Block styles apply to
+the paragraph(s) under the cursor or selection. Images are not inserted from
+here — they need an upload, which only the OneNote and Notion apps do.
+
 The search field filters notes by title and body. **Detach** turns the overlay
 into an ordinary window you can keep open beside your work; **Overlay** brings
 it back. Collapsed notebooks and the detached choice are remembered in
@@ -199,7 +209,10 @@ a local note is read once with a 2 MiB ceiling and opened read-only with a note 
 the folder listing is capped at 4 MiB; Graph responses are read up to 4–8 MiB,
 page images up to 20 MiB, lists up to 500 sticky notes / 500 sections / 3000
 pages; a sticky note's text is kept to 256 KiB. The plugin's own state file is
-read the same way (1 MiB ceiling) and ignored beyond it. The numbers live at the top of each provider's
+read the same way (1 MiB ceiling) and ignored beyond it. Secrets and note
+bodies are handed to the provider scripts over stdin — never through a file in
+a shared temp directory — and tokens/caches are written atomically via a fresh
+owner-only temp file (`mkstemp`) renamed over the target. The numbers live at the top of each provider's
 files.
 
 ## What it accesses, and why

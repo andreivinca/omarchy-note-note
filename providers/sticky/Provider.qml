@@ -25,7 +25,6 @@ Item {
 
   readonly property string dir: Qt.resolvedUrl(".").toString().replace(/^file:\/\//, "").replace(/\/$/, "")
   readonly property string script: dir + "/sticky.py"
-  readonly property string payloadPath: (Quickshell.env("XDG_RUNTIME_DIR") || "/tmp") + "/omarchy-note-note-sticky-payload.json"
 
   signal updated()
   signal statusRequested(string text)
@@ -106,10 +105,12 @@ Item {
     var n = noteAt(path)
     if (n) n.body = body
     rebuild()
-    payloadFile.setText(JSON.stringify({ title: title, body: body }))
     root.saveCb = cb
-    saveProc.command = ["python3", root.script, "update", idOf(path), root.payloadPath]
+    saveProc.command = ["python3", root.script, "update", idOf(path), "-"]
     saveProc.running = true
+    saveProc.write(JSON.stringify({ title: title, body: body }))
+    saveProc.stdinEnabled = false          // closes stdin so the script can read it
+    saveProc.stdinEnabled = true
   }
 
   property var createCb: null
@@ -179,5 +180,4 @@ Item {
     stdout: StdioCollector { onStreamFinished: { var cb = root.removeCb; root.removeCb = null; var r = root.parse(this.text); if (cb) cb(r.error ? { error: r.error } : {}) } }
   }
   Process { id: clearProc; environment: root.ms ? root.ms.env : ({}); command: ["python3", root.script, "clear-cache"] }
-  FileView { id: payloadFile; path: root.payloadPath; atomicWrites: true; printErrors: false }
 }

@@ -26,7 +26,6 @@ Item {
 
   readonly property string dir: Qt.resolvedUrl(".").toString().replace(/^file:\/\//, "").replace(/\/$/, "")
   readonly property string script: dir + "/onenote.py"
-  readonly property string payloadPath: (Quickshell.env("XDG_RUNTIME_DIR") || "/tmp") + "/omarchy-note-note-onenote-payload.json"
 
   signal updated()
   signal statusRequested(string text)
@@ -159,21 +158,25 @@ Item {
     for (var i = 0; i < pgs.length; i++) if (pgs[i].id === id) pgs[i] = { id: id, sectionId: pgs[i].sectionId, title: title, modified: pgs[i].modified }
     root.pages = pgs
     rebuild()
-    payloadFile.setText(JSON.stringify({ title: title, originalTitle: original, body: body }))
     root.saveCb = cb
     saveProc.path = path
-    saveProc.command = ["python3", root.script, "update", id, root.payloadPath]
+    saveProc.command = ["python3", root.script, "update", id, "-"]
+    saveProc.stdinEnabled = true
     saveProc.running = true
+    saveProc.write(JSON.stringify({ title: title, originalTitle: original, body: body }))
+    saveProc.stdinEnabled = false          // close stdin: the script reads to EOF
   }
 
   property var createCb: null
   function create(target, cb) {
     if (!root.ready || createProc.running || target.indexOf("section:") !== 0) { if (cb) cb({ error: "not ready" }); return }
     root.statusRequested("Creating a OneNote page…")
-    payloadFile.setText(JSON.stringify({ title: "", body: "" }))
     root.createCb = cb
-    createProc.command = ["python3", root.script, "create", target.substring(8), root.payloadPath]
+    createProc.command = ["python3", root.script, "create", target.substring(8), "-"]
+    createProc.stdinEnabled = true
     createProc.running = true
+    createProc.write(JSON.stringify({ title: "", body: "" }))
+    createProc.stdinEnabled = false          // close stdin: the script reads to EOF
   }
 
   property var removeCb: null
@@ -327,5 +330,4 @@ Item {
     stdout: StdioCollector { onStreamFinished: { var cb = root.removeCb; root.removeCb = null; var r = root.parse(this.text); if (cb) cb(r.error ? { error: r.error } : {}) } }
   }
   Process { id: clearProc; environment: root.ms ? root.ms.env : ({}); command: ["python3", root.script, "clear-cache"] }
-  FileView { id: payloadFile; path: root.payloadPath; atomicWrites: true; printErrors: false }
 }

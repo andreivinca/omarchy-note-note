@@ -56,14 +56,36 @@ def load_json(path, default):
 
 
 def save_private(path, obj):
-    os.makedirs(os.path.dirname(path), exist_ok=True)
-    tmp = path + ".tmp"
-    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-    with os.fdopen(fd, "w") as f:
-        json.dump(obj, f)
-    os.replace(tmp, path)
+    """Write a private file atomically: a fresh O_EXCL temp file (mkstemp,
+    0600, never a pre-existing path or symlink), then rename over the target."""
+    import tempfile
+    d = os.path.dirname(path)
+    os.makedirs(d, mode=0o700, exist_ok=True)   # the files themselves are 0600
+    fd, tmp = tempfile.mkstemp(prefix=".", suffix=".tmp", dir=d)
+    try:
+        with os.fdopen(fd, "w") as f:
+            json.dump(obj, f)
+        os.replace(tmp, path)
+    except BaseException:
+        try:
+            os.remove(tmp)
+        except OSError:
+            pass
+        raise
 
 
+def read_payload(path):
+    """A JSON payload: from stdin when path is "-" (how the plugin passes
+    secrets and note bodies — nothing touches a shared temp directory)."""
+    if path == "-":
+        raw = sys.stdin.read(8 * 1024 * 1024 + 1)
+        if len(raw) > 8 * 1024 * 1024:
+            fail("payload too large")
+        try:
+            return json.loads(raw)
+        except ValueError:
+            return None
+    return load_json(path, None)
 def config():
     cfg = load_json(CONFIG, {}).get("microsoft", {})
     client_id = cfg.get("clientId", "").strip() or CLIENT_ID

@@ -15,7 +15,7 @@ import json, os, re, sys, time, urllib.parse, urllib.request, urllib.error
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(HERE, "..", "..", "services", "microsoft"))
 sys.path.insert(0, HERE)
-from msgraph import graph, http, fail, out, load_json, save_private, access_token, CACHE_DIR, GRAPH  # noqa: E402
+from msgraph import graph, http, fail, out, load_json, save_private, read_payload, access_token, CACHE_DIR, GRAPH  # noqa: E402
 import onenote_md  # noqa: E402
 
 ONENOTE_CACHE = os.path.join(CACHE_DIR, "note-note-onenote.json")
@@ -179,7 +179,7 @@ def cmd_onenote_page(page_id):
 
 
 def cmd_onenote_update(page_id, path):
-    payload = load_json(path, None)
+    payload = read_payload(path)
     if payload is None:
         fail("cannot read payload")
     url = "/me/onenote/pages/" + urllib.parse.quote(page_id, safe="") + "/content"
@@ -207,7 +207,7 @@ def cmd_onenote_update(page_id, path):
 
 
 def cmd_onenote_create(section_id, path):
-    payload = load_json(path, None) or {}
+    payload = read_payload(path) or {}
     title = _html.escape(payload.get("title", "") or "")
     html = "<!DOCTYPE html><html><head><title>%s</title></head><body>%s</body></html>" % (
         title, onenote_md.markdown_to_onenote_html(payload.get("body", "")))

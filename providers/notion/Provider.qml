@@ -19,13 +19,17 @@ Item {
   readonly property bool canReorder: false
   readonly property bool canCreateSection: false
   readonly property var microsoftScopes: []
+  // Formatting tools this provider can store (see PROVIDERS.md). No table:
+  // Notion tables are not representable as Markdown tables here.
+  readonly property var tools: ["bold", "italic", "underline", "strikeout", "highlight", "code",
+                                "h1", "h2", "h3", "p", "ul", "ol", "todo", "indent", "outdent",
+                                "quote", "codeblock", "rule", "link"]
 
   property var host: null
   property var services: null
 
   readonly property string dir: Qt.resolvedUrl(".").toString().replace(/^file:\/\//, "").replace(/\/$/, "")
   readonly property string script: dir + "/notion.py"
-  readonly property string payloadPath: (Quickshell.env("XDG_RUNTIME_DIR") || "/tmp") + "/omarchy-note-note-notion-payload.json"
 
   signal updated()
   signal statusRequested(string text)
@@ -112,10 +116,12 @@ Item {
     for (var i = 0; i < pgs.length; i++) if (pgs[i].id === id) pgs[i] = { id: id, title: title, parent: pgs[i].parent, edited: pgs[i].edited }
     root.pages = pgs
     rebuild()
-    payloadFile.setText(JSON.stringify({ title: title, body: body }))
     root.saveCb = cb
-    saveProc.command = ["python3", root.script, "update", id, root.payloadPath]
+    saveProc.command = ["python3", root.script, "update", id, "-"]
+    saveProc.stdinEnabled = true
     saveProc.running = true
+    saveProc.write(JSON.stringify({ title: title, body: body }))
+    saveProc.stdinEnabled = false          // close stdin: the script reads to EOF
   }
 
   property var createCb: null
@@ -124,10 +130,12 @@ Item {
     var parent = target === "new" ? (root.pages.length ? root.pages[0].id : "") : (target.indexOf("parent:") === 0 ? target.substring(7) : "")
     if (!parent) { if (cb) cb({ error: "share at least one page with the integration first — new pages need a parent" }); return }
     root.statusRequested("Creating a Notion page…")
-    payloadFile.setText(JSON.stringify({ title: "", body: "" }))
     root.createCb = cb
-    createProc.command = ["python3", root.script, "create", parent, root.payloadPath]
+    createProc.command = ["python3", root.script, "create", parent, "-"]
+    createProc.stdinEnabled = true
     createProc.running = true
+    createProc.write(JSON.stringify({ title: "", body: "" }))
+    createProc.stdinEnabled = false          // close stdin: the script reads to EOF
   }
 
   property var removeCb: null
@@ -228,7 +236,6 @@ Item {
     }
   }
   Process { id: logoutProc; command: ["python3", root.script, "logout"]; onExited: { root.bodies = ({}); root.refresh() } }
-  FileView { id: payloadFile; path: root.payloadPath; atomicWrites: true; printErrors: false }
 
   // ── setup: the provider's own screen ────────────────────────────────
   property bool setupBusy: false
@@ -238,9 +245,11 @@ Item {
     if (!t) { root.setupError = "Paste the integration secret."; return }
     root.setupBusy = true
     root.setupError = ""
-    payloadFile.setText(JSON.stringify({ token: t }))
-    setupProc.command = ["python3", root.script, "setup", root.payloadPath]
+    setupProc.command = ["python3", root.script, "setup", "-"]
+    setupProc.stdinEnabled = true
     setupProc.running = true
+    setupProc.write(JSON.stringify({ token: t }))
+    setupProc.stdinEnabled = false          // close stdin: the script reads to EOF
   }
 
   Component {

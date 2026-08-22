@@ -21,6 +21,8 @@ GAP = "\u00a0"   # an empty line, see Converter.block("br")
 # OneNote's own paragraphs are written with zero margins; without a style it
 # applies 5.5pt above and below, which reads as extra spacing on every line.
 P_STYLE = ' style="margin-top:0pt;margin-bottom:0pt"'
+NBSP4 = "\u00a0" * 4
+INDENT_PX = 36        # one indent level, as OneNote's own "increase indent"
 
 
 class Node:
@@ -193,6 +195,11 @@ class Converter:
         if t == "p" or t == "cite":
             text = self.inline(node).strip()
             prefix = self.para_prefix(node) if t == "p" else "*"
+            if t == "p":
+                m = re.search(r"margin-left:\s*([\d.]+)(px|pt)", node.attrs.get("style", ""))
+                if m:
+                    val = float(m.group(1)) * (1.333 if m.group(2) == "pt" else 1.0)
+                    text = NBSP4 * max(0, int(round(val / INDENT_PX))) + text
             if t == "cite":
                 text = "*%s*" % text if text else ""
                 prefix = ""
@@ -417,9 +424,14 @@ def _paragraphs(tokens):
 
 
 def _p(tag, html):
+    level = 0
+    while html.startswith("\u00a0" * 4):
+        html = html[4:]
+        level += 1
+    style = P_STYLE if not level else ' style="margin-top:0pt;margin-bottom:0pt;margin-left:%dpx"' % (level * INDENT_PX)
     if tag:
-        return '<p data-tag="%s"%s>%s</p>' % (tag, P_STYLE, html)
-    return "<p%s>%s</p>" % (P_STYLE, html)
+        return '<p data-tag="%s"%s>%s</p>' % (tag, style, html)
+    return "<p%s>%s</p>" % (style, html)
 
 
 def _render_blocks(tokens, out, depth=0):

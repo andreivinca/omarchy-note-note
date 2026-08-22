@@ -12,7 +12,7 @@ Graph exposes as a well-known mail folder.
 import json, os, sys, time, urllib.parse
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "services", "microsoft"))
-from msgraph import graph, fail, out, load_json, save_private, CACHE_DIR  # noqa: E402
+from msgraph import graph, fail, out, load_json, save_private, read_payload, CACHE_DIR  # noqa: E402
 
 CACHE = os.path.join(CACHE_DIR, "note-note-sticky.json")
 # This provider's limits: what it will read from Graph and keep around.
@@ -58,7 +58,7 @@ def cmd_list(cached):
 
 
 def cmd_update(note_id, path):
-    payload = load_json(path, None)
+    payload = read_payload(path)
     if payload is None:
         fail("cannot read payload")
     body = payload.get("body", "")

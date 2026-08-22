@@ -314,6 +314,8 @@ Item {
     return JSON.stringify(root.rows.filter(function(r) { return r.provider === providerId }).map(function(r) { return r.kind + ":" + r.path.substring(0, 24) }))
   }
   function sectionsOf(providerId) { var p = providerById(providerId); return p ? JSON.stringify(p.sections.map(function(s) { return s.key + "(" + s.rows.length + ")" })) : "no provider" }
+  function editorTool(id) { editor.tool(id); return true }
+  function editorCursor(pos) { editor.setCursorPosition(Number(pos)); editor.updateInTable(); return editor.cursorPosition() + (editor.inTable ? " in-table" : " outside") }
   function treeToggle(id) {
     for (var i = 0; i < root.rows.length; i++)
       if (root.rows[i].kind === "tree" && root.rows[i].path === id) { var p = providerById(root.rows[i].provider); if (p) p.toggleTree(id); return true }
@@ -658,6 +660,7 @@ Item {
           hasNote: root.currentPath !== ""
           plain: { var p = root.providerOf(root.currentPath); return p ? !p.markdown : false }
           hasTitle: { var p = root.providerOf(root.currentPath); return p ? p.hasTitle : true }
+          enabledTools: { var p = root.providerOf(root.currentPath); return (p && p.tools !== undefined) ? p.tools : null }
           notebookName: root.currentCrumb
           fileName: {
             if (!root.currentPath) return ""
@@ -672,6 +675,7 @@ Item {
           accent: root.accent
           shortcutHandler: root.handleShortcut
           onEdited: root.onEdited()
+          onStatusRequestedTextChanged: if (statusRequestedText) { root.showStatus(statusRequestedText); statusRequestedText = "" }
         }
       }
     }

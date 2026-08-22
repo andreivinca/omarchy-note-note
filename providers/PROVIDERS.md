@@ -18,6 +18,7 @@ is enough). The host instantiates each with `host` and `services` set.
 | `canDelete`         | bool   | `remove()` is supported |
 | `canReorder`        | bool   | rows may be dragged within a section; `setOrder()` persists |
 | `canCreateSection`  | bool   | `createSection()` is supported (the "New notebook…" row) |
+| `tools`             | list   | optional: formatting-toolbar tool ids the backend can store — `bold italic underline strikeout highlight code h1 h2 h3 p ul ol todo indent outdent quote codeblock table rule link`; omitted = all (when `markdown`), `[]` = no toolbar |
 | `microsoftScopes`   | list   | Graph scopes the provider asks for when it creates its own Microsoft account |
 | `sections`          | list   | `[{ key, name, collapsedByDefault, rows, count? }]` — `count` overrides the heading's note count |
 
