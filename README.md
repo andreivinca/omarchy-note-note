@@ -121,6 +121,12 @@ If you signed in before OneNote support existed, the OneNote notebook shows
 `Sign in again to enable OneNote…` — it signs out and back in so the token
 gains the `Notes.ReadWrite` scope.
 
+## What it accesses, and why
+
+- **Your notes on disk**: `~/Notes` (or `NOTE_NOTE_DIR`) — read and written as plain Markdown files; nothing else on the filesystem beyond its own state and cache under `~/.local/state/omarchy/` and `~/.cache/omarchy/`.
+- **Microsoft account, only after you choose *Sign in***: delegated Graph permissions `Mail.ReadWrite` (Sticky Notes are stored as items in your mailbox's *Notes* folder — Graph has no narrower scope for them), `Notes.ReadWrite` (OneNote) and `User.Read` (to show which account is signed in). The token is stored owner-only at `~/.local/state/omarchy/note-note-ms-token.json`; *Sign out* deletes it. The plugin talks to `login.microsoftonline.com` and `graph.microsoft.com` and nowhere else — no telemetry, no third-party servers.
+- The app registration it signs in through is this project's own public client; you can point it at your own registration via `~/.config/omarchy/note-note.json` if you prefer.
+
 ## Keys
 
 | Key | Action |
