@@ -121,6 +121,17 @@ If you signed in before OneNote support existed, the OneNote notebook shows
 `Sign in again to enable OneNote…` — it signs out and back in so the token
 gains the `Notes.ReadWrite` scope.
 
+## Dependencies
+
+Everything ships with a stock Omarchy install:
+
+- `omarchy-shell` (Quickshell) — the plugin is QML loaded by the shell.
+- `python3` — standard library only — for the Microsoft bridge (`lib/msgraph.py`); not used until you sign in.
+- `wl-copy` (copy the sign-in code) and `xdg-open` (open the sign-in page) — used by the two buttons on the sign-in screen.
+- ImageMagick (`magick`) — optional; when present, OneNote page images are downscaled to the size OneNote declares. Without it they are shown at full resolution.
+
+No sudo or pkexec is required, no packages are installed, and no user configuration is modified — the plugin writes only its own files under `~/Notes` (your notes), `~/.local/state/omarchy/note-note*` and `~/.cache/omarchy/note-note-*`.
+
 ## What it accesses, and why
 
 - **Your notes on disk**: `~/Notes` (or `NOTE_NOTE_DIR`) — read and written as plain Markdown files; nothing else on the filesystem beyond its own state and cache under `~/.local/state/omarchy/` and `~/.cache/omarchy/`.
