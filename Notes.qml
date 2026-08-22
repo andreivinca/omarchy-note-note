@@ -5,29 +5,17 @@ import QtQuick
 import qs.Commons
 import qs.Ui
 import "ui"
+import "services/microsoft" as Microsoft
 
 // Note Note — notes for the Omarchy shell, laid out like Toolroll: a header
-// with search and key hints, a sidebar of notes, and the note itself on the
-// right, always editable. Summoned as an overlay, or detached into an
+// with search and key hints, a sidebar of notebooks, and the note itself on
+// the right, always editable. Summoned as an overlay, or detached into an
 // ordinary window.
 //
-// Notebooks are folders under ~/Notes (override with $NOTE_NOTE_DIR); notes
-// are Markdown files inside them, with an optional title kept in a tiny
-// front-matter block:
-//
-//   ---
-//   title: Shopping
-//   ---
-//   body…
-//
-// An empty title shows the first words of the body in the list instead.
-// Each notebook keeps its note order in its own .order file; the notebook
-// order lives in ~/Notes/.notebooks. Notes sitting directly in ~/Notes show
-// up as a "Notes" notebook.
-//
-// A virtual "Microsoft Sticky Notes" notebook sits last. Sticky Notes sync
-// into the Outlook mailbox, which lib/msgraph.py reads and writes through
-// Microsoft Graph; nothing is mirrored to disk beyond a small cache.
+// Where notes come from is the providers' business (see
+// providers/PROVIDERS.md): built-in ones under providers/, external ones
+// under ~/.config/omarchy/note-note/providers/<id>/Provider.qml. The host
+// only knows the provider contract.
 Item {
   id: root
 
@@ -36,104 +24,23 @@ Item {
   property var shell: null
   property var manifest: null
 
+  readonly property string pluginId: (root.manifest && root.manifest.id) || "io.github.andreivinca.note-note"
+  readonly property string externalProvidersDir: Quickshell.env("HOME") + "/.config/omarchy/note-note/providers"
+  readonly property string statePath: Quickshell.env("HOME") + "/.local/state/omarchy/note-note.json"
+
   property bool opened: false
-  // false: summoned layer-shell overlay. true: an ordinary window Hyprland
-  // manages like any other, for keeping open beside your work.
   property bool detached: false
   property bool deleteConfirmOpen: false
   property string filterText: ""
   property string statusText: ""
 
-  readonly property string notesDir: Quickshell.env("NOTE_NOTE_DIR") || (Quickshell.env("HOME") + "/Notes")
-  readonly property string notebooksPath: root.notesDir + "/.notebooks"
-
-  // ── Microsoft Sticky Notes ──────────────────────────────────────────
-  readonly property string msKey: "ms:"
-  readonly property string msName: "Microsoft Sticky Notes"
-  readonly property string msScript: Qt.resolvedUrl("lib/msgraph.py").toString().replace(/^file:\/\//, "")
-  readonly property string msConfigPath: Quickshell.env("HOME") + "/.config/omarchy/note-note.json"
-  readonly property string msPayloadPath: (Quickshell.env("XDG_RUNTIME_DIR") || "/tmp") + "/omarchy-note-note-ms-payload.json"
-  property bool msConfigured: false
-  property bool msSignedIn: false
-  property string msAccount: ""
-  property bool msLoggingIn: false
-  property bool msRefreshing: false
-  // [{ id, title, body, modified }] as last fetched (or cached).
-  property var msNotes: []
-  function isMs(path) { return path.indexOf(root.msKey) === 0 }
-
-  // OneNote: every section is a notebook keyed "on:<sectionId>"; pages are
-  // "onp:<pageId>". Page bodies are fetched on demand and kept for the session.
-  readonly property string onKey: "on:"
-  readonly property string onPageKey: "onp:"
-  property bool msOneNote: false
-  property var onSections: []
-  property var onPages: []
-  property var onBodies: ({})
-  // Expanded OneNote notebooks/sections (ids), remembered in the state file.
-  property var onExpanded: []
-  readonly property string onSecKey: "ons:"
-  function onToggle(id) {
-    var i = root.onExpanded.indexOf(id), next = root.onExpanded.slice()
-    if (i >= 0) next.splice(i, 1); else next.push(id)
-    root.onExpanded = next
-    rebuildModel()
-    saveState()
-  }
-  function onSection(id) {
-    for (var i = 0; i < root.onSections.length; i++) if (root.onSections[i].id === id) return root.onSections[i]
-    return null
-  }
-  function isOnSection(key) { return key.indexOf(root.onKey) === 0 }
-  function isOnPage(path) { return path.indexOf(root.onPageKey) === 0 }
-  function onPageId(path) { return path.substring(root.onPageKey.length) }
-  function onSectionId(key) { return key.substring(root.onKey.length) }
-  function onSectionName(id) {
-    var sct = onSection(id)
-    return sct ? "OneNote › " + (sct.notebook ? sct.notebook + " › " : "") + sct.name : "OneNote"
-  }
-  function onPage(path) {
-    var id = onPageId(path)
-    for (var i = 0; i < root.onPages.length; i++) if (root.onPages[i].id === id) return root.onPages[i]
-    return null
-  }
-  // Fetched remotely (not from disk): Sticky Notes and OneNote alike.
-  function isRemote(path) { return isMs(path) || isOnPage(path) }
-  // Reachable over IPC (omarchy-shell shell call <id> scrollList 400).
-  function scrollList(y) { list.setScrollOffset(Number(y)); return list.scrollOffset() }
-  function listOffset() { return list.scrollOffset() }
-  function listDebug() { return list.debugInfo() }
-  // What the editor's description line calls the place a note lives.
-  function crumbOf(path) {
-    if (!path) return ""
-    if (isOnPage(path)) { var pg = onPage(path); return pg ? onSectionName(pg.sectionId) : "OneNote" }
-    return notebookName(notebookOf(path))
-  }
-  function msId(path) { return path.substring(root.msKey.length) }
-  function msNote(path) {
-    var id = msId(path)
-    for (var i = 0; i < root.msNotes.length; i++) if (root.msNotes[i].id === id) return root.msNotes[i]
-    return null
-  }
-  // Local notebooks are open unless folded; the remote ones (Sticky Notes,
-  // OneNote) are folded unless the user opened them.
-  property var collapsed: []
-  property var openedRemote: []
-  function isRemoteKey(key) { return key === root.msKey || key === root.onKey }
-  function isFolded(key) {
-    return isRemoteKey(key) ? root.openedRemote.indexOf(key) < 0 : root.collapsed.indexOf(key) >= 0
-  }
-  // Every folded key, for the sidebar's chevrons.
-  function foldedKeys() {
-    return root.notebooks.map(function(b) { return b.key }).filter(isFolded)
-  }
-  readonly property string statePath: Quickshell.env("HOME") + "/.local/state/omarchy/note-note.json"
-
-  // Current note. `currentPath` drives the FileView; `loadingNote` guards
-  // against editor change signals firing a save while we swap files.
+  // Current note. `loadingNote` guards against editor change signals firing
+  // a save while a note is being swapped in.
   property string currentPath: ""
   property bool loadingNote: false
   property bool dirty: false
+  property string currentCrumb: ""
+  property string loadingPath: ""
 
   // Shares the [menu] surface tokens, so a theme that styles the launcher
   // styles this too.
@@ -151,36 +58,24 @@ Item {
     root.opened = true
     root.deleteConfirmOpen = false
     editor.clearNotice()
-    listProc.running = true
-    msStatusProc.running = true
+    for (var a = 0; a < root.accounts.length; a++) root.accounts[a].refresh()
+    for (var i = 0; i < root.providers.length; i++) root.providers[i].refresh()
     Qt.callLater(function() { editor.focusEditor() })
   }
-
-  function close() {
-    root.flushSave()
-    root.opened = false
-  }
-
+  function close() { root.flushSave(); root.opened = false }
   function dismiss() {
     root.flushSave()
     root.opened = false
-    if (root.shell && typeof root.shell.hide === "function")
-      root.shell.hide((root.manifest && root.manifest.id) || "io.github.andreivinca.note-note")
+    if (root.shell && typeof root.shell.hide === "function") root.shell.hide(root.pluginId)
   }
-
-  function toggle() {
-    if (root.opened) root.dismiss()
-    else root.open("{}")
-  }
+  function toggle() { if (root.opened) root.dismiss(); else root.open("{}") }
 
   function setDetached(value) {
     var next = value === true || value === "true"
     if (next === root.detached) return
     root.detached = next
     saveState()
-    root.statusText = next
-      ? "Detached — an ordinary window now, so move, resize and tile it as usual"
-      : "Back to the summoned overlay"
+    root.statusText = next ? "Detached — an ordinary window now, so move, resize and tile it as usual" : "Back to the summoned overlay"
     statusTimer.restart()
   }
 
@@ -194,327 +89,212 @@ Item {
     else root.dismiss()
   }
 
+  function showStatus(text) { root.statusText = text; if (text) statusTimer.restart() }
   Timer { id: statusTimer; interval: 3500; onTriggered: root.statusText = "" }
 
-  // ── note file format ────────────────────────────────────────────────
-  function parseNote(raw) {
-    var m = /^---\n(?:title:[ \t]?(.*))?\n?---\n?/.exec(raw)
-    if (!m) return { title: "", body: raw }
-    return { title: (m[1] || "").trim(), body: raw.substring(m[0].length) }
+  // ── services & providers ────────────────────────────────────────────
+  // Providers get their own Microsoft sign-in (own token, own scopes) from
+  // the shared service code: services.microsoft.create(providerId, scopes).
+  property var accounts: []
+  function createMicrosoftAccount(owner, scopes) {
+    var acc = accountComponent.createObject(root, { owner: owner, scopes: ["offline_access", "User.Read"].concat(scopes || []).join(" ") })
+    acc.codeReceived.connect(function(code, uri) {
+      editor.showNotice("Sign in to Microsoft for " + owner,
+        "Open " + uri + " in a browser, enter this code, and sign in with your Microsoft account. This screen updates by itself once you are done.", code,
+        [{ label: "Copy code", icon: "󰆏", action: function() { Quickshell.execDetached(["sh", "-c", 'printf %s "$1" | wl-copy', "sh", code]) } },
+         { label: "Open sign-in page", icon: "󰖟", action: function() { Quickshell.execDetached(["xdg-open", uri]) } }])
+    })
+    acc.loginSucceeded.connect(function() { editor.showNotice("Signed in", "Fetching your notes…", "", []) })
+    acc.loginFailed.connect(function(error) {
+      editor.showNotice("Sign-in failed", error, "", [{ label: "Try again", icon: "󰑐", action: function() { acc.login() } }])
+    })
+    acc.updated.connect(function() { if (acc.signedIn && editor.noticeTitle === "Signed in") editor.clearNotice(); root.rebuildRows() })
+    root.accounts = root.accounts.concat([acc])
+    return acc
+  }
+  Component { id: accountComponent; Microsoft.Account {} }
+  readonly property var services: ({ microsoft: { create: function(owner, scopes) { return root.createMicrosoftAccount(owner, scopes) } } })
+
+  property var providers: []
+  property var providerState: ({})
+  property bool providersLoaded: false
+
+  function providerOf(path) {
+    if (!path) return null
+    var pid = path.substring(0, path.indexOf(":"))
+    for (var i = 0; i < root.providers.length; i++) if (root.providers[i].id === pid) return root.providers[i]
+    return null
+  }
+  function providerById(id) { return providerOf(id + ":") }
+
+  function addProvider(url) {
+    var comp = Qt.createComponent(url)
+    if (comp.status === Component.Error) { console.warn("note-note: provider failed:", url, comp.errorString()); return null }
+    var p = comp.createObject(root, { host: root, services: root.services })
+    if (!p || !p.id) { console.warn("note-note: provider has no id:", url); return null }
+    p.updated.connect(function() { root.rebuildRows() })
+    p.statusRequested.connect(function(t) { root.showStatus(t) })
+    p.noticeRequested.connect(function(title, text, code, actions) { editor.showNotice(title, text, code, actions) })
+    p.noticeCleared.connect(function() { editor.clearNotice() })
+    p.viewRequested.connect(function(title, component, props) { editor.showNotice(title, " ", "", []); editor.showView(component, props) })
+    p.viewCleared.connect(function() { editor.clearNotice() })
+    p.persistRequested.connect(function() { root.saveState() })
+    if (root.providerState[p.id]) p.restoreState(root.providerState[p.id])
+    root.providers = root.providers.concat([p])
+    return p
   }
 
-  function serializeNote(title, body) {
-    return "---\ntitle: " + title.replace(/[\r\n]+/g, " ").trim() + "\n---\n" + body
+  function loadProviders(externalDirs) {
+    var urls = [Qt.resolvedUrl("providers/local/Provider.qml"),
+                Qt.resolvedUrl("providers/sticky/Provider.qml"),
+                Qt.resolvedUrl("providers/onenote/Provider.qml")]
+    for (var i = 0; i < externalDirs.length; i++) urls.push("file://" + externalDirs[i] + "/Provider.qml")
+    for (var u = 0; u < urls.length; u++) addProvider(urls[u])
+    root.providersLoaded = true
+    if (root.opened) root.open("{}")
   }
 
-  function previewOf(body) {
-    var lines = body.split("\n")
-    for (var i = 0; i < lines.length; i++) {
-      var l = lines[i].replace(/^[#>\-\*\s]+/, "").replace(/[*_`]/g, "").trim()
-      if (l) return l
+  Process {
+    id: scanProviders
+    command: ["sh", "-c", 'for d in "$1"/*/; do [ -f "$d/Provider.qml" ] && printf "%s\\n" "${d%/}"; done; true', "sh", root.externalProvidersDir]
+    stdout: StdioCollector { onStreamFinished: root.loadProviders(this.text.split("\n").filter(function(l) { return l.length > 0 })) }
+  }
+
+  // ── sidebar rows ────────────────────────────────────────────────────
+  property var rows: []
+  property int revision: 0
+  property bool pickedInitial: false
+  // Explicit fold overrides: sections open by default remember being
+  // collapsed; sections collapsed by default remember being opened.
+  property var collapsed: []
+  property var openedSections: []
+  function sectionKey(p, s) { return p.id + "/" + s.key }
+  function isFolded(key, byDefault) { return byDefault ? root.openedSections.indexOf(key) < 0 : root.collapsed.indexOf(key) >= 0 }
+  function eachSection(fn) {
+    for (var p = 0; p < root.providers.length; p++) {
+      var prov = root.providers[p], secs = prov.sections || []
+      for (var s = 0; s < secs.length; s++) fn(prov, secs[s], sectionKey(prov, secs[s]))
     }
-    return ""
   }
-
+  function toggleSection(key) {
+    var byDefault = false
+    eachSection(function(p, s, k) { if (k === key) byDefault = s.collapsedByDefault === true })
+    var list2 = byDefault ? root.openedSections.slice() : root.collapsed.slice(), i = list2.indexOf(key)
+    if (i >= 0) list2.splice(i, 1); else list2.push(key)
+    if (byDefault) root.openedSections = list2; else root.collapsed = list2
+    rebuildRows()
+    saveState()
+  }
+  function matches(r) {
+    if (!root.filterText) return true
+    var q = root.filterText.toLowerCase()
+    return (r.title || "").toLowerCase().indexOf(q) >= 0 || (r.preview || "").toLowerCase().indexOf(q) >= 0
+  }
   function displayTitle(title, preview) {
     if (title) return title
     if (!preview) return "Untitled"
     var words = preview.split(/\s+/).slice(0, 5).join(" ")
     return words.length < preview.length ? words + "…" : words
   }
-
-  function baseName(path) { return path.substring(path.lastIndexOf("/") + 1) }
-
-  // ── notes: `notebooks` + `notes` are the truth, `rows` is the view ────────
-  // notebooks: [{ key, name, dir }] in display order. key "" is ~/Notes itself.
-  // notes:     [{ path, notebook, title, preview }] grouped by notebook, in order.
-  property var notebooks: []
-  property var notes: []
-  // Bumped whenever notebooks/notes change, so bindings that go through the
-  // helper functions below (counts, names) re-evaluate.
-  property int revision: 0
-  // The list's model: a plain array replaced wholesale (as Toolroll does) —
-  // a ListModel cleared and refilled would drop the scroll position.
-  property var rows: []
-  function setRow(i, patch) {
-    var rr = root.rows.slice(), r = Object.assign({}, rr[i]), k
-    for (k in patch) r[k] = patch[k]
-    rr[i] = r
-    root.rows = rr
+  // The section string carries key, name and count so a change produces a
+  // fresh heading. Keys are never empty (they start with the provider id).
+  function groupOf(key, name, count) { return key + "" + name + "" + count }
+  function row(provider, key, group, r) {
+    return { provider: provider.id, notebook: key, group: group, kind: r.kind || "note", path: r.path || "",
+             title: r.title || "", preview: r.preview || "", icon: r.icon || "",
+             fixed: r.fixed === true || !provider.canReorder, level: r.level || 0, expanded: r.expanded === true }
   }
-
-  function notebookDir(key) { return key ? root.notesDir + "/" + key : root.notesDir }
-  function notebookName(key) {
-    if (key === root.msKey) return root.msName
-    if (key === root.onKey) return "OneNote"
-    if (isOnSection(key)) return onSectionName(onSectionId(key))
-    for (var i = 0; i < root.notebooks.length; i++) if (root.notebooks[i].key === key) return root.notebooks[i].name
-    return key || "Notes"
-  }
-  function notebookCount(key) {
-    var n = 0
-    for (var i = 0; i < root.notes.length; i++) if (root.notes[i].notebook === key) n++
-    return n
-  }
-  function notebookOf(path) {
-    var i = noteIndexOf(path)
-    return i >= 0 ? root.notes[i].notebook : ""
-  }
-
-  function matches(n) {
-    if (!root.filterText) return true
-    var q = root.filterText.toLowerCase()
-    return n.title.toLowerCase().indexOf(q) >= 0 || n.preview.toLowerCase().indexOf(q) >= 0
-  }
-
-  // The section string carries everything the heading shows — key, name and
-  // count — so a change produces a fresh heading instead of relying on a
-  // binding inside the section delegate to notice. The root notebook's key
-  // is written as "/" (never a valid folder name): ListView draws no heading
-  // for an empty section string.
-  function groupOf(key) {
-    return (key === "" ? "/" : key) + "\u001f" + notebookName(key) + "\u001f" + notebookCount(key)
-  }
-
-  // Every row carries every role: a ListModel fixes its roles on first insert.
-  function row(r) {
-    return { kind: r.kind || "note", notebook: r.notebook || "", group: groupOf(r.notebook || ""),
-             path: r.path || "", title: r.title || "", preview: r.preview || "",
-             icon: r.icon || "", fixed: r.fixed === true, level: r.level || 0, expanded: r.expanded === true }
-  }
-  function rowFor(n) { return row({ kind: "note", notebook: n.notebook, path: n.path, title: n.title, preview: n.preview, fixed: n.notebook === root.msKey || isOnSection(n.notebook) }) }
-
-  property string currentNotebookName: ""
-
-  function rebuildModel() {
+  function rebuildRows() {
     root.revision++
-    root.currentNotebookName = crumbOf(root.currentPath)
-    var out = []
-    for (var b = 0; b < root.notebooks.length; b++) {
-      var key = root.notebooks[b].key
-      var folded = !root.filterText && isFolded(key)
-      if (key === root.onKey && !folded && !root.filterText && root.msSignedIn && root.msOneNote) {
-        appendOneNoteTree(out)
-        continue
+    root.currentCrumb = crumbOf(root.currentPath)
+    var keep = list.scrollOffset(), out = []
+    eachSection(function(prov, s, key) {
+      var all = s.rows || [], notes = all.filter(function(r) { return r.kind === "note" })
+      var group = groupOf(key, s.name, s.count !== undefined ? s.count : notes.length)
+      if (root.filterText) {
+        for (var i = 0; i < notes.length; i++) if (matches(notes[i])) out.push(row(prov, key, group, notes[i]))
+        return
       }
-      var any = false
-      for (var i = 0; i < root.notes.length; i++) {
-        var n = root.notes[i]
-        if (n.notebook !== key || !matches(n)) continue
-        any = true
-        if (!folded) out.push(rowFor(n))
-      }
-      if (root.filterText) continue                       // searching: no chrome rows
-      if (folded) { out.push(row({ kind: "placeholder", notebook: key })); continue }
-      if (key === root.msKey || key === root.onKey) {
-        if (!root.msConfigured) out.push(row({ kind: "action", notebook: key, path: "ms-setup", title: "Not available in this build", icon: "󰒓" }))
-        else if (!root.msSignedIn) out.push(row({ kind: "action", notebook: key, path: "ms-login", title: root.msLoggingIn ? "Signing in…" : "Sign in to Microsoft…", icon: "󰊻" }))
-        else if (key === root.onKey) out.push(row({ kind: "action", notebook: key, path: "on-relogin", title: root.msLoggingIn ? "Signing in…" : "Sign in again to enable OneNote…", icon: "󰊻" }))
-        else {
-          out.push(row({ kind: "new", notebook: key }))
-          out.push(row({ kind: "action", notebook: key, path: "ms-logout", title: "Sign out" + (root.msAccount ? " (" + root.msAccount + ")" : ""), icon: "󰍃" }))
-        }
-      } else out.push(row({ kind: "new", notebook: key }))
-    }
-    // Swapping the array resets the view to the top; put it back once the
-    // new delegates are laid out.
-    var keep = list.scrollOffset()
+      if (isFolded(key, s.collapsedByDefault === true)) { out.push(row(prov, key, group, { kind: "placeholder" })); return }
+      for (var j = 0; j < all.length; j++) out.push(row(prov, key, group, all[j]))
+    })
     root.rows = out
     if (keep > 0) Qt.callLater(function() { list.setScrollOffset(keep) })
-  }
-
-  // OneNote: notebooks → sections → pages, expandable in place.
-  function appendOneNoteTree(out) {
-    var books = [], seen = {}
-    for (var i = 0; i < root.onSections.length; i++) {
-      var sct = root.onSections[i]
-      if (!seen[sct.notebookId]) { seen[sct.notebookId] = true; books.push({ id: sct.notebookId, name: sct.notebook || "Notebook" }) }
-    }
-    books.sort(function(a, b) { return a.name.localeCompare(b.name) })
-    for (var b = 0; b < books.length; b++) {
-      var bookOpen = root.onExpanded.indexOf(books[b].id) >= 0
-      out.push(row({ kind: "tree", notebook: root.onKey, path: books[b].id, title: books[b].name, level: 0, expanded: bookOpen }))
-      if (!bookOpen) continue
-      for (var s2 = 0; s2 < root.onSections.length; s2++) {
-        var sec = root.onSections[s2]
-        if (sec.notebookId !== books[b].id) continue
-        var secOpen = root.onExpanded.indexOf(sec.id) >= 0
-        out.push(row({ kind: "tree", notebook: root.onKey, path: sec.id, title: sec.name, level: 1, expanded: secOpen }))
-        if (!secOpen) continue
-        for (var p = 0; p < root.onPages.length; p++) {
-          var pg = root.onPages[p]
-          if (pg.sectionId !== sec.id) continue
-          out.push(row({ kind: "note", notebook: root.onKey, path: root.onPageKey + pg.id, title: pg.title, level: 2, fixed: true }))
-        }
-        out.push(row({ kind: "new", notebook: root.onKey, path: root.onSecKey + sec.id, level: 2 }))
+    // First open: land on the most recent local note rather than nothing.
+    if (!root.currentPath && !root.filterText && !root.pickedInitial) {
+      var local = root.providerById("local")
+      if (local && local.sections.length) {
+        root.pickedInitial = true
+        for (var i = out.length - 1; i >= 0; i--) if (out[i].kind === "note" && out[i].provider === "local") { selectPath(out[i].path); break }
       }
     }
-    if (books.length === 0) out.push(row({ kind: "action", notebook: root.onKey, path: "on-refresh", title: "No notebooks found — refresh", icon: "󰑐" }))
+    // A note that vanished from its provider (deleted elsewhere, signed out)
+    // is deselected; one merely hidden by folding is kept.
+    if (root.currentPath && !root.filterText && !noteExists(root.currentPath)) selectPath("")
   }
-
+  function noteExists(path) {
+    var found = false
+    eachSection(function(prov, s, key) { if ((s.rows || []).some(function(r) { return r.kind === "note" && r.path === path })) found = true })
+    if (!found) { var p = providerOf(path); if (p && p.id === "onenote" && p.pageAt && p.pageAt(path)) found = true }
+    return found
+  }
+  function rowIndexOf(path) {
+    if (!path) return -1
+    for (var i = 0; i < root.rows.length; i++) if (root.rows[i].kind === "note" && root.rows[i].path === path) return i
+    return -1
+  }
   function setFilter(text) {
     root.filterText = text
-    rebuildModel()
-    if (root.rows.length > 0 && modelIndexOf(root.currentPath) < 0)
-      selectPath(root.rows[0].path)
+    rebuildRows()
+    if (root.filterText && rowIndexOf(root.currentPath) < 0)
+      for (var i = 0; i < root.rows.length; i++) if (root.rows[i].kind === "note") { selectPath(root.rows[i].path); break }
+  }
+  function crumbOf(path) { var p = providerOf(path); return p ? p.crumb(path) : "" }
+  function foldedKeys() { return root.rows.filter(function(r) { return r.kind === "placeholder" }).map(function(r) { return r.notebook }) }
+
+  // IPC helpers (omarchy-shell shell call <id> scrollList 400).
+  function scrollList(y) { list.setScrollOffset(Number(y)); return list.scrollOffset() }
+  function listOffset() { return list.scrollOffset() }
+  function debugState() {
+    return JSON.stringify({ currentPath: root.currentPath, loadingPath: root.loadingPath, loadingNote: root.loadingNote,
+                            status: root.statusText, readOnly: editor.readOnly, words: editor.wordCount, notice: editor.noticeTitle, viewFocused: editor.viewHasFocus,
+                            providers: root.providers.map(function(p) { return p.id }) })
+  }
+  function runAction(id) {
+    for (var i = 0; i < root.rows.length; i++)
+      if (root.rows[i].kind === "action" && root.rows[i].path === id) { var p = providerById(root.rows[i].provider); if (p) p.action(id); return true }
+    return false
+  }
+  function treeToggle(id) {
+    for (var i = 0; i < root.rows.length; i++)
+      if (root.rows[i].kind === "tree" && root.rows[i].path === id) { var p = providerById(root.rows[i].provider); if (p) p.toggleTree(id); return true }
+    return false
   }
 
-  function toggleSection(key) {
-    if (isRemoteKey(key)) {
-      var j = root.openedRemote.indexOf(key), nextOpen = root.openedRemote.slice()
-      if (j >= 0) nextOpen.splice(j, 1); else nextOpen.push(key)
-      root.openedRemote = nextOpen
-    } else {
-      var i = root.collapsed.indexOf(key), next = root.collapsed.slice()
-      if (i >= 0) next.splice(i, 1); else next.push(key)
-      root.collapsed = next
-    }
-    rebuildModel()
-    saveState()
-  }
-
-  function noteIndexOf(path) {
-    for (var i = 0; i < root.notes.length; i++) if (root.notes[i].path === path) return i
-    return -1
-  }
-
-  function modelIndexOf(path) {
-    if (!path) return -1
-    for (var i = 0; i < root.rows.length; i++) if (root.rows[i].path === path) return i
-    return -1
-  }
-
-  // Saved order first, then anything unlisted in the given (birth-time)
-  // order — so new things still land at the end.
-  function applyOrder(entries, keyOf, savedNames) {
-    var rank = {}
-    for (var i = 0; i < savedNames.length; i++) if (savedNames[i]) rank[savedNames[i]] = i
-    return entries.map(function(e, i) { return { e: e, i: i } })
-      .sort(function(a, b) {
-        var ra = rank[keyOf(a.e)], rb = rank[keyOf(b.e)]
-        var ha = ra !== undefined, hb = rb !== undefined
-        if (ha && hb) return ra - rb
-        if (ha) return -1
-        if (hb) return 1
-        return a.i - b.i
-      })
-      .map(function(x) { return x.e })
-  }
-
-  // One FileView serves every order file: point it at a path, then write.
-  function writeFile(path, text) {
-    orderFile.path = path
-    orderFile.setText(text)
-  }
-
-  function saveOrder(key) {
-    if (key === root.msKey || isOnSection(key) || key === root.onKey) return
-    var names = root.notes.filter(function(n) { return n.notebook === key })
-      .map(function(n) { return baseName(n.path) })
-    writeFile(notebookDir(key) + "/.order", names.join("\n") + "\n")
-  }
-
-  function saveNotebookOrder() {
-    writeFile(root.notebooksPath,
-      root.notebooks.filter(function(b) { return b.key && b.key !== root.msKey && b.key !== root.onKey && !isOnSection(b.key) }).map(function(b) { return b.key }).join("\n") + "\n")
-  }
-
-  function moveNote(fromPath, toPath) {
-    if (root.filterText) return
-    var from = noteIndexOf(fromPath), to = noteIndexOf(toPath)
-    if (from < 0 || to < 0 || from === to) return
-    if (root.notes[from].notebook !== root.notes[to].notebook) return
-    var arr = root.notes.slice()
-    var item = arr.splice(from, 1)[0]
-    arr.splice(to, 0, item)
-    root.notes = arr
-    var mf = modelIndexOf(fromPath), mt = modelIndexOf(toPath)
-    if (mf >= 0 && mt >= 0) { var rr = root.rows.slice(); var it = rr.splice(mf, 1)[0]; rr.splice(mt, 0, it); root.rows = rr }
-  }
-
-  // Parses the listing script's output:
-  //   D<TAB>key                       a notebook folder ("" = ~/Notes itself)
-  //   O<TAB>key<TAB>name              one line of that notebook's .order
-  //   B<TAB>key                       one line of .notebooks
-  //   N<TAB>key<TAB>path<TAB>title<TAB>preview
-  function loadList(raw) {
-    var lines = raw.split("\n")
-    var dirs = [], orders = {}, bookOrder = [], entries = []
-    for (var i = 0; i < lines.length; i++) {
-      var p = lines[i].split("\t")
-      if (p[0] === "D") dirs.push(p[1] || "")
-      else if (p[0] === "O") { (orders[p[1] || ""] = orders[p[1] || ""] || []).push(p[2]) }
-      else if (p[0] === "B") bookOrder.push(p[1])
-      else if (p[0] === "N") entries.push({ notebook: p[1] || "", path: p[2], title: p[3] || "", preview: p[4] || "" })
-    }
-    // ~/Notes itself is a notebook only while it has notes of its own.
-    var books = dirs.filter(function(k) {
-      return k !== "" || entries.some(function(e) { return e.notebook === "" })
-    }).map(function(k) { return { key: k, name: k || "Notes", dir: notebookDir(k) } })
-    books = applyOrder(books, function(b) { return b.key }, bookOrder)
-    // Root first when present. (Not Array.sort: QJS's sort is not stable.)
-    root.notebooks = books.filter(function(b) { return b.key === "" })
-      .concat(books.filter(function(b) { return b.key !== "" }))
-      .concat([{ key: root.msKey, name: root.msName, dir: "" }])
-      .concat(onNotebooks())
-
-    var ordered = []
-    for (var b = 0; b < books.length; b++) {
-      var key = books[b].key
-      var mine = entries.filter(function(e) { return e.notebook === key })
-      ordered = ordered.concat(applyOrder(mine, function(e) { return baseName(e.path) }, orders[key] || []))
-    }
-    root.notes = ordered.concat(msEntries()).concat(onEntries())
-    rebuildModel()
-
-    var idx = modelIndexOf(root.currentPath)
-    if (idx < 0) {
-      var last = ""
-      for (var j = root.rows.length - 1; j >= 0; j--)
-        if (root.rows[j].kind === "note") { last = root.rows[j].path; break }
-      root.selectPath(last)
-    } else Qt.callLater(function() { list.positionViewAtIndex(idx, ListView.Contain) })
-  }
-
+  // ── selection ───────────────────────────────────────────────────────
   function selectPath(path) {
     if (path === root.currentPath) return
-    if (path && isMs(path) && !msNote(path)) return
-    if (path && isOnPage(path) && !onPage(path)) return
+    var p = providerOf(path)
+    if (path && !p) return
     root.flushSave()
     editor.clearNotice()
     root.loadingNote = true
     root.currentPath = path
-    root.currentNotebookName = crumbOf(path)
-    if (!path) {
-      editor.setNote("", "")
-      root.loadingNote = false
-      return
-    }
-    if (isMs(path)) {
-      var n = msNote(path)
-      editor.setNote(n ? n.title : "", n ? n.body : "")
+    root.currentCrumb = crumbOf(path)
+    editor.readOnly = false
+    if (!path) { editor.setNote("", ""); root.loadingNote = false; return }
+    root.loadingPath = path
+    editor.setNote("", "")
+    editor.readOnly = true
+    p.load(path, function(r) {
+      if (root.currentPath !== path) return
+      root.loadingPath = ""
+      if (r.error) { root.loadingNote = false; showStatus(p.name + ": " + r.error); return }
+      editor.setNote(r.title || "", r.body || "")
+      editor.readOnly = r.editable === false
       root.loadingNote = false
       root.dirty = false
-      return
-    }
-    if (isOnPage(path)) {
-      var pg = onPage(path), cached = root.onBodies[onPageId(path)]
-      if (cached) {
-        editor.setNote(cached.title, cached.body)
-        editor.readOnly = !cached.editable
-        root.loadingNote = false
-        root.dirty = false
-      } else {
-        editor.setNote(pg ? pg.title : "", "")
-        editor.readOnly = true
-        root.onLoadingPath = path
-        onPageProc.command = ["python3", root.msScript, "onenote-page", onPageId(path)]
-        onPageProc.running = true
-      }
-      return
-    }
-    editor.readOnly = false
-    noteFile.reload()
+    })
   }
 
   function moveSelection(delta) {
@@ -531,123 +311,59 @@ Item {
     list.positionViewAtIndex(idx[next], ListView.Contain)
   }
 
-  // New notes go at the end of their notebook. The filename is an opaque
-  // id; the title lives in the file and starts out empty.
-  function newNote(key) {
+  // ── create / delete ─────────────────────────────────────────────────
+  function newNote(providerId, target) {
     root.flushSave()
     if (root.filterText) { searchField.text = ""; setFilter("") }
-    if (key === undefined) key = root.currentPath ? notebookOf(root.currentPath)
-      : (root.notebooks.length > 0 ? root.notebooks[root.notebooks.length - 1].key : null)
-    if (key === null) { list.startNewNotebook(); return }
-    if (key === root.onKey && root.currentPath && isOnPage(root.currentPath)) {
-      var cur = onPage(root.currentPath)
-      key = cur ? root.onSecKey + cur.sectionId : key
-    }
-    if (key.indexOf(root.onSecKey) === 0) {
-      if (!root.msOneNote || onCreateProc.running) return
-      var secId = key.substring(root.onSecKey.length)
-      root.statusText = "Creating a OneNote page…"
-      msPayloadFile.setText(JSON.stringify({ title: "", body: "" }))
-      onCreateProc.command = ["python3", root.msScript, "onenote-create", secId, root.msPayloadPath]
-      onCreateProc.running = true
-      return
-    }
-    if (key === root.onKey) return
-    if (key === root.msKey) {
-      if (!root.msSignedIn || msCreateProc.running) return
-      root.statusText = "Creating a sticky note…"
-      msCreateProc.running = true
-      return
-    }
-    var path = notebookDir(key) + "/note-" + Date.now() + ".md"
-    root.loadingNote = true
-    root.currentPath = path
-    editor.setNote("", "")
-    root.loadingNote = false
-    root.dirty = false
-    noteFile.setText(serializeNote("", ""))
-    // Insert after the notebook's last note so it stays grouped.
-    var arr = root.notes.slice(), at = arr.length
-    for (var i = arr.length - 1; i >= 0; i--) if (arr[i].notebook === key) { at = i + 1; break }
-    if (at === arr.length && !arr.some(function(n) { return n.notebook === key })) {
-      // Empty notebook: place it where its notebook sits in display order.
-      var after = root.notebooks.map(function(b) { return b.key }).indexOf(key)
-      at = 0
-      for (var j = 0; j < arr.length; j++)
-        if (root.notebooks.map(function(b) { return b.key }).indexOf(arr[j].notebook) <= after) at = j + 1
-    }
-    var entry = { path: path, notebook: key, title: "", preview: "" }
-    arr.splice(at, 0, entry)
-    root.notes = arr
-    if (isFolded(key)) { toggleSection(key) }
-    rebuildModel()
-    saveOrder(key)
-    var mi = modelIndexOf(path)
-    Qt.callLater(function() { if (mi >= 0) list.positionViewAtIndex(mi, ListView.Contain) })
-    editor.focusTitle()
+    var p = providerId ? providerById(providerId) : providerOf(root.currentPath)
+    if (p && target === undefined) target = p.createTargetFor(root.currentPath)
+    if (!p || !target) { p = providerById("local"); target = p ? p.createTargetFor("") : "" }
+    if (!p || !target) { list.startNewNotebook(); return }
+    if (!p.canCreate) return
+    p.create(target, function(r) {
+      if (r.error) { showStatus(p.name + ": " + r.error); return }
+      root.currentPath = ""
+      selectPath(r.path)
+      var mi = rowIndexOf(r.path)
+      Qt.callLater(function() { if (mi >= 0) list.positionViewAtIndex(mi, ListView.Contain) })
+      if (p.hasTitle) editor.focusTitle(); else editor.focusEditor()
+    })
   }
 
   function newNotebook(name) {
-    var key = name.replace(/[\/\\]/g, "-").trim()
-    if (!key || key[0] === ".") return
-    mkdirProc.command = ["mkdir", "-p", "--", notebookDir(key)]
-    mkdirProc.running = true
-    root.pendingNotebook = key
+    var p = providerById("local")
+    if (p && p.canCreateSection) p.createSection(name, function(r) {
+      if (r.error) { showStatus(p.name + ": " + r.error); return }
+      root.newNote("local", "section:" + r.key)
+    })
   }
-  property string pendingNotebook: ""
-  property bool msReloginPending: false
-  property string onLoadingPath: ""
 
-  // ── delete ──────────────────────────────────────────────────────────
   property string deletePath: ""
-
   function requestDelete(path) {
-    var target = path || root.currentPath
-    if (!target) return
+    var target = path || root.currentPath, p = providerOf(target)
+    if (!target || !p || !p.canDelete) return
     root.deletePath = target
     deleteConfirm.selectedIndex = 1
     root.deleteConfirmOpen = true
   }
-
-  function cancelDelete() {
-    root.deleteConfirmOpen = false
-    editor.focusEditor()
-  }
-
+  function cancelDelete() { root.deleteConfirmOpen = false; editor.focusEditor() }
   function confirmDelete() {
     root.deleteConfirmOpen = false
-    var path = root.deletePath
+    var path = root.deletePath, p = providerOf(path)
     root.deletePath = ""
-    var ni = noteIndexOf(path), mi = modelIndexOf(path)
-    if (!path || ni < 0) return
-    var wasCurrent = path === root.currentPath
-    if (wasCurrent) { saveTimer.stop(); root.dirty = false }
-    else root.flushSave()
-    var key = root.notes[ni].notebook
-    root.notes = root.notes.filter(function(n) { return n.path !== path })
-    if (mi >= 0) { var rr = root.rows.slice(); rr.splice(mi, 1); root.rows = rr }
-    saveOrder(key)
-    if (isMs(path)) {
-      root.msNotes = root.msNotes.filter(function(n) { return n.id !== msId(path) })
-      msDeleteProc.command = ["python3", root.msScript, "delete", msId(path)]
-      msDeleteProc.running = true
-    } else if (isOnPage(path)) {
-      root.onPages = root.onPages.filter(function(p) { return p.id !== onPageId(path) })
-      msDeleteProc.command = ["python3", root.msScript, "onenote-delete", onPageId(path)]
-      msDeleteProc.running = true
-    } else {
-      rmProc.command = ["rm", "-f", "--", path]
-      rmProc.running = true
-    }
-    if (!wasCurrent) return
+    if (!path || !p) return
+    var wasCurrent = path === root.currentPath, mi = rowIndexOf(path)
+    if (wasCurrent) { saveTimer.stop(); root.dirty = false } else root.flushSave()
     var next = ""
-    for (var k = Math.max(mi, 0); k >= 0 && k < root.rows.length; k--)
-      if (root.rows[k].kind === "note") { next = root.rows[k].path; break }
-    if (!next) for (var j = 0; j < root.rows.length; j++)
-      if (root.rows[j].kind === "note") { next = root.rows[j].path; break }
-    root.currentPath = ""
-    selectPath(next)
-    editor.focusEditor()
+    if (wasCurrent) {
+      for (var k = Math.max(mi, 0); k >= 0 && k < root.rows.length; k--)
+        if (root.rows[k].kind === "note" && root.rows[k].path !== path) { next = root.rows[k].path; break }
+      if (!next) for (var j = 0; j < root.rows.length; j++)
+        if (root.rows[j].kind === "note" && root.rows[j].path !== path) { next = root.rows[j].path; break }
+      root.currentPath = ""
+    }
+    p.remove(path, function(r) { if (r.error) showStatus(p.name + ": " + r.error) })
+    if (wasCurrent) { selectPath(next); editor.focusEditor() }
   }
 
   // ── keys ────────────────────────────────────────────────────────────
@@ -655,13 +371,8 @@ Item {
     if (root.deleteConfirmOpen) return deleteConfirm.handleKey(event)
     var ctrl = event.modifiers & Qt.ControlModifier
     if (event.key === Qt.Key_Escape) { root.goBack(); return true }
-    if (ctrl && (event.key === Qt.Key_K || event.key === Qt.Key_L)) {
-      searchField.forceActiveFocus(); searchField.selectAll(); return true
-    }
-    if (ctrl && event.key === Qt.Key_N) {
-      if (event.modifiers & Qt.ShiftModifier) list.startNewNotebook(); else root.newNote()
-      return true
-    }
+    if (ctrl && (event.key === Qt.Key_K || event.key === Qt.Key_L)) { searchField.forceActiveFocus(); searchField.selectAll(); return true }
+    if (ctrl && event.key === Qt.Key_N) { if (event.modifiers & Qt.ShiftModifier) list.startNewNotebook(); else root.newNote(); return true }
     if (ctrl && event.key === Qt.Key_D) { root.requestDelete(root.currentPath); return true }
     if (ctrl && (event.key === Qt.Key_Down || event.key === Qt.Key_J)) { root.moveSelection(1); return true }
     if (ctrl && event.key === Qt.Key_Up) { root.moveSelection(-1); return true }
@@ -673,426 +384,72 @@ Item {
     return false
   }
 
-  // ── persistence ─────────────────────────────────────────────────────
+  // ── autosave ────────────────────────────────────────────────────────
   function onEdited() {
     if (root.loadingNote || !root.currentPath) return
     root.dirty = true
+    var p = providerOf(root.currentPath)
+    saveTimer.interval = (p && p.id === "local") ? 500 : 1500
     saveTimer.restart()
   }
+  Timer { id: saveTimer; interval: 500; onTriggered: root.flushSave() }
+
+  // One save in flight at a time; a save requested meanwhile runs afterwards
+  // with whatever the note says by then. Transient backend errors retry.
+  property bool saving: false
+  property bool saveAgain: false
+  property int saveRetries: 0
+  Timer { id: saveRetryTimer; interval: 2500; onTriggered: { root.dirty = true; root.flushSave() } }
 
   function flushSave() {
     if (!root.dirty || !root.currentPath) return
+    var p = providerOf(root.currentPath)
+    if (!p) return
+    if (editor.readOnly) { root.dirty = false; return }
+    if (root.saving) { root.saveAgain = true; return }
     saveTimer.stop()
-    var title = editor.title, body = editor.text
-    if (isOnPage(root.currentPath)) {
-      if (editor.readOnly) { root.dirty = false; return }
-      body = editor.text   // Markdown, converted to OneNote HTML by the bridge
-      var id = onPageId(root.currentPath)
-      var bodies = root.onBodies; bodies[id] = { title: title, body: body, editable: true }; root.onBodies = bodies
-      var pgs = root.onPages.slice()
-      for (var q = 0; q < pgs.length; q++) if (pgs[q].id === id) pgs[q] = { id: id, sectionId: pgs[q].sectionId, title: title, modified: pgs[q].modified }
-      root.onPages = pgs
-      msPayloadFile.setText(JSON.stringify({ title: title, body: body }))
-      msSaveProc.command = ["python3", root.msScript, "onenote-update", id, root.msPayloadPath]
-      msSaveProc.running = true
-      var ni2 = noteIndexOf(root.currentPath), mi2 = modelIndexOf(root.currentPath)
-      if (ni2 >= 0) { var arr2 = root.notes.slice(); arr2[ni2] = { path: root.currentPath, notebook: arr2[ni2].notebook, title: title.trim(), preview: "" }; root.notes = arr2 }
-      if (mi2 >= 0) setRow(mi2, { title: title.trim() })
-      root.revision++
-      root.dirty = false
-      return
-    }
-    if (isMs(root.currentPath)) {
-      body = editor.plainText()
-      var n = msNote(root.currentPath)
-      if (n) { n.title = title; n.body = body }
-      msPayloadFile.setText(JSON.stringify({ title: title, body: body }))
-      msSaveProc.command = ["python3", root.msScript, "update", msId(root.currentPath), root.msPayloadPath]
-      msSaveProc.running = true
-    } else noteFile.setText(serializeNote(title, body))
-    var ni = noteIndexOf(root.currentPath)
-    if (ni >= 0) {
-      var arr = root.notes.slice()
-      arr[ni] = { path: root.currentPath, title: title.trim(), preview: previewOf(body) }
-      root.notes = arr
-    }
-    var mi = modelIndexOf(root.currentPath)
-    if (mi >= 0) {
-      setRow(mi, { title: title.trim(), preview: previewOf(body) })
-    }
-    root.revision++
+    var path = root.currentPath, title = editor.title, body = p.markdown ? editor.text : editor.plainText()
     root.dirty = false
+    root.saving = true
+    p.save(path, title, body, function(r) {
+      root.saving = false
+      if (r.error) {
+        if (/transient|timed? ?out|try again|429|503/i.test(r.error) && root.saveRetries < 3) {
+          root.saveRetries++
+          showStatus(p.name + ": busy, retrying…")
+          saveRetryTimer.restart()
+        } else { root.saveRetries = 0; showStatus(p.name + ": " + r.error) }
+      } else {
+        root.saveRetries = 0
+        if (r.warning) showStatus(p.name + ": " + r.warning)
+      }
+      if (root.saveAgain) { root.saveAgain = false; root.dirty = true; Qt.callLater(root.flushSave) }
+    })
   }
 
-  Timer { id: saveTimer; interval: 500; onTriggered: root.flushSave() }
-
+  // ── state ───────────────────────────────────────────────────────────
   function saveState() {
-    stateFile.setText(JSON.stringify({ version: 1, detached: root.detached, collapsed: root.collapsed, openedRemote: root.openedRemote, onExpanded: root.onExpanded }, null, 2) + "\n")
+    var ps = {}
+    for (var i = 0; i < root.providers.length; i++) ps[root.providers[i].id] = root.providers[i].saveState()
+    stateFile.setText(JSON.stringify({ version: 2, detached: root.detached, collapsed: root.collapsed, opened: root.openedSections, providers: ps }, null, 2) + "\n")
   }
-
   function loadState(raw) {
     try {
-      var parsed = JSON.parse(raw || "{}")
-      if (parsed.detached === true) root.detached = true
-      if (Array.isArray(parsed.collapsed)) root.collapsed = parsed.collapsed.filter(function(k) { return k !== "ms:" && k !== "on:" })
-      if (Array.isArray(parsed.openedRemote)) root.openedRemote = parsed.openedRemote
-      if (Array.isArray(parsed.onExpanded)) root.onExpanded = parsed.onExpanded
+      var s = JSON.parse(raw || "{}")
+      if (s.detached === true) root.detached = true
+      if (Array.isArray(s.collapsed)) root.collapsed = s.collapsed
+      if (Array.isArray(s.opened)) root.openedSections = s.opened
+      if (s.providers) root.providerState = s.providers
     } catch (e) { /* a corrupt state file costs nothing */ }
+    scanProviders.running = true
   }
-
-  FileView {
-    id: noteFile
-    path: root.currentPath
-    atomicWrites: true
-    printErrors: false
-    onLoaded: {
-      if (root.loadingNote) {
-        var n = root.parseNote(text())
-        editor.setNote(n.title, n.body)
-        root.loadingNote = false
-        root.dirty = false
-      }
-    }
-    onLoadFailed: {
-      if (root.loadingNote) {
-        editor.setNote("", "")
-        root.loadingNote = false
-        root.dirty = false
-      }
-    }
-  }
-
-  FileView {
-    id: orderFile
-    atomicWrites: true
-    printErrors: false
-  }
-
   FileView {
     id: stateFile
     path: root.statePath
     atomicWrites: true
     printErrors: false
     onLoaded: root.loadState(text())
-  }
-
-  // Lists notebooks (folders) and their notes, oldest-first by birth time.
-  // See loadList() for the line format.
-  Process {
-    id: listProc
-    command: ["sh", "-c", '
-      mkdir -p "$1" && cd "$1" || exit 0
-      emit() {
-        dir="$1"; key="$2"
-        printf "D\\t%s\\n" "$key"
-        [ -f "$dir/.order" ] && while IFS= read -r n; do [ -n "$n" ] && printf "O\\t%s\\t%s\\n" "$key" "$n"; done < "$dir/.order"
-        for f in "$dir"/*.md; do
-          [ -e "$f" ] || continue
-          printf "%s\\t%s\\n" "$(stat -c %W -- "$f")" "$f"
-        done | sort -n | cut -f2- | while IFS= read -r f; do
-          awk -v key="$key" -v p="$f" \'
-            NR==1 && $0=="---" { fm=1; next }
-            fm && $0=="---"    { fm=0; next }
-            fm && /^title:/    { t=substr($0,7); next }
-            !fm && !pv && NF   { pv=$0; sub(/^[#>*\\- \\t]+/, "", pv); gsub(/[*_`]/, "", pv) }
-            END { gsub(/\\t/," ",t); gsub(/\\t/," ",pv); sub(/^ +/,"",t); printf "N\\t%s\\t%s\\t%s\\t%s\\n", key, p, t, pv }
-          \' "$f"
-        done
-      }
-      [ -f .notebooks ] && while IFS= read -r n; do [ -n "$n" ] && printf "B\\t%s\\n" "$n"; done < .notebooks
-      emit "$PWD" ""
-      for d in */; do
-        [ -d "$d" ] || continue
-        d=${d%/}
-        case "$d" in .*) continue;; esac
-        emit "$PWD/$d" "$d"
-      done
-    ', "sh", root.notesDir]
-    stdout: StdioCollector { onStreamFinished: root.loadList(this.text) }
-  }
-
-  Process { id: rmProc }
-
-  Process {
-    id: mkdirProc
-    onExited: {
-      var key = root.pendingNotebook
-      root.pendingNotebook = ""
-      if (!key) return
-      if (!root.notebooks.some(function(b) { return b.key === key })) {
-        root.notebooks = root.notebooks.concat([{ key: key, name: key, dir: root.notebookDir(key) }])
-        root.saveNotebookOrder()
-      }
-      root.rebuildModel()
-      root.newNote(key)
-    }
-  }
-
-
-  // ── Microsoft Sticky Notes: entries, actions, processes ─────────────
-  function msEntries() {
-    return root.msNotes.map(function(n) {
-      return { path: root.msKey + n.id, notebook: root.msKey, title: n.title, preview: previewOf(n.body) }
-    })
-  }
-
-  // Replace the virtual notebook's entries in `notes` and redraw.
-  function onNotebooks() { return [{ key: root.onKey, name: "OneNote", dir: "" }] }
-
-  function onEntries() {
-    return root.onPages.map(function(pg) {
-      return { path: root.onPageKey + pg.id, notebook: root.onKey, title: pg.title, preview: "" }
-    })
-  }
-
-  function msApply() {
-    root.notebooks = root.notebooks.filter(function(b) { return b.key !== root.onKey && !isOnSection(b.key) }).concat(onNotebooks())
-    root.notes = root.notes.filter(function(n) { return n.notebook !== root.msKey && !isOnSection(n.notebook) })
-      .concat(msEntries()).concat(onEntries())
-    rebuildModel()
-    if (root.currentPath && isMs(root.currentPath) && !msNote(root.currentPath)) selectPath("")
-    if (root.currentPath && isOnPage(root.currentPath) && !onPage(root.currentPath)) selectPath("")
-  }
-
-  function msAction(id) {
-    if (id === "ms-setup") {
-      // Only reachable while the plugin ships without its own client ID —
-      // a message for whoever is building it, not for users.
-      editor.showNotice("Microsoft Sticky Notes is not configured in this build",
-        "This copy of Note Note has no Microsoft app registration built in, so nobody can sign in yet.\n\n"
-        + "Plugin author: register the app once (Microsoft Entra → App registrations: personal + work "
-        + "accounts, no redirect URI, public client flows enabled, delegated Mail.ReadWrite, User.Read, "
-        + "offline_access) and put its Application (client) ID in CLIENT_ID at the top of lib/msgraph.py.\n\n"
-        + "Anyone can also point their own registration at it via " + root.msConfigPath + ".", "",
-        [{ label: "Check again", icon: "󰑐", action: function() { msStatusProc.running = true } }])
-      return
-    }
-    if (id === "ms-login") {
-      if (root.msLoggingIn) return
-      root.msLoggingIn = true
-      rebuildModel()
-      editor.showNotice("Sign in to Microsoft", "Requesting a sign-in code…", "", [])
-      msLoginProc.running = true
-      return
-    }
-    if (id === "ms-logout") {
-      msLogoutProc.running = true
-      return
-    }
-    if (id === "on-refresh") { onListProc.cached = false; onListProc.running = true; return }
-    if (id === "on-relogin") {
-      // The stored token predates the OneNote scope: a fresh consent is needed.
-      root.msReloginPending = true
-      msLogoutProc.running = true
-      return
-    }
-  }
-
-  function msLoginLine(line) {
-    var msg
-    try { msg = JSON.parse(line) } catch (e) { return }
-    if (msg.userCode) {
-      var uri = msg.verificationUri, code = msg.userCode
-      editor.showNotice("Sign in to Microsoft",
-        "Open " + uri + " in a browser, enter this code, and sign in with the account that has your Sticky Notes. "
-        + "This screen updates by itself once you are done.", code,
-        [{ label: "Copy code", icon: "󰆏", action: function() { Quickshell.execDetached(["sh", "-c", 'printf %s "$1" | wl-copy', "sh", code]) } },
-         { label: "Open sign-in page", icon: "󰖟", action: function() { Quickshell.execDetached(["xdg-open", uri]) } }])
-    } else if (msg.ok) {
-      root.msSignedIn = true
-      root.msAccount = msg.account || ""
-      editor.showNotice("Signed in", "Fetching your notes…", "", [])
-      msStatusProc.running = true
-    } else if (msg.error) {
-      editor.showNotice("Sign-in failed", msg.error, "",
-        [{ label: "Try again", icon: "󰑐", action: function() { msAction("ms-login") } }])
-    }
-  }
-
-  Process {
-    id: msStatusProc
-    command: ["python3", root.msScript, "status"]
-    stdout: StdioCollector {
-      onStreamFinished: {
-        try {
-          var st = JSON.parse(this.text)
-          root.msConfigured = st.configured === true
-          root.msSignedIn = st.signedIn === true
-          root.msAccount = st.account || ""
-          root.msOneNote = st.onenote === true
-        } catch (e) { root.msConfigured = false; root.msSignedIn = false; root.msOneNote = false }
-        if (root.msSignedIn) { msListProc.cached = true; msListProc.running = true }
-        else { root.msNotes = [] }
-        if (root.msSignedIn && root.msOneNote) { onListProc.cached = true; onListProc.running = true }
-        else { root.onSections = []; root.onPages = [] }
-        msApply()
-      }
-    }
-  }
-
-  Process {
-    id: msListProc
-    property bool cached: true
-    command: ["python3", root.msScript, "list"].concat(cached ? ["--cached"] : [])
-    stdout: StdioCollector {
-      onStreamFinished: {
-        try {
-          var res = JSON.parse(this.text)
-          if (res.error) {
-            if (!msListProc.cached) {
-              root.statusText = "Sticky Notes: " + res.error
-              statusTimer.restart()
-              if (/not signed in|expired/.test(res.error)) { root.msSignedIn = false; root.msNotes = [] }
-            }
-          } else if (Array.isArray(res.notes)) root.msNotes = res.notes
-        } catch (e) {}
-        msApply()
-        if (editor.showingNotice && editor.noticeTitle === "Signed in") {
-          editor.clearNotice()
-          if (root.msNotes.length > 0) selectPath(root.msKey + root.msNotes[0].id)
-        }
-      }
-    }
-    // A cached list is shown at once; the live one follows.
-    onExited: if (cached && root.msSignedIn) Qt.callLater(function() { msListProc.cached = false; msListProc.running = true })
-  }
-
-  Process {
-    id: msLoginProc
-    command: ["python3", root.msScript, "login"]
-    stdout: SplitParser { onRead: function(line) { root.msLoginLine(line) } }
-    onExited: { root.msLoggingIn = false; rebuildModel() }
-  }
-
-  Process {
-    id: msLogoutProc
-    command: ["python3", root.msScript, "logout"]
-    onExited: {
-      root.msSignedIn = false; root.msAccount = ""; root.msNotes = []
-      root.msOneNote = false; root.onSections = []; root.onPages = []; root.onBodies = ({})
-      if (root.currentPath && root.isRemote(root.currentPath)) root.selectPath("")
-      msApply()
-      if (root.msReloginPending) { root.msReloginPending = false; root.msAction("ms-login") }
-    }
-  }
-
-  Process {
-    id: msSaveProc
-    stdout: StdioCollector {
-      onStreamFinished: {
-        try { var r = JSON.parse(this.text); if (r.error) { root.statusText = "Sticky Notes: " + r.error; statusTimer.restart() } } catch (e) {}
-      }
-    }
-  }
-
-  Process {
-    id: onListProc
-    property bool cached: true
-    command: ["python3", root.msScript, "onenote-list"].concat(cached ? ["--cached"] : [])
-    stdout: StdioCollector {
-      onStreamFinished: {
-        try {
-          var res = JSON.parse(this.text)
-          if (res.error) {
-            if (!onListProc.cached) { root.statusText = "OneNote: " + res.error; statusTimer.restart() }
-          } else {
-            if (Array.isArray(res.sections)) root.onSections = res.sections
-            if (Array.isArray(res.pages)) root.onPages = res.pages
-          }
-        } catch (e) {}
-        msApply()
-      }
-    }
-    onExited: if (cached && root.msSignedIn && root.msOneNote) Qt.callLater(function() { onListProc.cached = false; onListProc.running = true })
-  }
-
-  Process {
-    id: onPageProc
-    stdout: StdioCollector {
-      onStreamFinished: {
-        var path = root.onLoadingPath
-        root.onLoadingPath = ""
-        var r
-        try { r = JSON.parse(this.text) } catch (e) { r = { error: "unexpected reply" } }
-        if (r.error) {
-          if (root.currentPath === path) { root.loadingNote = false; root.statusText = "OneNote: " + r.error; statusTimer.restart() }
-          return
-        }
-        var id = root.onPageId(path)
-        // A page whose <title> is empty still has a list title (OneNote
-        // derives it from the first line); show that one.
-        var pg = root.onPage(path)
-        var title = r.title || (pg ? pg.title : "")
-        var bodies = root.onBodies; bodies[id] = { title: title, body: r.body || "", editable: r.editable === true }; root.onBodies = bodies
-        if (root.currentPath === path) {
-          editor.setNote(title, r.body || "")
-          editor.readOnly = r.editable !== true
-          root.loadingNote = false
-          root.dirty = false
-        }
-      }
-    }
-  }
-
-  Process {
-    id: onCreateProc
-    stdout: StdioCollector {
-      onStreamFinished: {
-        root.statusText = ""
-        var r
-        try { r = JSON.parse(this.text) } catch (e) { r = { error: "unexpected reply" } }
-        if (r.error) { root.statusText = "OneNote: " + r.error; statusTimer.restart(); return }
-        root.onPages = [r.page].concat(root.onPages)
-        var bodies = root.onBodies; bodies[r.page.id] = { title: "", body: "", editable: true }; root.onBodies = bodies
-        var sct = root.onSection(r.page.sectionId)
-        var exp = root.onExpanded.slice()
-        if (sct && exp.indexOf(sct.notebookId) < 0) exp.push(sct.notebookId)
-        if (exp.indexOf(r.page.sectionId) < 0) exp.push(r.page.sectionId)
-        root.onExpanded = exp
-        root.msApply()
-        var path = root.onPageKey + r.page.id
-        root.selectPath(path)
-        var mi = root.modelIndexOf(path)
-        Qt.callLater(function() { if (mi >= 0) list.positionViewAtIndex(mi, ListView.Contain) })
-        editor.focusTitle()
-      }
-    }
-  }
-
-  Process {
-    id: msCreateProc
-    command: ["python3", root.msScript, "create"]
-    stdout: StdioCollector {
-      onStreamFinished: {
-        root.statusText = ""
-        var r
-        try { r = JSON.parse(this.text) } catch (e) { r = { error: "unexpected reply" } }
-        if (r.error) { root.statusText = "Sticky Notes: " + r.error; statusTimer.restart(); return }
-        root.msNotes = [r.note].concat(root.msNotes)
-        root.msApply()
-        var path = root.msKey + r.note.id
-        root.selectPath(path)
-        var mi = root.modelIndexOf(path)
-        Qt.callLater(function() { if (mi >= 0) list.positionViewAtIndex(mi, ListView.Contain) })
-        editor.focusEditor()
-      }
-    }
-  }
-
-  Process {
-    id: msDeleteProc
-    stdout: StdioCollector {
-      onStreamFinished: {
-        try { var r = JSON.parse(this.text); if (r.error) { root.statusText = "Sticky Notes: " + r.error; statusTimer.restart() } } catch (e) {}
-      }
-    }
-  }
-
-  FileView {
-    id: msPayloadFile
-    path: root.msPayloadPath
-    atomicWrites: true
-    printErrors: false
+    onLoadFailed: root.loadState("")
   }
 
   // ── content: lives in the overlay card or the detached window ───────
@@ -1140,9 +497,8 @@ Item {
           Keys.onPressed: function(event) {
             if (event.key === Qt.Key_Down) { root.moveSelection(1); event.accepted = true }
             else if (event.key === Qt.Key_Up) { root.moveSelection(-1); event.accepted = true }
-            else if (event.key === Qt.Key_Return || event.key === Qt.Key_Enter || event.key === Qt.Key_Tab) {
-              editor.focusEditor(); event.accepted = true
-            } else if (root.handleShortcut(event)) event.accepted = true
+            else if (event.key === Qt.Key_Return || event.key === Qt.Key_Enter || event.key === Qt.Key_Tab) { editor.focusEditor(); event.accepted = true }
+            else if (root.handleShortcut(event)) event.accepted = true
           }
         }
 
@@ -1152,9 +508,8 @@ Item {
           anchors.verticalCenter: parent.verticalCenter
           text: root.detached ? "Overlay" : "Detach"
           iconText: root.detached ? "󰨟" : "󰏌"
-          tooltipText: root.detached
-            ? "Back to the overlay: summoned over your work, gone on Escape"
-            : "Detach into an ordinary window you can keep open beside your work"
+          tooltipText: root.detached ? "Back to the overlay: summoned over your work, gone on Escape"
+                                     : "Detach into an ordinary window you can keep open beside your work"
           bordered: true
           selected: root.detached
           foreground: root.foreground
@@ -1172,8 +527,7 @@ Item {
           anchors.right: shapeButton.left
           anchors.rightMargin: Style.spacing.md
           anchors.verticalCenter: parent.verticalCenter
-          text: root.statusText.length > 0 ? root.statusText
-            : "ctrl+k search · ctrl+↑↓ note · ctrl+n new · ctrl+shift+n notebook · esc back"
+          text: root.statusText.length > 0 ? root.statusText : "ctrl+k search · ctrl+↑↓ note · ctrl+n new · ctrl+shift+n notebook · esc back"
           color: root.statusText.length > 0 ? root.accent : Qt.darker(root.foreground, 1.55)
           font.family: Style.font.menuFamily
           font.pixelSize: Style.font.caption
@@ -1204,37 +558,49 @@ Item {
           selectedText: root.selectedText
           titleFor: root.displayTitle
           onActivated: function(path) { root.selectPath(path); editor.focusEditor() }
-          onNewRequested: function(key) { root.newNote(key) }
-          onTreeToggled: function(id) { root.onToggle(id) }
+          onNewRequested: function(target) {
+            for (var i = 0; i < root.rows.length; i++)
+              if (root.rows[i].kind === "new" && root.rows[i].path === target) { root.newNote(root.rows[i].provider, target); return }
+            root.newNote()
+          }
           onNewNotebookRequested: function(name) { root.newNotebook(name) }
-          onActionRequested: function(id) { root.msAction(id) }
-          onDeleteRequested: function(path) { root.requestDelete(path) }
+          onActionRequested: function(id) { root.runAction(id) }
+          onTreeToggled: function(id) { root.treeToggle(id) }
           onSectionToggled: function(key) { root.toggleSection(key) }
-          onMoveRequested: function(from, to) { root.moveNote(from, to) }
-          onReorderFinished: function(key) { root.saveOrder(key) }
+          onDeleteRequested: function(path) { root.requestDelete(path) }
+          onMoveRequested: function(from, to) {
+            var mf = root.rowIndexOf(from), mt = root.rowIndexOf(to)
+            if (mf < 0 || mt < 0 || root.rows[mf].notebook !== root.rows[mt].notebook) return
+            var rr = root.rows.slice(), it = rr.splice(mf, 1)[0]
+            rr.splice(mt, 0, it)
+            root.rows = rr
+          }
+          onReorderFinished: function(key) {
+            var paths = root.rows.filter(function(r) { return r.kind === "note" && r.notebook === key }).map(function(r) { return r.path })
+            var p = paths.length ? root.providerOf(paths[0]) : null
+            if (p && p.canReorder) p.setOrder(key.substring(p.id.length + 1), paths)
+          }
         }
 
-        Rectangle {
-          width: 1
-          height: parent.height
-          color: Util.alpha(root.foreground, 0.15)
-        }
+        Rectangle { width: 1; height: parent.height; color: Util.alpha(root.foreground, 0.15) }
 
         NoteEditor {
           id: editor
           width: parent.width - list.width - Style.spacing.lg * 2 - 1
           height: parent.height
           hasNote: root.currentPath !== ""
-          plain: root.isMs(root.currentPath)
-          hasTitle: !root.isMs(root.currentPath)
-          fileName: !root.currentPath ? "" : (root.isMs(root.currentPath) ? "synced online"
-            : (root.isOnPage(root.currentPath) ? (root.onLoadingPath === root.currentPath ? "loading…" : (editor.readOnly ? "has images — edit in OneNote" : "synced online"))
-            : root.baseName(root.currentPath)))
-          notebookName: root.currentNotebookName
-          placeholder: root.onLoadingPath && root.onLoadingPath === root.currentPath ? "Loading from OneNote…"
-            : root.notes.length === 0 && !root.filterText
-            ? (root.notebooks.length === 0 ? "No notebooks yet — add one at the bottom of the list." : "No notes yet — press ctrl+n to create one.")
-            : ""
+          plain: { var p = root.providerOf(root.currentPath); return p ? !p.markdown : false }
+          hasTitle: { var p = root.providerOf(root.currentPath); return p ? p.hasTitle : true }
+          notebookName: root.currentCrumb
+          fileName: {
+            if (!root.currentPath) return ""
+            if (root.loadingPath === root.currentPath) return "loading…"
+            if (editor.readOnly) return "read-only here"
+            var p = root.providerOf(root.currentPath)
+            return p && p.id === "local" ? root.currentPath.substring(root.currentPath.lastIndexOf("/") + 1) : "synced online"
+          }
+          placeholder: root.loadingPath && root.loadingPath === root.currentPath ? "Loading…"
+            : (root.rows.length === 0 && !root.filterText ? "No notes yet — press ctrl+n to create one." : "")
           foreground: root.foreground
           accent: root.accent
           shortcutHandler: root.handleShortcut
@@ -1279,11 +645,8 @@ Item {
     BorderSurface {
       id: card
       anchors.centerIn: parent
-      // Roomy on a big display, but never wider than the screen.
-      width: Math.min(Math.max(Style.space(900), Math.round(panel.width * 0.72)),
-                      panel.width - Style.gapsOut * 2)
-      height: Math.min(Math.max(Style.space(600), Math.round(panel.height * 0.82)),
-                       panel.height - Style.gapsOut * 2)
+      width: Math.min(Math.max(Style.space(900), Math.round(panel.width * 0.72)), panel.width - Style.gapsOut * 2)
+      height: Math.min(Math.max(Style.space(600), Math.round(panel.height * 0.82)), panel.height - Style.gapsOut * 2)
       radius: Style.cornerRadius
       color: root.background
       borderSpec: root.borderSpec
@@ -1311,14 +674,11 @@ Item {
     implicitWidth: Style.space(1120)
     implicitHeight: Style.space(760)
     minimumSize: Qt.size(Style.space(760), Style.space(480))
-
-    // Closing from the titlebar should read as dismissing the plugin.
     onVisibleChanged: { if (!visible && root.opened && root.detached) root.dismiss() }
 
     FocusScope {
       anchors.fill: parent
       focus: true
-
       Item {
         id: floatingHost
         anchors.fill: parent

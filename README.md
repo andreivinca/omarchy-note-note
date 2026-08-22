@@ -19,7 +19,7 @@ omarchy plugin enable io.github.andreivinca.note-note
 ```
 
 Plugins land disabled so you can read the code before running it. This one is
-QML plus a small Python bridge (`lib/msgraph.py`, standard library only) that
+QML plus small Python scripts (standard library only) that
 talks to Microsoft Graph only after you sign in; like every Omarchy plugin it
 runs unsandboxed inside your shell.
 
@@ -39,7 +39,7 @@ omarchy plugin remove io.github.andreivinca.note-note
 Your notes stay in `~/Notes/`. Two files are left behind deliberately because
 they are yours rather than the plugin's: `~/.local/state/omarchy/note-note.json`
 (layout state) and, if you signed in to Microsoft,
-`~/.local/state/omarchy/note-note-ms-token.json` plus the caches under
+`~/.local/state/omarchy/note-note-ms-*.json` (one per signed-in provider) plus the caches under
 `~/.cache/omarchy/note-note-*`. Sign out from the sidebar first to drop the
 token, or delete those files by hand.
 
@@ -81,12 +81,13 @@ it back. Collapsed notebooks and the detached choice are remembered in
 
 A virtual "Microsoft Sticky Notes" notebook sits at the end of the list.
 Sticky Notes sync into your Outlook mailbox; Note Note reads and writes them
-there through Microsoft Graph (`lib/msgraph.py`, Python standard library only)
+there through Microsoft Graph (`providers/sticky/sticky.py`, Python standard library only)
 and keeps only a small cache in `~/.cache/omarchy/note-note-sticky.json`.
-Tokens live in `~/.local/state/omarchy/note-note-ms-token.json` (owner-only).
+Its token lives in `~/.local/state/omarchy/note-note-ms-sticky.json` (owner-only),
+separate from OneNote's.
 
 Users just choose `Sign in to Microsoft…` — no setup on their side. The plugin
-carries its own app registration (`CLIENT_ID` in `lib/msgraph.py`), made once
+carries its own app registration (`CLIENT_ID` in `services/microsoft/msgraph.py`), made once
 by the plugin author: Microsoft Entra → App registrations → New registration
 with *personal + work accounts*, no redirect URI, *Allow public client flows*
 on, and delegated Graph permissions `Mail.ReadWrite`, `User.Read`,
@@ -117,16 +118,39 @@ ink are not represented; links use the editor's default colour. The tree is cach
 `~/.cache/omarchy/note-note-onenote.json` and refreshed in the background (a
 full refresh takes ~30 s on an account with dozens of sections).
 
-If you signed in before OneNote support existed, the OneNote notebook shows
-`Sign in again to enable OneNote…` — it signs out and back in so the token
-gains the `Notes.ReadWrite` scope.
+OneNote has its own sign-in (token in `~/.local/state/omarchy/note-note-ms-onenote.json`),
+independent of Sticky Notes. If its token lacks the `Notes.ReadWrite` scope the
+notebook shows `Sign in again to enable OneNote…`.
+
+## Providers
+
+Every source of notes is a *provider* — a self-contained folder with a
+`Provider.qml` (and whatever scripts it needs) that implements one small
+contract: sections and rows for the sidebar, `load` / `save` / `create` /
+`remove`, and a few capability flags. The host knows nothing else.
+
+- `providers/local/` — Markdown notebooks on disk
+- `providers/sticky/` — Microsoft Sticky Notes (`sticky.py`)
+- `providers/onenote/` — OneNote (`onenote.py`, `onenote_md.py`)
+- `services/microsoft/` — the Microsoft sign-in code they share (`Account.qml`,
+  `msgraph.py`). Each provider signs in on its own: its own token file and only
+  its own scope, so signing out of Sticky Notes leaves OneNote signed in and
+  vice versa. Only the code and the app registration are shared.
+
+External providers are picked up from
+`~/.config/omarchy/note-note/providers/<id>/Provider.qml` — a plain
+`git clone` into that directory is an install. Setup and settings are the
+provider's own (it renders its screen in the note pane and keeps its values
+and secrets itself). The contract is documented in
+[`providers/PROVIDERS.md`](providers/PROVIDERS.md); `examples/hello/` is a
+minimal provider to start from.
 
 ## Dependencies
 
 Everything ships with a stock Omarchy install:
 
 - `omarchy-shell` (Quickshell) — the plugin is QML loaded by the shell.
-- `python3` — standard library only — for the Microsoft bridge (`lib/msgraph.py`); not used until you sign in.
+- `python3` — standard library only — for the Microsoft providers (`services/microsoft/msgraph.py`, `providers/*/`*.py`); not used until you sign in.
 - `wl-copy` (copy the sign-in code) and `xdg-open` (open the sign-in page) — used by the two buttons on the sign-in screen.
 - ImageMagick (`magick`) — optional; when present, OneNote page images are downscaled to the size OneNote declares. Without it they are shown at full resolution.
 
@@ -135,7 +159,7 @@ No sudo or pkexec is required, no packages are installed, and no user configurat
 ## What it accesses, and why
 
 - **Your notes on disk**: `~/Notes` (or `NOTE_NOTE_DIR`) — read and written as plain Markdown files; nothing else on the filesystem beyond its own state and cache under `~/.local/state/omarchy/` and `~/.cache/omarchy/`.
-- **Microsoft account, only after you choose *Sign in***: delegated Graph permissions `Mail.ReadWrite` (Sticky Notes are stored as items in your mailbox's *Notes* folder — Graph has no narrower scope for them), `Notes.ReadWrite` (OneNote) and `User.Read` (to show which account is signed in). The token is stored owner-only at `~/.local/state/omarchy/note-note-ms-token.json`; *Sign out* deletes it. The plugin talks to `login.microsoftonline.com` and `graph.microsoft.com` and nowhere else — no telemetry, no third-party servers.
+- **Microsoft account, only after you choose *Sign in***: delegated Graph permissions `Mail.ReadWrite` (Sticky Notes are stored as items in your mailbox's *Notes* folder — Graph has no narrower scope for them), `Notes.ReadWrite` (OneNote) and `User.Read` (to show which account is signed in). Each provider keeps its own token, owner-only, under `~/.local/state/omarchy/note-note-ms-<provider>.json`; its *Sign out* deletes only that one. The plugin talks to `login.microsoftonline.com` and `graph.microsoft.com` and nowhere else — no telemetry, no third-party servers.
 - The app registration it signs in through is this project's own public client; you can point it at your own registration via `~/.config/omarchy/note-note.json` if you prefer.
 
 ## Keys

@@ -38,11 +38,23 @@ Item {
   property string noticeCode: ""
   // [{ label, icon, action }] — action is a function.
   property var noticeActions: []
-  readonly property bool showingNotice: noticeText.length > 0
+  // A provider-supplied view (setup screens, settings) rendered instead of
+  // the note; the provider owns what is inside.
+  property Component customView: null
+  property var customViewProps: ({})
+  readonly property bool showingNotice: noticeText.length > 0 || customView !== null
+  function showView(component, props) {
+    customView = component; customViewProps = props || ({})
+    // Focus the view once it is in the scene (a forceActiveFocus() from the
+    // component's own Component.onCompleted runs too early).
+    Qt.callLater(function() { if (customLoader.item) customLoader.item.forceActiveFocus() })
+  }
+  function clearView() { customView = null; customViewProps = ({}) }
+  readonly property bool viewHasFocus: customLoader.item ? customLoader.item.activeFocus : false
   function showNotice(title, text, code, actions) {
     noticeTitle = title; noticeText = text; noticeCode = code || ""; noticeActions = actions || []
   }
-  function clearNotice() { noticeTitle = ""; noticeText = ""; noticeCode = ""; noticeActions = [] }
+  function clearNotice() { noticeTitle = ""; noticeText = ""; noticeCode = ""; noticeActions = []; clearView() }
 
   // (KeyEvent) -> bool. Runs before the inputs' own key handling so app
   // shortcuts win over TextEdit's built-in Ctrl+K / Ctrl+D bindings.
@@ -190,8 +202,17 @@ Item {
         anchors.margins: Style.spacing.sm
         spacing: Style.spacing.xs
 
+        Loader {
+          id: customLoader
+          visible: root.customView !== null
+          width: parent.width
+          height: visible ? parent.height - y : 0
+          sourceComponent: root.customView
+          onLoaded: { for (var k in root.customViewProps) if (item.hasOwnProperty(k)) item[k] = root.customViewProps[k] }
+        }
+
         Column {
-          visible: root.showingNotice
+          visible: root.showingNotice && root.customView === null
           width: parent.width
           spacing: Style.spacing.lg
           leftPadding: Style.spacing.md
