@@ -633,6 +633,150 @@ def walk_text_local(tokens):
     return "".join(out)
 
 
+# ---------------------------------------------------------------- hoisting images
+#
+# OneNote keeps every image as a sibling of the paragraphs, and the save can
+# only leave an image untouched when it is a top-level run of its own. An
+# image the editor left inside a list item, a quote, a heading or a table
+# cell is lifted out before rendering: the block is split around it, and the
+# image becomes a paragraph between the halves.
+
+def hoist_images(tokens):
+    """Block tokens -> the same content with every image as a top-level
+    paragraph of its own."""
+    out = []
+    for token in tokens or []:
+        kind = token["type"]
+        if kind == "list":
+            out.extend(_hoist_list(token))
+        elif kind in ("paragraph", "heading"):
+            out.extend(_split_block(token))
+        elif kind == "block_quote":
+            inner = hoist_images(token.get("children"))
+            out.extend(_regroup(inner, lambda kids: dict(token, children=kids)))
+        elif kind == "table":
+            hoisted = []
+            out.append(_table_without_images(token, hoisted))
+            out.extend(hoisted)
+        else:
+            out.append(token)
+    return out
+
+
+def _image_para(token):
+    return {"type": "paragraph", "children": [token]}
+
+
+def _segments(children):
+    """Inline tokens -> [("inline", tokens)] and [("image", token)] in order."""
+    parts, run = [], []
+    for c in children or []:
+        if c["type"] == "image":
+            if any(not (t["type"] == "text" and not t.get("raw", "").strip()) for t in run):
+                parts.append(("inline", run))
+            run = []
+            parts.append(("image", c))
+        else:
+            run.append(c)
+    if any(not (t["type"] == "text" and not t.get("raw", "").strip()) for t in run):
+        parts.append(("inline", run))
+    return parts
+
+
+def _split_block(token):
+    """A paragraph or heading -> itself, or its text halves around each image."""
+    parts = _segments(token.get("children"))
+    if not any(kind == "image" for kind, _ in parts):
+        return [token]
+    return [_image_para(t) if kind == "image" else dict(token, children=t) for kind, t in parts]
+
+
+def _regroup(tokens, wrap):
+    """Wrap consecutive non-image tokens back into their container (a quote),
+    leaving hoisted image paragraphs between the wrapped groups."""
+    out, group = [], []
+    for t in tokens:
+        if _is_image_para(t):
+            if group:
+                out.append(wrap(group))
+                group = []
+            out.append(t)
+        else:
+            group.append(t)
+    if group:
+        out.append(wrap(group))
+    return out
+
+
+def _is_image_para(token):
+    kids = token.get("children") or []
+    return token["type"] == "paragraph" and len(kids) == 1 and kids[0]["type"] == "image"
+
+
+def _hoist_list(token):
+    """A list -> [list, image, list, …]: split at every item holding an image,
+    the item's text before the image staying in the first half and any text
+    after it opening the second."""
+    out, items = [], []
+    for item in token.get("children") or []:
+        text = [c for c in item.get("children") or [] if c["type"] in ("block_text", "paragraph")]
+        nested = [c for c in item.get("children") or [] if c["type"] == "list"]
+        parts = _segments(text[0].get("children")) if text else []
+        nested_out = [t for n in nested for t in _hoist_list(n)]
+        if not any(kind == "image" for kind, _ in parts) and not any(_is_image_para(t) for t in nested_out):
+            items.append(item)
+            continue
+        # the item's own text, split around its images
+        head, tail = [], []
+        images = []
+        for kind, content in parts:
+            if kind == "image":
+                images.append(content)
+            elif not images:
+                head = content
+            else:
+                tail = content
+        first = dict(item, children=([dict(text[0], children=head)] if head else []) + [t for t in nested_out if not _is_image_para(t)])
+        if first["children"]:
+            items.append(first)
+        out.append(dict(token, children=items))
+        items = []
+        out.extend(_image_para(i) for i in images)
+        out.extend(t for t in nested_out if _is_image_para(t))
+        if tail:
+            items.append(dict(item, children=[dict(text[0], children=tail)]))
+    if items:
+        out.append(dict(token, children=items))
+    return [t for t in out if t["type"] != "list" or t.get("children")]
+
+
+def _table_without_images(token, out):
+    """Images cannot live in a cell: the cell keeps the alt text and the image
+    is placed after the table."""
+    hoisted = []
+
+    def strip(cell):
+        kept = []
+        for c in cell.get("children") or []:
+            if c["type"] == "image":
+                hoisted.append(c)
+                kept.append({"type": "text", "raw": _alt_of(c)})
+            else:
+                kept.append(c)
+        return dict(cell, children=kept)
+
+    def walk(node):
+        if node["type"] == "table_cell":
+            return strip(node)
+        if node.get("children"):
+            return dict(node, children=[walk(c) for c in node["children"]])
+        return node
+
+    table = walk(token)
+    out.extend(_image_para(i) for i in hoisted)   # appended by the caller after the table
+    return table
+
+
 def markdown_to_runs(md, image_ref=None):
     """Markdown -> the page as OneNote sees it: a list of runs.
 
@@ -646,7 +790,7 @@ def markdown_to_runs(md, image_ref=None):
     own — with the images beside it never touched (docs/engine-notes.md).
     """
     blocks = []
-    _render_blocks(_parse(md or ""), blocks, 0, image_ref)
+    _render_blocks(hoist_images(_parse(md or "")), blocks, 0, image_ref)
     runs, text = [], []
     for html in blocks:
         if html.startswith("<img"):
@@ -664,5 +808,5 @@ def markdown_to_runs(md, image_ref=None):
 
 def markdown_to_onenote_html(md, image_ref=None):
     out = []
-    _render_blocks(_parse(md), out, 0, image_ref)
+    _render_blocks(hoist_images(_parse(md)), out, 0, image_ref)
     return "\n".join(out) or "<p%s></p>" % P_STYLE

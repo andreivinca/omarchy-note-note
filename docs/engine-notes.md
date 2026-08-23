@@ -115,6 +115,15 @@ So the block a caret sits in is the number of U+2029 plus U+FDD0 before it —
 which is how the toolbar turns a caret into a Markdown line, via the map
 `qthtml.convert()` returns.
 
+**An image that opens a list item is painted ~200px too high.** The document
+is right (`<li><img …/>text</li>`), the painting is not: Qt Quick's text node
+draws the image over the items above it. The same item renders correctly once
+anything precedes the image — a `<br/>`, or one U+00A0. So the loader writes a
+non-breaking space in front of such an image (`dialect.IMAGE_LEAD`), the
+converter strips it again, and the editor does the same live: on Enter with
+the caret right before an image inside a list item, and after a paste that
+lands there (`NoteEditor.beforeReturn`, `guardImageAt`).
+
 **`insert()` parses HTML** in this mode, and `remove()` + `insert()` are
 ordinary edits, so ctrl+z still walks back through toolbar actions. Assigning
 `text` would wipe the undo stack.

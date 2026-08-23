@@ -172,8 +172,36 @@ Item {
     // the save can only leave it untouched if the text is not wrapped around
     // it (providers/onenote/onenote_md.py).
     area.insert(at, '<p><img src="file://' + encodeURI(path).replace(/"/g, "%22") + '" alt="" /></p>')
+    guardImageAt(at)
     root.edited()
     root.statusRequestedText = "Image pasted"
+  }
+
+  // ── images in list items ────────────────────────────────────────────
+  // Qt paints an image that opens a list item about 200px too high (the
+  // document is right, the painting is not — docs/engine-notes.md). One
+  // non-breaking space in front of it is invisible and enough. The loader
+  // does the same on the way in; the converter strips it on the way out.
+  readonly property string objectChar: "\ufffc"
+  function inListItem(pos) { return /<li\b/.test(area.getFormattedText(pos, Math.min(pos + 1, area.length))) }
+  function atBlockStart(pos) { return pos === 0 || area.getText(pos - 1, pos) === root.sep }
+  function guardImageAt(pos) {
+    // The image the editor just put in may have landed at the start of an
+    // item; scan forward for it from the insertion point.
+    var text = area.getText(pos, Math.min(pos + 4, area.length)), i = text.indexOf(root.objectChar)
+    if (i < 0) return
+    var at = pos + i
+    if (atBlockStart(at) && inListItem(at)) { area.insert(at, "\u00a0"); area.cursorPosition = at + 2 }
+  }
+  // Enter with the caret right before an image: the image would open the
+  // new item. Put the space in first, with the caret still before it, so
+  // Qt's own Enter splits the block ahead of both.
+  function beforeReturn() {
+    var at = area.cursorPosition
+    if (area.selectionStart !== area.selectionEnd) return
+    if (area.getText(at, at + 1) !== root.objectChar || !inListItem(at)) return
+    area.insert(at, "\u00a0")
+    area.cursorPosition = at
   }
   function undo() { if (area.canUndo) { area.undo(); root.edited() } }
   function redo() { if (area.canRedo) { area.redo(); root.edited() } }
@@ -754,7 +782,10 @@ Item {
             wrapMode: TextEdit.Wrap
             selectByMouse: true
             Keys.priority: Keys.BeforeItem
-            Keys.onPressed: function(event) { root.shortcut(event) }
+            Keys.onPressed: function(event) {
+              root.shortcut(event)
+              if (!event.accepted && !root.plain && (event.key === Qt.Key_Return || event.key === Qt.Key_Enter)) root.beforeReturn()
+            }
             onCursorRectangleChanged: flick.ensureVisible(cursorRectangle)
             onTextChanged: {
               if (root.settingText) return

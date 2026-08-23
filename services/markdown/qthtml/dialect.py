@@ -42,6 +42,12 @@ EMPTY_ITEM = "\u00a0"
 # disk as a paragraph holding this character, and shown as an empty one.
 BLANK_PARAGRAPH = "\u00a0"
 
+# An image that is the very first thing in a list item is painted ~200px too
+# high by Qt's text engine (measured on 6.11; a paragraph is fine, and so is
+# the same item once anything precedes the image). One non-breaking space in
+# front of it is invisible and enough; `reader` strips it again.
+IMAGE_LEAD = "\u00a0"
+
 DEFAULT_HIGHLIGHT = "#f9e2af"
 # A highlight is a light marker colour, so the text on it needs its own dark
 # ink — the editor's foreground is the theme's, and on a dark theme it would

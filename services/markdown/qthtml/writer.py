@@ -123,6 +123,8 @@ class _Renderer:
                         if c["type"] in ("block_text", "paragraph")).strip()
         if is_task and not body:
             body = dialect.EMPTY_ITEM        # Qt drops an item with no content
+        if body.startswith("<img"):
+            body = dialect.IMAGE_LEAD + body  # Qt paints a leading image in the wrong place
         nested = "".join(self.list(c, indent, quote)
                          for c in token.get("children") or [] if c["type"] == "list")
         css = ' class="%s"' % dialect.CHECK_CLASS[bool(checked)] if is_task else ""

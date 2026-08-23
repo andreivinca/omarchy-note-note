@@ -138,6 +138,12 @@ whose images cannot all be fetched or carried refuses to save, read-only with
 the reason, because a half-held page can only be saved by destroying what is
 not held. Pages without images save exactly as before, in one request.
 
+An image the editor leaves *inside* a list item, quote, heading or table cell
+is lifted out to a paragraph of its own before the page is rendered
+(`hoist_images`): OneNote keeps images as siblings of the paragraphs, and the
+surgical save can only leave alone what is a top-level run. The list is split
+around the image; the halves stay lists.
+
 *Not done:* images in local Markdown notebooks and in Notion. The editor asks
 the provider (`canImages`) and says so when the answer is no, rather than
 swallowing the paste. Local notes need a story for where the file lives next to
