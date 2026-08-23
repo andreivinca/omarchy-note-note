@@ -73,7 +73,7 @@ on the selection, or for the text you type next. Highlight is written as `==text
 turn it into their real highlight). Strikethrough is stored as `~~text~~`; underline has no standard
 Markdown form and is stored as `_text_` (italic as `*text*`).
 
-A formatting toolbar sits above the note (Markdown notes only): bold, italic,
+A formatting toolbar sits inside the note's frame (Markdown notes only), as icons that outline on hover: bold, italic,
 underline, strikethrough, highlight, inline code; heading 1–3 and normal text;
 bullet, numbered and checkbox lists; indent/outdent (nests list items, indents
 plain text — stored as leading non-breaking spaces, shown as a real paragraph

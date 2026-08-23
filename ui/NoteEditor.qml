@@ -70,7 +70,24 @@ Item {
 
   property bool settingText: false
 
+  // Qt's Markdown writer corrupts a table that directly follows a quote (it
+  // gains an empty first column on every save). An empty-line paragraph in
+  // between avoids it, so notes are normalised on the way in.
+  function normalise(body) {
+    var lines = body.split("\n"), out = []
+    for (var i = 0; i < lines.length; i++) {
+      if (/^\s*\|/.test(lines[i])) {
+        var j = out.length - 1
+        while (j >= 0 && !out[j].trim()) j--
+        if (j >= 0 && /^\s*>/.test(out[j])) { out.push(""); out.push("\u00a0"); out.push("") }
+      }
+      out.push(lines[i])
+    }
+    return out.join("\n")
+  }
+
   function setNote(t, body) {
+    body = normalise(body)
     clearPending()
     settingText = true
     titleField.text = t
@@ -168,7 +185,8 @@ Item {
       case "h3": return "### " + content
       case "ul": return indent + (/^[-*+]\s(?!\[)/.test(prefix) ? "" : "- ") + content
       case "ol": return indent + (/^\d+[.)]\s/.test(prefix) ? "" : "1. ") + content
-      case "todo": return indent + (/\[[ xX]\]/.test(prefix) ? "" : "- [ ] ") + content
+      // an empty checkbox needs some content or Qt drops the box: a non-breaking space
+      case "todo": return indent + (/\[[ xX]\]/.test(prefix) ? "" : "- [ ] ") + (content || "\u00a0")
       case "quote": return (/^>\s/.test(prefix) ? "" : "> ") + content
       // Lists nest; plain text gets four non-breaking spaces per level, which
       // Markdown keeps and OneNote maps to a real paragraph indent.
@@ -186,19 +204,41 @@ Item {
     area.insert(b.end, root.marker)
     var src = area.text
     root.settingText = false
-    var lines = src.split("\n"), out = [], snippetLines = md.split("\n").length, placed = false
+    var lines = src.split("\n"), at = -1
     for (var i = 0; i < lines.length; i++) {
-      if (lines[i].indexOf(root.marker) >= 0) {
-        var clean = lines[i].split(root.marker).join("")
-        out.push(clean)
-        // Qt's writer corrupts a table/code block that directly follows a
-        // quote or a code fence; an empty line paragraph in between avoids it.
-        if (/^\s*>/.test(clean) || /^\s*```/.test(clean)) { out.push(""); out.push("\u00a0") }
-        out.push(""); out.push(md); out.push("")
-        placed = true
-      } else out.push(lines[i])
+      if (lines[i].indexOf(root.marker) < 0) continue
+      lines[i] = lines[i].split(root.marker).join("")
+      at = i
+      break
     }
-    if (!placed) { out.push(""); out.push(md) }
+    if (at < 0) {
+      setNote(titleField.text, lines.join("\n") + "\n\n" + md)
+      focusEditor()
+      root.edited()
+      return
+    }
+    // The caret can sit inside a table or a fenced code block; a snippet
+    // dropped between their lines would break them, so it goes after the
+    // whole block instead.
+    var end = at
+    if (/^\s*\|/.test(lines[at])) {
+      while (end + 1 < lines.length && /^\s*\|/.test(lines[end + 1])) end++
+    } else {
+      var fences = 0
+      for (var f = 0; f < at; f++) if (/^\s*```/.test(lines[f])) fences++
+      if (fences % 2 === 1 || /^\s*```/.test(lines[at])) {
+        end = at
+        while (end + 1 < lines.length && !/^\s*```/.test(lines[end + 1])) end++
+        if (end + 1 < lines.length) end++          // the closing fence
+      }
+    }
+    var out = lines.slice(0, end + 1)
+    // Qt's writer corrupts a table/code block that directly follows a quote
+    // or a code fence; an empty-line paragraph in between avoids it.
+    var last = lines[end]
+    if (/^\s*>/.test(last) || /^\s*```/.test(last)) { out.push(""); out.push("\u00a0") }
+    out.push(""); out.push(md); out.push("")
+    out = out.concat(lines.slice(end + 1))
     setNote(titleField.text, out.join("\n"))
     caretToParagraphEnd(index)        // tables/code have their own paragraphs; stay put
     focusEditor()
@@ -451,81 +491,19 @@ Item {
           Keys.onDownPressed: root.focusEditor()
         }
 
+        // Only the empty-state hint lives here; where a note comes from is
+        // what the sidebar shows.
         Text {
           textFormat: Text.PlainText
-          visible: !root.showingNotice
+          visible: !root.showingNotice && !root.hasNote
           width: parent.width
-          text: root.hasNote
-            ? (root.wordCount + (root.wordCount === 1 ? " word" : " words") + " · " + root.notebookName + " / " + root.fileName)
-            : "Pick a note on the left, or press ctrl+n for a new one."
+          text: "Pick a note on the left, or press ctrl+n for a new one."
           color: Qt.darker(root.foreground, 1.45)
           font.family: root.fontFamily
           font.pixelSize: Style.font.bodySmall
           elide: Text.ElideRight
         }
       }
-    }
-
-    // ---- formatting toolbar (Markdown notes only)
-    Flow {
-      id: toolbar
-      visible: root.hasNote && !root.plain && !root.readOnly && !root.showingNotice && (root.enabledTools === null || root.enabledTools.length > 0)
-      width: parent.width
-      spacing: Style.spacing.xs
-
-      Repeater {
-        model: [
-          { id: "bold", label: "B", tip: "Bold (ctrl+b)" }, { id: "italic", label: "I", tip: "Italic (ctrl+i)" },
-          { id: "underline", label: "U", tip: "Underline (ctrl+u)" }, { id: "strikeout", label: "S", tip: "Strikethrough (ctrl+s)" },
-          { id: "highlight", label: "==", tip: "Highlight (ctrl+shift+h)" }, { id: "code", label: "</>", tip: "Inline code" },
-          { id: "sep" },
-          { id: "h1", label: "H1", tip: "Heading 1" }, { id: "h2", label: "H2", tip: "Heading 2" }, { id: "h3", label: "H3", tip: "Heading 3" }, { id: "p", label: "¶", tip: "Normal text" },
-          { id: "sep" },
-          { id: "ul", label: "•", tip: "Bullet list" }, { id: "ol", label: "1.", tip: "Numbered list" }, { id: "todo", label: "☑", tip: "Checkbox" },
-          { id: "outdent", label: "⇤", tip: "Outdent" }, { id: "indent", label: "⇥", tip: "Indent" },
-          { id: "sep" },
-          { id: "quote", label: "❝", tip: "Quote" }, { id: "codeblock", label: "{ }", tip: "Code block" }, { id: "table", label: "Table", tip: "Insert a table" },
-          { id: "addRow", label: "+Row", tip: "Add a row below the cursor" }, { id: "addCol", label: "+Col", tip: "Add a column" },
-          { id: "delRow", label: "−Row", tip: "Delete this row" }, { id: "delCol", label: "−Col", tip: "Delete this column" },
-          { id: "rule", label: "—", tip: "Horizontal rule" }, { id: "link", label: "Link", tip: "Insert link" }
-        ]
-        delegate: Loader {
-          required property var modelData
-          sourceComponent: modelData.id === "sep" ? sepComp : buttonComp
-          readonly property bool tableOnly: ["addRow", "addCol", "delRow", "delCol"].indexOf(modelData.id) >= 0
-          readonly property bool allowed: modelData.id === "sep" || root.toolEnabled(tableOnly ? "table" : modelData.id)
-          visible: allowed && (tableOnly ? root.inTable : (modelData.id === "table" ? !root.inTable : true))
-          onLoaded: if (modelData.id !== "sep") { item.text = modelData.label; item.tooltipText = modelData.tip; item.toolId = modelData.id }
-        }
-      }
-      Component { id: sepComp; Item { width: Style.spacing.md; height: Style.spacing.controlHeight } }
-      Component {
-        id: buttonComp
-        Button {
-          property string toolId: ""
-          bordered: true
-          foreground: root.foreground
-          accent: root.accent
-          fontFamily: root.fontFamily
-          fontSize: Style.font.bodySmall
-          horizontalPadding: Style.spacing.sm
-          verticalPadding: Style.spacing.xxs
-          onClicked: root.tool(toolId)
-        }
-      }
-    }
-
-    // ---- link bar
-    Row {
-      visible: root.linkBarOpen
-      width: parent.width
-      spacing: Style.spacing.sm
-      TextField { id: linkText; width: Style.space(200); placeholderText: "Text"; foreground: root.foreground; accent: root.accent; font.family: root.fontFamily; verticalPadding: Style.spacing.xxs
-        Keys.onReturnPressed: root.insertLink(); Keys.onEscapePressed: { root.linkBarOpen = false; root.focusEditor() } }
-      TextField { id: linkUrl; width: Style.space(340); placeholderText: "https://…"; foreground: root.foreground; accent: root.accent; font.family: root.fontFamily; verticalPadding: Style.spacing.xxs
-        Keys.onReturnPressed: root.insertLink(); Keys.onEscapePressed: { root.linkBarOpen = false; root.focusEditor() } }
-      Button { text: "Insert"; bordered: true; foreground: root.foreground; accent: root.accent; verticalPadding: Style.spacing.xxs; onClicked: root.insertLink() }
-      Button { text: "Cancel"; bordered: true; foreground: root.foreground; accent: root.accent; verticalPadding: Style.spacing.xxs; onClicked: { root.linkBarOpen = false; root.focusEditor() } }
     }
 
     // ---- content pane (CodeArea-shaped)
@@ -541,6 +519,95 @@ Item {
         anchors.fill: parent
         anchors.margins: Style.spacing.sm
         spacing: Style.spacing.xs
+
+      // ---- formatting toolbar (Markdown notes only)
+      Flow {
+        id: toolbar
+        visible: root.hasNote && !root.plain && !root.readOnly && !root.showingNotice && (root.enabledTools === null || root.enabledTools.length > 0)
+        width: parent.width
+        spacing: Style.spacing.xs
+
+        Repeater {
+          // Material Design glyphs from the shell's Nerd Font, by name:
+          // md-format_bold, md-format_italic, … (see PROVIDERS.md for tool ids).
+          model: [
+            { id: "bold", icon: "󰉤", tip: "Bold (ctrl+b)" },
+            { id: "italic", icon: "󰉷", tip: "Italic (ctrl+i)" },
+            { id: "underline", icon: "󰊇", tip: "Underline (ctrl+u)" },
+            { id: "strikeout", icon: "󰊁", tip: "Strikethrough (ctrl+s)" },
+            { id: "highlight", icon: "󰙒", tip: "Highlight (ctrl+shift+h)" },
+            { id: "code", icon: "󰅴", tip: "Inline code" },
+            { id: "sep" },
+            { id: "h1", icon: "󰉫", tip: "Heading 1" },
+            { id: "h2", icon: "󰉬", tip: "Heading 2" },
+            { id: "h3", icon: "󰉭", tip: "Heading 3" },
+            { id: "p", icon: "󰉽", tip: "Normal text" },
+            { id: "sep" },
+            { id: "ul", icon: "󰉹", tip: "Bullet list" },
+            { id: "ol", icon: "󰉻", tip: "Numbered list" },
+            { id: "todo", icon: "󰥪", tip: "Checkbox" },
+            { id: "outdent", icon: "󰉵", tip: "Outdent" },
+            { id: "indent", icon: "󰉶", tip: "Indent" },
+            { id: "sep" },
+            { id: "quote", icon: "󰉾", tip: "Quote" },
+            { id: "codeblock", icon: "󰅩", tip: "Code block" },
+            { id: "rule", icon: "󰍴", tip: "Horizontal rule" },
+            { id: "link", icon: "󰌹", tip: "Insert link" },
+            { id: "sep" },
+            { id: "table", icon: "󰓫", tip: "Insert a table" },
+            { id: "addRow", icon: "󰓳", tip: "Add a row below" },
+            { id: "delRow", icon: "󰓵", tip: "Delete this row" },
+            { id: "addCol", icon: "󰓬", tip: "Add a column" },
+            { id: "delCol", icon: "󰓮", tip: "Delete this column" }
+          ]
+          delegate: Loader {
+            required property var modelData
+            sourceComponent: modelData.id === "sep" ? sepComp : buttonComp
+            readonly property bool tableOnly: ["addRow", "addCol", "delRow", "delCol"].indexOf(modelData.id) >= 0
+            readonly property bool allowed: modelData.id === "sep" || root.toolEnabled(tableOnly ? "table" : modelData.id)
+            visible: allowed && (tableOnly ? root.inTable : (modelData.id === "table" ? !root.inTable : true))
+            onLoaded: if (modelData.id !== "sep") { item.iconText = modelData.icon; item.tooltipText = modelData.tip; item.toolId = modelData.id }
+          }
+        }
+        Component { id: sepComp; Item { width: Style.spacing.md; height: Style.spacing.controlHeight } }
+        Component {
+          id: buttonComp
+          Button {
+            property string toolId: ""
+            property bool hovering: false
+            // Quiet toolbar: the outline appears only under the cursor.
+            bordered: hovering
+            foreground: root.foreground
+            accent: root.accent
+            iconSize: Style.font.icon
+            horizontalPadding: Style.spacing.sm
+            verticalPadding: Style.spacing.xxs
+            onHovered: function(isHovered) { hovering = isHovered }
+            onClicked: root.tool(toolId)
+          }
+        }
+      }
+
+      // ---- link bar
+      Row {
+        visible: root.linkBarOpen
+        width: parent.width
+        spacing: Style.spacing.sm
+        TextField { id: linkText; width: Style.space(200); placeholderText: "Text"; foreground: root.foreground; accent: root.accent; font.family: root.fontFamily; verticalPadding: Style.spacing.xxs
+          Keys.onReturnPressed: root.insertLink(); Keys.onEscapePressed: { root.linkBarOpen = false; root.focusEditor() } }
+        TextField { id: linkUrl; width: Style.space(340); placeholderText: "https://…"; foreground: root.foreground; accent: root.accent; font.family: root.fontFamily; verticalPadding: Style.spacing.xxs
+          Keys.onReturnPressed: root.insertLink(); Keys.onEscapePressed: { root.linkBarOpen = false; root.focusEditor() } }
+        Button { text: "Insert"; bordered: true; foreground: root.foreground; accent: root.accent; verticalPadding: Style.spacing.xxs; onClicked: root.insertLink() }
+        Button { text: "Cancel"; bordered: true; foreground: root.foreground; accent: root.accent; verticalPadding: Style.spacing.xxs; onClicked: { root.linkBarOpen = false; root.focusEditor() } }
+      }
+
+        // A hairline under the tools, so they read as the note's own strip.
+        Rectangle {
+          visible: toolbar.visible
+          width: parent.width
+          height: Style.spacing.hairline
+          color: Util.alpha(root.foreground, 0.12)
+        }
 
         Loader {
           id: customLoader
@@ -672,6 +739,30 @@ Item {
           }
         }
       }
+
+      // Word count sits in the corner of the note's own surface.
+      Rectangle {
+        visible: root.hasNote && !root.showingNotice
+        anchors.right: parent.right
+        anchors.bottom: parent.bottom
+        anchors.rightMargin: frame.borderRight + Style.spacing.xs
+        anchors.bottomMargin: frame.borderBottom + Style.spacing.xs
+        width: counter.implicitWidth + Style.spacing.sm * 2
+        height: counter.implicitHeight + Style.spacing.xxs * 2
+        radius: Style.cornerRadius
+        color: Util.alpha(root.foreground, 0.06)
+
+        Text {
+          id: counter
+          anchors.centerIn: parent
+          textFormat: Text.PlainText
+          text: root.wordCount + (root.wordCount === 1 ? " word" : " words")
+          color: Qt.darker(root.foreground, 1.5)
+          font.family: root.fontFamily
+          font.pixelSize: Style.font.caption
+        }
+      }
+
     }
   }
 }
