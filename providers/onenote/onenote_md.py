@@ -92,7 +92,9 @@ class Converter:
         # per visual line and Markdown would otherwise flow them together.
         self.last = None
         self.editable = True
-        self.images = []          # [(src, alt)]
+        # [{"src", "alt", "width", "local"}] — what the page's images are and
+        # where each one was cached, so a save can hand the same resource back.
+        self.images = []
         # (src, declared width or 0) -> url/path to show
         self.image_path_for = image_path_for or (lambda src, width: None)
 
@@ -122,14 +124,20 @@ class Converter:
                 # shows images at their natural size.
                 src = c.attrs.get("src") or c.attrs.get("data-fullres-src", "")
                 alt = c.attrs.get("alt", "")
-                self.images.append((src, alt))
-                self.editable = False          # images cannot be written back yet
                 try:
                     width = int(float(c.attrs.get("width", "0") or 0))
                 except ValueError:
                     width = 0
                 local = self.image_path_for(src, width)
-                out.append("![%s](%s)" % (alt, local) if local else "[image: %s]" % (alt or "not shown"))
+                if local:
+                    # The page can be written back: the save hands this same
+                    # resource to OneNote again, by the src it came from.
+                    self.images.append({"src": src, "alt": alt, "width": width, "local": local})
+                    out.append("![%s](%s)" % (alt, local))
+                else:
+                    # Not shown means not held: editing could only lose it.
+                    self.editable = False
+                    out.append("[image: %s]" % (alt or "not shown"))
             elif c.tag in LOSSY_TAGS:
                 self.editable = False
                 out.append("[unsupported: %s]" % c.tag)
@@ -189,6 +197,18 @@ class Converter:
                 self.lines.append("")
             for c in node.children:
                 self.block(c, depth)
+            return
+        if t == "img":
+            # OneNote keeps an image as a sibling of the paragraphs, not
+            # inside one. Writing it as its own Markdown block is what lets a
+            # save rewrite the text around it and leave the image alone.
+            text = self.inline(_wrap(node)).strip()
+            if text:
+                if self.lines and self.lines[-1] != "":
+                    self.lines.append("")
+                self.lines.append(text)
+                self.lines.append("")
+            self.last = None
             return
         if t == "p" and not self.inline(node).strip() and any(c.tag == "br" for c in node.children):
             self.block(Node("br"), depth)      # <p><br/></p>: an empty line
@@ -327,6 +347,46 @@ def _find_all(node, tag):
     return found
 
 
+# The data-id we put on every text run we write, so a later save can find the
+# div again. OneNote keeps data-id through an update; the generated id (which
+# is the only thing a replace can target) changes on every write, so it has to
+# be read back each time.
+TEXT_RUN_ID = "nn-text-%d"
+
+
+def page_structure(html):
+    """The page's top-level runs, as a save needs to see them.
+
+        [{"kind": "text",  "id": "div:{…}", "dataId": "nn-text-0"},
+         {"kind": "image", "id": "img:{…}", "src": "https://…/resources/…"}]
+
+    Anything else at the top level (a stray paragraph OneNote or another
+    client added) is reported as a text run with no data-id, which is enough
+    for the save to notice the page is not ours to patch piecemeal.
+    """
+    tb = TreeBuilder()
+    tb.feed(html)
+    bodies = _find_all(tb.root, "body") or [tb.root]
+    outer = None
+    for body in bodies:
+        for c in body.children:
+            if c.tag == "div":
+                outer = c
+                break
+    if outer is None:
+        return []
+    runs = []
+    for c in outer.children:
+        if c.tag == "img":
+            runs.append({"kind": "image", "id": c.attrs.get("id", ""),
+                         "src": c.attrs.get("src") or c.attrs.get("data-fullres-src", "")})
+        elif c.tag is None and not (c.text or "").strip():
+            continue
+        else:
+            runs.append({"kind": "text", "id": c.attrs.get("id", ""), "dataId": c.attrs.get("data-id", "")})
+    return runs
+
+
 def html_to_markdown(html, image_path_for=None):
     tb = TreeBuilder()
     tb.feed(html)
@@ -352,7 +412,7 @@ from parse import parse as _parse  # noqa: E402
 _QUOTE_STYLE = ' style="margin-left:20pt;color:#595959"'
 
 
-def _inline_html(tokens):
+def _inline_html(tokens, image_ref=None):
     out = []
     for t in tokens or []:
         ty = t["type"]
@@ -363,26 +423,57 @@ def _inline_html(tokens):
         elif ty == "linebreak":
             out.append("\n")                    # paragraph split, see _paragraphs()
         elif ty == "strong":
-            out.append("<b>%s</b>" % _inline_html(t.get("children")))
+            out.append("<b>%s</b>" % _inline_html(t.get("children"), image_ref))
         elif ty == "emphasis":
-            out.append("<i>%s</i>" % _inline_html(t.get("children")))
+            out.append("<i>%s</i>" % _inline_html(t.get("children"), image_ref))
         elif ty == "underline":
-            out.append("<u>%s</u>" % _inline_html(t.get("children")))
+            out.append("<u>%s</u>" % _inline_html(t.get("children"), image_ref))
         elif ty == "strikethrough":
-            out.append("<s>%s</s>" % _inline_html(t.get("children")))
+            out.append("<s>%s</s>" % _inline_html(t.get("children"), image_ref))
         elif ty == "mark":
-            out.append('<span style="background-color:#FFFF00">%s</span>' % _inline_html(t.get("children")))
+            out.append('<span style="background-color:#FFFF00">%s</span>' % _inline_html(t.get("children"), image_ref))
         elif ty == "codespan":
             out.append('<span style="font-family:Consolas">%s</span>' % _html.escape(t.get("raw", ""), quote=False))
         elif ty == "link":
-            out.append('<a href="%s">%s</a>' % (_html.escape(t.get("attrs", {}).get("url", ""), quote=True), _inline_html(t.get("children"))))
+            out.append('<a href="%s">%s</a>' % (_html.escape(t.get("attrs", {}).get("url", ""), quote=True), _inline_html(t.get("children"), image_ref)))
         elif ty == "image":
-            out.append(_html.escape(t.get("attrs", {}).get("url", ""), quote=False))
+            out.append(_img_html(t, image_ref))
         elif ty == "inline_html":
             out.append(_html.escape(t.get("raw", ""), quote=False))
         else:
-            out.append(_inline_html(t.get("children")) if t.get("children") else _html.escape(t.get("raw", ""), quote=False))
+            out.append(_inline_html(t.get("children"), image_ref) if t.get("children")
+                       else _html.escape(t.get("raw", ""), quote=False))
     return "".join(out)
+
+
+def _lone_image(token):
+    """A paragraph that is nothing but an image: OneNote keeps images as
+    siblings of the paragraphs, not inside them, and only a top-level image
+    can be left untouched while the text around it is rewritten."""
+    kids = [c for c in token.get("children") or [] if not (c["type"] == "text" and not c.get("raw", "").strip())]
+    return len(kids) == 1 and kids[0]["type"] == "image"
+
+
+def _img_html(token, image_ref):
+    """An image token -> the <img> OneNote accepts, through the caller's
+    resolver: an existing page resource keeps its own src, a local file is
+    uploaded as a part of the request, and anything the resolver refuses is
+    written as its alt text rather than silently dropped."""
+    attrs = token.get("attrs", {})
+    url, alt = attrs.get("url", ""), _alt_of(token)
+    width = 0
+    src = url
+    if image_ref:
+        src, width = image_ref(url, alt)
+    if not src:
+        return _html.escape("[image: %s]" % (alt or "not shown"), quote=False)
+    size = ' width="%d"' % width if width else ""
+    return '<img src="%s" alt="%s"%s/>' % (_html.escape(src, quote=True), _html.escape(alt, quote=True), size)
+
+
+def _alt_of(token):
+    kids = token.get("children") or []
+    return "".join(c.get("raw", "") for c in kids if c["type"] == "text") or token.get("attrs", {}).get("alt", "")
 
 
 def _tagged(text):
@@ -407,7 +498,7 @@ def _tag_prefix(tokens):
     return None, tokens
 
 
-def _paragraphs(tokens):
+def _paragraphs(tokens, image_ref=None):
     """A paragraph's inline tokens -> list of (tag, html) per visual line:
     a hard line break starts a new OneNote paragraph."""
     out, cur = [], []
@@ -420,7 +511,7 @@ def _paragraphs(tokens):
     result = []
     for line in out:
         tag, line = _tag_prefix(line)
-        result.append((tag, _inline_html(line)))
+        result.append((tag, _inline_html(line, image_ref)))
     return result
 
 
@@ -435,7 +526,7 @@ def _p(tag, html):
     return "<p%s>%s</p>" % (style, html)
 
 
-def _render_blocks(tokens, out, depth=0):
+def _render_blocks(tokens, out, depth=0, image_ref=None):
     for t in tokens or []:
         ty = t["type"]
         if ty == "blank_line":
@@ -445,11 +536,14 @@ def _render_blocks(tokens, out, depth=0):
             if text.strip() == "" and GAP in text:
                 out.append("<br/>")               # an explicit empty line
                 continue
-            for tag, html in _paragraphs(t.get("children")):
+            if _lone_image(t):
+                out.append(_img_html(t["children"][0], image_ref))
+                continue
+            for tag, html in _paragraphs(t.get("children"), image_ref):
                 out.append(_p(tag, html))
         elif ty == "heading":
             lvl = min(max(t.get("attrs", {}).get("level", 1), 1), 6)
-            out.append("<h%d>%s</h%d>" % (lvl, _inline_html(t.get("children")), lvl))
+            out.append("<h%d>%s</h%d>" % (lvl, _inline_html(t.get("children"), image_ref), lvl))
         elif ty == "thematic_break":
             out.append("<p%s>———</p>" % P_STYLE)
         elif ty == "block_code":
@@ -457,21 +551,21 @@ def _render_blocks(tokens, out, depth=0):
             out.append('<p%s><span style="font-family:Consolas">%s</span></p>' % (P_STYLE, code))
         elif ty == "block_quote":
             inner = []
-            _render_blocks(t.get("children"), inner, depth)
+            _render_blocks(t.get("children"), inner, depth, image_ref)
             out.extend(i.replace("<p" + P_STYLE, "<p" + _QUOTE_STYLE, 1) if i.startswith("<p") else i for i in inner)
         elif ty == "list":
-            _render_list(t, out, depth)
+            _render_list(t, out, depth, image_ref)
         elif ty == "table":
-            _render_table(t, out)
+            _render_table(t, out, image_ref)
         elif ty in ("block_text",):
-            for tag, html in _paragraphs(t.get("children")):
+            for tag, html in _paragraphs(t.get("children"), image_ref):
                 out.append(_p(tag, html))
         else:
             if t.get("children"):
-                _render_blocks(t["children"], out, depth)
+                _render_blocks(t["children"], out, depth, image_ref)
 
 
-def _render_list(t, out, depth):
+def _render_list(t, out, depth, image_ref=None):
     items = t.get("children") or []
     ordered = t.get("attrs", {}).get("ordered", False)
     # A top-level list made only of checkboxes is how OneNote's own to-do
@@ -479,20 +573,20 @@ def _render_list(t, out, depth):
     if depth == 0 and items and all(i["type"] == "task_list_item" for i in items) and not any(_has_sublist(i) for i in items):
         for i in items:
             tag = "to-do:completed" if i.get("attrs", {}).get("checked") else "to-do"
-            out.append(_p(tag, _item_inline(i)))
+            out.append(_p(tag, _item_inline(i, image_ref)))
         return
     out.append("<ol>" if ordered else "<ul>")
     for i in items:
         li = ["<li>"]
         if i["type"] == "task_list_item":
             tag = "to-do:completed" if i.get("attrs", {}).get("checked") else "to-do"
-            li.append('<span data-tag="%s">%s</span>' % (tag, _item_inline(i)))
+            li.append('<span data-tag="%s">%s</span>' % (tag, _item_inline(i, image_ref)))
         else:
-            li.append(_item_inline(i))
+            li.append(_item_inline(i, image_ref))
         for c in i.get("children") or []:
             if c["type"] == "list":
                 sub = []
-                _render_list(c, sub, depth + 1)
+                _render_list(c, sub, depth + 1, image_ref)
                 li.extend(sub)
         li.append("</li>")
         out.append("".join(li))
@@ -503,22 +597,22 @@ def _has_sublist(item):
     return any(c["type"] == "list" for c in item.get("children") or [])
 
 
-def _item_inline(item):
+def _item_inline(item, image_ref=None):
     parts = []
     for c in item.get("children") or []:
         if c["type"] in ("block_text", "paragraph"):
-            parts.append(" ".join(h for _, h in _paragraphs(c.get("children"))))
+            parts.append(" ".join(h for _, h in _paragraphs(c.get("children"), image_ref)))
     return " ".join(parts)
 
 
-def _render_table(t, out):
+def _render_table(t, out, image_ref=None):
     rows = []
     for part in t.get("children") or []:
         if part["type"] == "table_head":
-            rows.append([_inline_html(c.get("children")) for c in part.get("children") or []])
+            rows.append([_inline_html(c.get("children"), image_ref) for c in part.get("children") or []])
         elif part["type"] == "table_body":
             for r in part.get("children") or []:
-                rows.append([_inline_html(c.get("children")) for c in r.get("children") or []])
+                rows.append([_inline_html(c.get("children"), image_ref) for c in r.get("children") or []])
     out.append('<table style="border:1px solid;border-collapse:collapse">')
     for r in rows:
         out.append("<tr>" + "".join('<td style="border:1px solid">%s</td>' % (c or "<br/>") for c in r) + "</tr>")
@@ -539,7 +633,36 @@ def walk_text_local(tokens):
     return "".join(out)
 
 
-def markdown_to_onenote_html(md):
+def markdown_to_runs(md, image_ref=None):
+    """Markdown -> the page as OneNote sees it: a list of runs.
+
+        [{"kind": "text", "html": "<p>…</p><p>…</p>"},
+         {"kind": "image", "html": "<img …/>", "url": "file:///…"}]
+
+    Text runs are what a save rewrites; image runs are what it leaves alone.
+    Keeping them apart is the whole reason a page with images can be edited:
+    OneNote cannot delete or replace a paragraph, only a whole div, so the
+    text between two images is written as one div that can be replaced on its
+    own — with the images beside it never touched (docs/engine-notes.md).
+    """
+    blocks = []
+    _render_blocks(_parse(md or ""), blocks, 0, image_ref)
+    runs, text = [], []
+    for html in blocks:
+        if html.startswith("<img"):
+            if text:
+                runs.append({"kind": "text", "html": "".join(text)})
+                text = []
+            ref = re.search(r'src="([^"]*)"', html)
+            runs.append({"kind": "image", "html": html, "ref": _html.unescape(ref.group(1)) if ref else ""})
+        else:
+            text.append(html)
+    if text:
+        runs.append({"kind": "text", "html": "".join(text)})
+    return runs
+
+
+def markdown_to_onenote_html(md, image_ref=None):
     out = []
-    _render_blocks(_parse(md), out)
+    _render_blocks(_parse(md), out, 0, image_ref)
     return "\n".join(out) or "<p%s></p>" % P_STYLE

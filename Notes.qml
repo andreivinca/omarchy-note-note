@@ -5,6 +5,8 @@ import QtQuick
 import qs.Commons
 import qs.Ui
 import "ui"
+import "services/clipboard" as Clipboard
+import "services/markdown" as Markdown
 import "services/microsoft" as Microsoft
 
 // Note Note — notes for the Omarchy shell, laid out like Toolroll: a header
@@ -125,6 +127,13 @@ Item {
     return acc
   }
   Component { id: accountComponent; Microsoft.Account {} }
+
+  // Markdown on disk, rich text in the editor: everything the note pane shows
+  // or saves passes through here (services/markdown/Markdown.qml).
+  Markdown.Markdown { id: markdownService }
+
+  // Pasting a picture into a note; only providers that can store one take it.
+  Clipboard.Clipboard { id: clipboardService }
   readonly property var services: ({ microsoft: { create: function(owner, scopes) { return root.createMicrosoftAccount(owner, scopes) } } })
 
   property var providers: []
@@ -318,7 +327,8 @@ Item {
   }
   function sectionsOf(providerId) { var p = providerById(providerId); return p ? JSON.stringify(p.sections.map(function(s) { return s.key + "(" + s.rows.length + ")" })) : "no provider" }
   function editorTool(id) { editor.tool(id); return true }
-  function editorUndo(n) { for (var i = 0; i < Number(n || 1); i++) editor.undo(); return editor.text.length }
+  function editorPaste(x) { editor.paste(); return true }
+  function editorUndo(n) { for (var i = 0; i < Number(n || 1); i++) editor.undo(); return editor.wordCount }
   function editorCursor(pos) { editor.setCursorPosition(Number(pos)); editor.updateInTable(); return editor.cursorPosition() + (editor.inTable ? " in-table" : " outside") }
   function treeToggle(id) {
     for (var i = 0; i < root.rows.length; i++)
@@ -438,7 +448,9 @@ Item {
       if (event.key === Qt.Key_I) { editor.toggleFormat("italic"); return true }
       if (event.key === Qt.Key_U) { editor.toggleFormat("underline"); return true }
       if (event.key === Qt.Key_S) { editor.toggleFormat("strikeout"); return true }
-      if (event.key === Qt.Key_H && (event.modifiers & Qt.ShiftModifier)) { editor.wrapSelection("=="); return true }
+      if (event.key === Qt.Key_H && (event.modifiers & Qt.ShiftModifier)) { editor.highlightSelection(); return true }
+      // The editor decides whether this paste is a picture or text.
+      if (event.key === Qt.Key_V && !(event.modifiers & Qt.ShiftModifier)) { editor.paste(); return true }
     }
     return false
   }
@@ -467,14 +479,20 @@ Item {
     if (editor.readOnly) { root.dirty = false; return }
     if (root.saving) { root.saveAgain = true; return }
     saveTimer.stop()
-    var path = root.currentPath, title = editor.title, body = p.markdown ? editor.text : editor.plainText()
+    var path = root.currentPath, title = editor.title
     root.dirty = false
     root.saving = true
     root.loadedVersion = ""
+    // The document is rich text; the note is Markdown. Asking for it is
+    // asynchronous, so the save proper lives in sendSave().
+    editor.requestMarkdown(function(body) { root.sendSave(p, path, title, body) })
+  }
+
+  function sendSave(p, path, title, body) {
     p.save(path, title, body, function(r) {
       root.saving = false
       if (r.error) {
-        if (/transient|timed? ?out|try again|429|503/i.test(r.error) && root.saveRetries < 3) {
+        if (/transient|timed? ?out|try again|too many requests|429|503/i.test(r.error) && root.saveRetries < 3) {
           root.saveRetries++
           showStatus(p.name + ": busy, retrying…")
           saveRetryTimer.restart()
@@ -661,6 +679,9 @@ Item {
           id: editor
           width: parent.width - list.width - Style.spacing.lg * 2 - 1
           height: parent.height
+          markdown: markdownService
+          clipboard: clipboardService
+          canImages: { var p = root.providerOf(root.currentPath); return p ? p.canImages === true : false }
           hasNote: root.currentPath !== ""
           plain: { var p = root.providerOf(root.currentPath); return p ? !p.markdown : false }
           hasTitle: { var p = root.providerOf(root.currentPath); return p ? p.hasTitle : true }

@@ -1,0 +1,79 @@
+import Quickshell.Io
+import QtQuick
+
+// Markdown <-> the HTML the editor's document holds.
+//
+// The editor works in rich text because Markdown cannot express what it must
+// keep — a highlight, an empty paragraph, an indent, a checkbox with no text.
+// Notes on disk and the provider contract stay Markdown, so every note passes
+// through here twice: once on the way into the editor, once on the way out.
+// The conversion itself lives in `qthtml/`, which is testable on its own
+// (`python3 services/markdown/qthtml/selftest.py`).
+Item {
+  id: root
+
+  readonly property string dir: Qt.resolvedUrl(".").toString().replace(/^file:\/\//, "").replace(/\/$/, "")
+  readonly property string script: dir + "/qthtml/__main__.py"
+
+  // The colours of ==highlighted== text. Neither reaches disk: the note keeps
+  // the markers, the document keeps the colours. The ink is set here because a
+  // highlight is a light marker, and the editor's own foreground follows the
+  // theme — on a dark theme that would be light text on a light highlight.
+  property string highlight: "#f9e2af"
+  property string highlightInk: "#1e1e2e"
+
+  // Markdown -> HTML for `TextEdit.text`.  callback(html)
+  function toHtml(markdown, callback) {
+    if (!markdown) { callback(""); return }
+    run(["to-html", "--highlight", root.highlight, "--highlight-ink", root.highlightInk],
+        markdown, function(text) { callback(text) })
+  }
+
+  // HTML from `getFormattedText()` -> Markdown.  callback(markdown, map)
+  //
+  // `map.blocks[i]` is the document block Markdown line `i` came from, which
+  // is how the toolbar finds the line the caret is on; `map.count` is how many
+  // blocks the document has. Both are -1 / 0 if the converter failed, and the
+  // callback still runs: a failed conversion must never lose the note.
+  function toMarkdown(html, callback) {
+    if (!html) { callback("", { blocks: [], count: 0 }); return }
+    run(["to-markdown", "--with-map"], html, function(text) {
+      var result = null
+      try { result = JSON.parse(text) } catch (error) { result = null }
+      if (!result) { console.warn("note-note: could not read the editor's document"); callback("", { blocks: [], count: 0 }); return }
+      callback(result.markdown || "", { blocks: result.blocks || [], count: result.count || 0 })
+    })
+  }
+
+  // ── running the converter ───────────────────────────────────────────
+  // One process per conversion. They are short, they overlap (a save can run
+  // while the toolbar converts), and sharing one would mean queueing them.
+  function run(args, payload, callback) {
+    var proc = converter.createObject(root, { command: ["python3", root.script].concat(args), callback: callback })
+    proc.stdinEnabled = true                 // stdin must be open before it starts
+    proc.running = true
+    proc.write(payload)
+    proc.stdinEnabled = false                // close stdin: the script reads to EOF
+  }
+
+  Component {
+    id: converter
+    Process {
+      id: proc
+      // The note itself goes over stdin, never argv (docs/security.md rule 2).
+      property var callback: null
+      stdout: StdioCollector {
+        onStreamFinished: {
+          var done = proc.callback
+          proc.callback = null
+          if (done) done(this.text)
+          Qt.callLater(function() { proc.destroy() })
+        }
+      }
+      onExited: function(code) {
+        if (code !== 0) console.warn("note-note: qthtml exited with", code)
+        if (proc.callback) { var done = proc.callback; proc.callback = null; done("") }
+      }
+    }
+  }
+}

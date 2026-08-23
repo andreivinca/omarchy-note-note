@@ -54,6 +54,31 @@ server URL + app password), and a schema would grow into a form framework.
 pane. The provider validates, stores its own values and secrets, then emits
 `viewCleared()`. The host never sees a credential.
 
+### The editor's document is rich text, not Markdown
+
+*Was:* a `TextEdit` in `MarkdownText`, with the note's Markdown as the
+document format — the editor parsed it on the way in and re-serialised it on
+the way out. *Rejected*, after years of working around it: Qt's Markdown
+writer folds paragraphs at 80 columns, escapes anything that looks like
+Markdown, drops empty paragraphs and empty checkboxes, and corrupts a table
+that follows a quote. Every one of those is the same fault — Markdown was the
+wire format between the document and us, and Markdown cannot express what the
+editor must keep: a highlight, an empty line, an indent, a checkbox with no
+text. No amount of patching reaches that.
+
+*Chosen:* the document holds HTML (`textFormat: RichText`) and
+`services/markdown/qthtml/` converts at both ends — Markdown in when a note
+opens, Markdown out when it saves. Notes on disk and the provider contract are
+unchanged. Qt's HTML keeps a background colour, an empty paragraph, a
+checkbox's state and an indent, so the workarounds are gone with their cause;
+what it does not keep is *semantics* (a heading comes back as a font size, a
+quote as margins), which is exactly what a converter we own can put back.
+
+The property that matters is that the loop closes: markdown → html →
+document → html → markdown must reach a fixpoint. That is a test, not a hope:
+`python3 services/markdown/qthtml/selftest.py`, which runs every case through
+a real Qt document offscreen.
+
 ### Markdown parsing uses a vendored mistune
 
 Hand-written line parsers produced the escape, soft-wrap and nesting bugs.
@@ -63,29 +88,60 @@ the promise of "standard library only, nothing installed" holds. Only the
 the backend → Markdown writers stay ours, because they encode backend quirks
 no library knows about.
 
-### Highlight is `==text==`, not a coloured background
+### Highlight is a colour in the document and `==text==` on disk
 
-Qt's Markdown writer drops character background colours, so a highlight shown
-as colour would vanish on the next save. Markers survive editing and the
-providers translate them into the backend's real highlight. Showing colour
-*and* keeping it would require walking the document's character formats from
-QML (only `cursorSelection` is exposed) — expensive and fragile. Revisit only
-if the coloured look matters more than losing highlights.
+Markdown has no highlight, so the note keeps the markers the providers already
+translate into each backend's own. The *document* keeps a real
+`background-color`, which rich text does hold through a save — that is half of
+why the editor moved to it. QML cannot set a character background, so the
+toolbar wraps the selection's own HTML in a span (`highlightSelection`), which
+keeps whatever formatting was already inside it. The highlight carries its own
+dark ink: the editor's foreground follows the theme, and on a dark theme that
+would be light text on a light marker.
 
-### Block styles are applied through the Markdown, not the document
+### Block styles still travel through the Markdown
 
-QML exposes no block formatting on `TextEdit`. Toolbar block actions insert a
-private marker at the end of the affected paragraphs, take `editor.text`
-(Markdown), rewrite the marked lines' prefixes, and apply the result. Since
-2.5.0 this is done as an in-place edit rather than a reload, so `Ctrl+Z` still
-walks back through toolbar actions.
+QML exposes no block formatting on `TextEdit`, in either format, so a heading
+or a list is still applied by rewriting a line of Markdown rather than by
+setting something on the document. What changed with rich text is the trip:
+the document is converted to Markdown (with a map saying which line each
+document block is on, so the caret finds its line), the lines the tool owns
+are rewritten, and the result is converted back and put in with
+`remove()` + `insert()` — ordinary edits, so `Ctrl+Z` still walks back through
+toolbar actions. The private end-of-paragraph marker is gone: the map replaced
+it.
 
-### No image insertion
+### Images: pasted, and kept where they are
 
-Displaying images is supported (OneNote pages fetch them through Graph);
-inserting one is not. It needs an upload endpoint per backend, a file picker,
-and a local-file story for Markdown notes — a feature in its own right, and
-one that only the native apps do well today.
+A OneNote page with images used to open read-only, because a save rewrote the
+whole page body and could only have dropped them. Now ctrl+v pastes a picture
+from the clipboard and a page with images is editable.
+
+What makes it safe is that a save never mentions an unchanged image. Handing
+an image back by its own resource URL was tried and *rejected*: OneNote copies
+the resource each time (re-encoding it), and a copy of a resource it has not
+materialised yet is empty forever — an image lost to an ordinary-looking save.
+Instead the note is written as text runs in `div`s of our own with the images
+as their siblings, and a save is a set of targeted commands: text runs
+replaced where they stand, a pasted image uploaded as a part and inserted, a
+deleted one replaced with an empty div. Anything the surgical path cannot
+express (an image reordered, a page shaped by the OneNote apps) is rebuilt
+once with every image uploaded from our own cached bytes — never referenced —
+and is surgical from then on.
+
+The costs, accepted deliberately: one extra read per save of a page with
+images (a replace can only target a generated id, and OneNote renews those on
+every write; a second read after an upload, so the next autosave knows the
+paste is already up); the cache keeps images exactly as Graph served them (no
+local rescaling — the editor caps its *display* width instead); and a page
+whose images cannot all be fetched or carried refuses to save, read-only with
+the reason, because a half-held page can only be saved by destroying what is
+not held. Pages without images save exactly as before, in one request.
+
+*Not done:* images in local Markdown notebooks and in Notion. The editor asks
+the provider (`canImages`) and says so when the answer is no, rather than
+swallowing the paste. Local notes need a story for where the file lives next to
+the note; Notion needs its own upload endpoint.
 
 ### Indent on plain text is non-breaking spaces
 

@@ -28,11 +28,31 @@ Item {
   // The body must NOT be fixed-pitch: Qt's Markdown writer serialises any
   // monospace text as a code span and drops bold/italic/underline.
   property string bodyFontFamily: "sans-serif"
-  readonly property alias text: area.text
+  // The conversion service (services/markdown/Markdown.qml). The document is
+  // HTML; every note arrives and leaves as Markdown, and this is the boundary.
+  property var markdown: null
+  // The clipboard service (services/clipboard/Clipboard.qml), for pasting a
+  // picture. Only providers that can store one accept it.
+  property var clipboard: null
+  property bool canImages: false
+  readonly property string highlightColour: root.markdown ? root.markdown.highlight : "#f9e2af"
+  readonly property string highlightInk: root.markdown ? root.markdown.highlightInk : "#1e1e2e"
+
   readonly property alias title: titleField.text
   readonly property bool bodyFocused: area.activeFocus
-  // Plain characters, not Markdown serialisation — for backends that store text.
+  // Plain characters, not a serialisation — for backends that store text.
   function plainText() { return area.getText(0, area.length) }
+
+  // The document as HTML. `area.text` is *not* this: in rich text it answers
+  // with the string last assigned to it, not with what the document holds now,
+  // so reading it would save the note as it was opened.
+  function documentHtml() { return area.getFormattedText(0, area.length) }
+
+  // The note as it belongs on disk.  callback(markdown)
+  function requestMarkdown(callback) {
+    if (root.plain || !root.markdown) { callback(plainText()); return }
+    root.markdown.toMarkdown(documentHtml(), function(md) { callback(md) })
+  }
 
   // Notice mode: a message with optional buttons shown instead of the note
   // (setup instructions, a device-code prompt, an error).
@@ -69,47 +89,92 @@ Item {
   property string statusRequestedText: ""
 
   property bool settingText: false
-
-  // Qt's Markdown writer corrupts a table that directly follows a quote (it
-  // gains an empty first column on every save). An empty-line paragraph in
-  // between avoids it, so notes are normalised on the way in.
-  function normalise(body) {
-    var lines = body.split("\n"), out = []
-    for (var i = 0; i < lines.length; i++) {
-      if (/^\s*\|/.test(lines[i])) {
-        var j = out.length - 1
-        while (j >= 0 && !out[j].trim()) j--
-        if (j >= 0 && /^\s*>/.test(out[j])) { out.push(""); out.push("\u00a0"); out.push("") }
-      }
-      out.push(lines[i])
-    }
-    return out.join("\n")
-  }
+  // Conversions are asynchronous, so a note that arrives while an earlier one
+  // is still being converted must win: only the newest token may assign.
+  property int noteToken: 0
 
   function setNote(t, body) {
-    body = normalise(body)
     clearPending()
+    var token = ++root.noteToken
     settingText = true
     titleField.text = t
     titleField.cursorPosition = 0
-    area.text = body
+    settingText = false
+    if (root.plain || !root.markdown || !body) { showBody(body || "", token); return }
+    root.markdown.toHtml(body, function(html) { root.showBody(html, token) })
+  }
+
+  function showBody(document, token) {
+    if (token !== root.noteToken) return          // a newer note won the race
+    settingText = true
+    area.text = document
     settingText = false
     area.cursorPosition = area.length
   }
 
-  // Highlight has no Markdown of its own and the editor cannot keep a
-  // background colour through a save, so it is written as ==text==, the
-  // common extension; providers turn it into their real highlight.
-  function wrapSelection(marker) {
-    var s = area.selectionStart, e = area.selectionEnd
-    if (s === e) return
-    var inner = area.getText(s, e)
-    area.remove(s, e)
-    area.insert(s, marker + inner + marker)
-    area.select(s, s + inner.length + marker.length * 2)
+  // Highlight is a real background colour in the document, and ==text== in the
+  // note: Markdown has no highlight of its own, and the providers already
+  // translate the markers into each backend's own.
+  function highlightSelection() {
+    if (root.readOnly || root.plain) return
+    var from = Math.min(area.selectionStart, area.selectionEnd)
+    var to = Math.max(area.selectionStart, area.selectionEnd)
+    if (from === to) return
+    var fragment = inlineFragment(area.getFormattedText(from, to))
+    var lit = fragment.indexOf("background-color") >= 0
+    area.remove(from, to)
+    area.insert(from, lit ? unhighlight(fragment)
+                          : '<span style="background-color:' + root.highlightColour
+                            + "; color:" + root.highlightInk + ';">' + fragment + "</span>")
+    area.select(from, area.cursorPosition)
     root.edited()
   }
+
+  // Qt serialises any range as a whole document whose body holds one
+  // paragraph — the block the selection sits in. Inside that paragraph is the
+  // inline HTML we actually selected.
+  function inlineFragment(html) {
+    var body = (html.split("<body>")[1] || "").split("</body>")[0]
+    return body.replace(/<!--(Start|End)Fragment-->/g, "").trim()
+               .replace(/^<p[^>]*>/, "").replace(/<\/p>\s*$/, "")
+  }
+
+  function unhighlight(fragment) {
+    return fragment.replace(/background-color\s*:[^;"]*;?/g, "")
+  }
   function focusEditor() { area.forceActiveFocus() }
+
+  // ── pasting ─────────────────────────────────────────────────────────
+  // Ctrl+V is ours only long enough to ask what the clipboard holds: a
+  // picture is inserted as an image, anything else is the editor's own paste.
+  function paste() {
+    if (root.readOnly) return
+    if (!root.clipboard || root.plain) { area.paste(); return }
+    if (!root.canImages) {
+      // Say so rather than swallowing the paste: a picture that lands nowhere
+      // looks like the app is broken.
+      root.clipboard.hasImage(function(isImage) {
+        if (isImage) root.statusRequestedText = "This notebook cannot store images"
+        else area.paste()
+      })
+      return
+    }
+    root.clipboard.takeImage(function(image) {
+      if (image) root.insertImage(image.path)
+      else area.paste()
+    })
+  }
+
+  function insertImage(path) {
+    if (root.readOnly || root.plain) return
+    var at = area.cursorPosition
+    // On its own line: a picture is a block of its own in every backend, and
+    // the save can only leave it untouched if the text is not wrapped around
+    // it (providers/onenote/onenote_md.py).
+    area.insert(at, '<p><img src="file://' + encodeURI(path).replace(/"/g, "%22") + '" alt="" /></p>')
+    root.edited()
+    root.statusRequestedText = "Image pasted"
+  }
   function undo() { if (area.canUndo) { area.undo(); root.edited() } }
   function redo() { if (area.canRedo) { area.redo(); root.edited() } }
 
@@ -124,49 +189,75 @@ Item {
 
   readonly property string sep: "\u2029"
   // ── editing tools ───────────────────────────────────────────────────
-  // Block styles and snippets are Markdown, which QML cannot set on the
-  // document directly. So a tool reads the note's Markdown with
-  // getFormattedText(), edits the lines, and writes it back with
-  // remove()+insert(): both are ordinary edits, so undo keeps working
-  // (assigning `text` would wipe the undo stack).
-  function docMarkdown() { return area.getFormattedText(0, area.length).replace(/\n+$/, "") }
-
-  // Which Markdown line the caret sits on. The Markdown of everything before
-  // the caret ends on that line (trailing blank lines belong to the next).
-  function caretLine() { return lineAt(area.cursorPosition) }
-  function lineAt(pos) {
-    return area.getFormattedText(0, Math.max(0, pos)).replace(/\n+$/, "").split("\n").length - 1
+  // A block style is not something QML can set on the document, and it is one
+  // line of Markdown — so every block tool takes the same trip: read the
+  // document as Markdown, rewrite the lines it owns, put it back. The
+  // conversion answers with a map from Markdown line to document block, which
+  // is how the caret finds its line.
+  //
+  // Putting it back is remove()+insert(), never `text = …`: both are ordinary
+  // edits, so ctrl+z still walks back through toolbar actions.
+  function withMarkdown(edit) {
+    if (root.readOnly || root.plain || !root.markdown) return
+    root.markdown.toMarkdown(documentHtml(), function(md, map) {
+      if (!md && area.length > 0) return          // a failed conversion changes nothing
+      edit(md.replace(/\n+$/, "").split("\n"), map)
+    })
   }
 
-  // caret < 0 means "the end of the note".
+  // The document block a position sits in. Qt separates blocks with U+2029
+  // and starts every table cell with U+FDD0 (docs/engine-notes.md).
+  function blockAt(pos) {
+    var text = area.getText(0, Math.max(0, pos)), count = 0
+    for (var i = 0; i < text.length; i++) {
+      var code = text.charCodeAt(i)
+      if (code === 0x2029 || code === 0xFDD0) count++
+    }
+    return count
+  }
+
+  // Which Markdown line that block is written on.
+  function lineOfBlock(map, block) {
+    var blocks = map.blocks || []
+    for (var i = 0; i < blocks.length; i++) if (blocks[i] === block) return i
+    return Math.max(0, blocks.length - 1)
+  }
+  function lineAt(map, pos) { return lineOfBlock(map, blockAt(pos)) }
+  function caretLine(map) { return lineAt(map, area.cursorPosition) }
+
+  // caret < 0 means "the end of the note". Block styles never change the
+  // document's text — a heading is a font size, not a `#` — so the caret's
+  // position survives the round trip unchanged.
   function replaceDoc(md, caret) {
     var pos = caret === undefined ? area.cursorPosition : (caret < 0 ? Number.MAX_VALUE : caret)
-    area.remove(0, area.length)
-    area.insert(0, md)
-    area.cursorPosition = Math.max(0, Math.min(pos, area.length))
-    root.edited()
+    root.markdown.toHtml(md, function(html) {
+      area.remove(0, area.length)
+      area.insert(0, html)
+      area.cursorPosition = Math.max(0, Math.min(pos, area.length))
+      root.edited()
+      focusEditor()
+    })
   }
 
   function setBlockStyle(style) {
-    if (root.readOnly || root.plain) return
-    var lines = docMarkdown().split("\n")
-    var first = lineAt(Math.min(area.selectionStart, area.selectionEnd))
-    var last = lineAt(Math.max(area.selectionStart, area.selectionEnd))
-    var caret = area.cursorPosition, changed = false, inFence = false
-    for (var i = 0; i < lines.length; i++) {
-      if (/^\s*```/.test(lines[i])) { inFence = !inFence; continue }
-      if (i < first || i > last) continue
-      // table rows and fenced code are never restyled: it would corrupt them
-      if (inFence || /^\s*\|/.test(lines[i])) continue
-      var next = restyleLine(lines[i], style)
-      if (next !== lines[i]) { lines[i] = next; changed = true }
-    }
-    if (!changed) {
-      if (style === "indent") root.statusRequestedText = "A nested list item needs one above it"
-      return
-    }
-    replaceDoc(lines.join("\n"), caret)
-    focusEditor()
+    withMarkdown(function(lines, map) {
+      var first = lineAt(map, Math.min(area.selectionStart, area.selectionEnd))
+      var last = lineAt(map, Math.max(area.selectionStart, area.selectionEnd))
+      var caret = area.cursorPosition, changed = false, inFence = false
+      for (var i = 0; i < lines.length; i++) {
+        if (/^\s*```/.test(lines[i])) { inFence = !inFence; continue }
+        if (i < first || i > last) continue
+        // table rows and fenced code are never restyled: it would corrupt them
+        if (inFence || /^\s*\|/.test(lines[i])) continue
+        var next = restyleLine(lines[i], style)
+        if (next !== lines[i]) { lines[i] = next; changed = true }
+      }
+      if (!changed) {
+        if (style === "indent") root.statusRequestedText = "A nested list item needs one above it"
+        return
+      }
+      replaceDoc(lines.join("\n"), caret)
+    })
   }
 
 
@@ -237,24 +328,14 @@ Item {
   }
 
   function insertSnippet(md) {
-    if (root.readOnly || root.plain) return
-    var lines = docMarkdown().split("\n")
-    var at = blockEndLine(lines, Math.min(caretLine(), lines.length - 1))
-    var rest = lines.slice(at + 1)
-    var atEnd = rest.join("").trim() === ""
-    var out = lines.slice(0, at + 1)
-    // Qt's writer corrupts a table or code block that directly follows a
-    // quote; an empty-line paragraph in between avoids it.
-    if (/^\s*>/.test(lines[at])) { out.push(""); out.push("\u00a0") }
-    out.push("")
-    out = out.concat(md.split("\n"), [""])
-    // A block at the very end leaves the caret inside it, and Qt then repeats
-    // that block on every Enter (a rule breeds rules). Give it a paragraph to
-    // land in instead.
-    if (atEnd) out.push("\u00a0")
-    else out = out.concat(rest)
-    replaceDoc(out.join("\n"), atEnd ? -1 : area.cursorPosition)
-    focusEditor()
+    withMarkdown(function(lines, map) {
+      var at = blockEndLine(lines, Math.min(caretLine(map), lines.length - 1))
+      var rest = lines.slice(at + 1)
+      var atEnd = rest.join("").trim() === ""
+      var out = lines.slice(0, at + 1).concat([""], md.split("\n"), [""])
+      if (!atEnd) out = out.concat(rest)
+      replaceDoc(out.join("\n"), atEnd ? -1 : area.cursorPosition)
+    })
   }
 
   // ── tables ──────────────────────────────────────────────────────────
@@ -279,10 +360,12 @@ Item {
   }
 
   function tableOp(op) {
-    if (root.readOnly || root.plain) return
     if (!root.inTable) { root.statusRequestedText = "Put the cursor in a table cell first"; return }
-    var lines = docMarkdown().split("\n")
-    var at = Math.min(caretLine(), lines.length - 1)
+    withMarkdown(function(lines, map) { root.rewriteTable(op, lines, map) })
+  }
+
+  function rewriteTable(op, lines, map) {
+    var at = Math.min(caretLine(map), lines.length - 1)
     while (at >= 0 && !/^\s*\|/.test(lines[at])) at--
     if (at < 0) return
     var first = at, last = at
@@ -309,7 +392,6 @@ Item {
     })
     var out = lines.slice(0, first).concat(rebuilt, lines.slice(last + 1))
     replaceDoc(out.join("\n"), area.cursorPosition)
-    focusEditor()
   }
 
 
@@ -336,7 +418,7 @@ Item {
     if (!url) { focusEditor(); return }
     var s = area.selectionStart, e = area.selectionEnd
     if (s !== e) area.remove(Math.min(s, e), Math.max(s, e))
-    area.insert(Math.min(s, e), "[" + text.replace(/\]/g, "") + "](" + url.replace(/\)/g, "%29") + ")")
+    area.insert(Math.min(s, e), '<a href="' + url.replace(/"/g, "%22") + '">' + text.replace(/</g, "&lt;") + "</a>")
     focusEditor()
     root.edited()
   }
@@ -345,7 +427,7 @@ Item {
     if (!toolEnabled(["addRow", "addCol", "delRow", "delCol"].indexOf(id) >= 0 ? "table" : id)) return
     switch (id) {
       case "bold": case "italic": case "underline": case "strikeout": toggleFormat(id); break
-      case "highlight": wrapSelection("=="); break
+      case "highlight": highlightSelection(); break
       case "code": toggleCode(); break
       case "h1": case "h2": case "h3": case "p": case "ul": case "ol": case "todo": case "quote": case "indent": case "outdent": setBlockStyle(id); break
       case "table": insertSnippet("| Column 1 | Column 2 |\n|---|---|\n|  |  |"); break
@@ -663,9 +745,10 @@ Item {
             color: root.foreground
             selectionColor: Style.selectionFill
             selectedTextColor: root.foreground
-            // Markdown in, Markdown out: headings, bold, italic, lists render
-            // live, and `text` serialises back to Markdown for the .md file.
-            textFormat: root.plain ? TextEdit.PlainText : TextEdit.MarkdownText
+            // Rich text in, rich text out. Markdown cannot hold a highlight,
+            // an empty paragraph or an indent, so the document keeps HTML and
+            // services/markdown converts at both ends.
+            textFormat: root.plain ? TextEdit.PlainText : TextEdit.RichText
             font.family: root.bodyFontFamily
             font.pixelSize: Style.font.subtitle
             wrapMode: TextEdit.Wrap
@@ -691,7 +774,7 @@ Item {
             Text {
               anchors.fill: parent
               anchors.leftMargin: Style.spacing.xs
-              visible: !area.text && !!root.placeholder
+              visible: area.length === 0 && !!root.placeholder
               text: root.placeholder
               color: root.foreground
               opacity: 0.45

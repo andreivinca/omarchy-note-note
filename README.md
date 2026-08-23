@@ -123,10 +123,14 @@ formatting: checkboxes (OneNote to-do tags — click to toggle), bullet and
 numbered lists, headings, bold/italic/underline/strike-through, links, tables,
 and OneNote note tags as emoji prefixes (⭐ important, ❓ question, 💡 idea…).
 Saving converts the Markdown back to OneNote HTML with the same elements, so
-checking a box in Note Note checks it in OneNote. Pages containing images or
-attachments are shown (images included) but open read-only ("has images —
-edit in OneNote") so a save can never discard them. OneNote colours, fonts and
-ink are not represented; links use the editor's default colour. The tree is cached in
+checking a box in Note Note checks it in OneNote. Pages with images are
+editable: the text around a picture is saved without touching the picture
+itself, `Ctrl+V` pastes an image from the clipboard straight into the page
+(uploaded on the next autosave), and deleting the line deletes the image.
+Pages whose images could not all be fetched (offline, throttled) and pages
+with attachments still open read-only so a save can never discard anything.
+OneNote colours, fonts and ink are not represented; links use the editor's
+default colour. The tree is cached in
 `~/.cache/omarchy/note-note-onenote.json` and refreshed in the background (a
 full refresh takes ~30 s on an account with dozens of sections).
 

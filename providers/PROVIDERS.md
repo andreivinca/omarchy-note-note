@@ -18,6 +18,7 @@ is enough). The host instantiates each with `host` and `services` set.
 | `canDelete`         | bool   | `remove()` is supported |
 | `canReorder`        | bool   | rows may be dragged within a section; `setOrder()` persists |
 | `canCreateSection`  | bool   | `createSection()` is supported (the "New notebook…" row) |
+| `canImages`         | bool   | a pasted picture can be stored: the editor writes it into the note as `![](file:///…)` and `save()` must upload it. False (the default) makes ctrl+v say so rather than swallow the paste |
 | `tools`             | list   | optional: formatting-toolbar tool ids the backend can store — `bold italic underline strikeout highlight code h1 h2 h3 p ul ol todo indent outdent quote codeblock table rule link`; omitted = all (when `markdown`), `[]` = no toolbar |
 | `microsoftScopes`   | list   | Graph scopes the provider asks for when it creates its own Microsoft account |
 | `sections`          | list   | `[{ key, name, collapsedByDefault, rows, count? }]` — `count` overrides the heading's note count |
@@ -36,6 +37,13 @@ is open (and it has no unsaved edits), the host reloads it.
 - `refresh()` — (re)load; emit `changed` when `sections` are ready.
 - `load(path, cb)` → `cb({ title, body, editable, error })`
 - `save(path, title, body, cb)` → `cb({ error, warning })`
+  A `body` from a provider with `canImages` may contain `![alt](file:///…)`
+  pointing either at a file the provider itself cached on `load()` (the same
+  picture, already on the backend) or at a freshly pasted file staged in
+  `~/.cache/omarchy/note-note-paste/` (a picture to upload). Telling the two
+  apart is the provider's job — see `providers/onenote/onenote.py`, which
+  keeps an index of what it cached and hands unchanged pictures back to the
+  backend by reference rather than uploading them again.
 - `create(target, cb)` → `cb({ path, error })`
 - `remove(path, cb)` → `cb({ error })`
 - `createSection(name, cb)` → `cb({ key, error })`

@@ -18,6 +18,9 @@ Item {
   readonly property bool canDelete: true
   readonly property bool canReorder: false
   readonly property bool canCreateSection: false
+  // Pages carry their images through an edit, and a pasted one is uploaded
+  // with the save (onenote.py).
+  readonly property bool canImages: true
   readonly property var microsoftScopes: ["Notes.ReadWrite"]
 
   property var host: null

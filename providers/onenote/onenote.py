@@ -11,7 +11,7 @@
   onenote.py create-section <notebookId> <file|->  -> {"ok":true,"section":{...}}
 """
 import html as _html
-import json, os, re, sys, time, urllib.parse, urllib.request, urllib.error
+import json, os, re, sys, time, urllib.parse, urllib.request, urllib.error, uuid
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(HERE, "..", "..", "services", "microsoft"))
@@ -27,6 +27,12 @@ MAX_PAGES = 3000
 MAX_LIST_BODY = 4 * 1024 * 1024   # one page of a listing
 MAX_PAGE_HTML = 4 * 1024 * 1024   # a page's content
 MAX_IMAGE = 20 * 1024 * 1024      # one cached image
+# What may go *up*. Graph rejects a request over 4 MB, and counts every part
+# against it, so a save carries a few images at most and says so when it
+# cannot: refusing is the only alternative to dropping someone's picture.
+MAX_UPLOAD = 3 * 1024 * 1024      # one pasted image
+MAX_UPLOAD_TOTAL = 3.5 * 1024 * 1024
+MAX_NEW_IMAGES = 4
 
 
 # ---------------------------------------------------------------- OneNote
@@ -65,8 +71,10 @@ def graph_raw(method, path, data=None, content_type=None, extra_headers=None, ma
 def graph_err(res, status):
     err = res.get("error") if isinstance(res, dict) else None
     if isinstance(err, dict):
-        return err.get("message", "Graph error %s" % status)
-    return str(err or res or status)
+        # Never pass an empty message through: the autosave retries on the
+        # status code in the text, and "" retries nothing and explains nothing.
+        return err.get("message") or "Graph error %s" % status
+    return str(err or res or "") or "Graph error %s" % status
 
 
 def cmd_onenote_list(cached, max_age=0):
@@ -127,8 +135,6 @@ def cmd_onenote_list(cached, max_age=0):
 # anywhere else. Anything else is shown as text, not loaded.
 IMAGE_HOST = "graph.microsoft.com"
 IMAGE_PATH_RE = re.compile(r"^/v1\.0/(?:me|users\('[^']*'\))/onenote/resources/[A-Za-z0-9!._-]+/\$value$")
-MAX_IMAGE_WIDTH = 4000
-MAGICK_TIMEOUT = 20
 # One page's images share a wall-clock budget and a count; the cache as a
 # whole is bounded too, so a page full of unique images can neither hold a
 # fetch open nor fill the disk.
@@ -172,11 +178,85 @@ def read_with_deadline(resp, max_bytes, deadline):
         chunks.append(chunk)
 
 
+# A cached image on its own says nothing about where it came from, and a save
+# has to hand OneNote the very same resource back. The index remembers that,
+# and is written by the page load that filled the cache.
+IMAGE_INDEX = os.path.join(ONENOTE_IMG_DIR, "index.json")
+
+
+def remember_images(page_id, images, complete):
+    """What the load saw: where each image came from, and whether it got them
+    all. A page whose images could not all be fetched (a throttled account, a
+    dropped connection) must not be written back — the note in the editor is
+    missing a picture, and saving it would take that picture off the page."""
+    index = load_json(IMAGE_INDEX, {})
+    files = index.get("files", {})
+    for img in images:
+        name = os.path.basename(img.get("local", "").replace("file://", ""))
+        if name:
+            files[name] = {"src": img.get("src", ""), "width": img.get("width", 0)}
+    # Entries whose file is gone are dead weight; the cache prunes itself.
+    files = {k: v for k, v in files.items() if os.path.exists(os.path.join(ONENOTE_IMG_DIR, k))}
+    pages = index.get("pages", {})
+    pages.pop(page_id, None)
+    pages[page_id] = {"complete": bool(complete)}
+    while len(pages) > 500:                      # oldest first; bound the file
+        pages.pop(next(iter(pages)))
+    save_private(IMAGE_INDEX, {"files": files, "pages": pages})
+
+
+def images_complete(page_id):
+    """Did the last load of this page hold on to every image it has?"""
+    page = load_json(IMAGE_INDEX, {}).get("pages", {}).get(page_id)
+    return page is None or page.get("complete", True)
+
+
+def file_path_of(url):
+    return urllib.parse.unquote(url[len("file://"):])
+
+
+def known_image(url):
+    """A file:// url from the note -> the OneNote resource it came from."""
+    if not url.startswith("file://"):
+        return None
+    path = file_path_of(url)
+    index = load_json(IMAGE_INDEX, {})
+    if os.path.dirname(path) == ONENOTE_IMG_DIR:
+        return index.get("files", {}).get(os.path.basename(path))
+    # A paste the last save already uploaded: the editor still shows the
+    # staged file until the page is reloaded, and without this the same bytes
+    # would go up again on every autosave in between.
+    return index.get("staged", {}).get(path)
+
+
+def remember_staged(staged, structure):
+    """After a save that uploaded parts: which resource each uploaded file
+    became, read from the page itself — new images appear in document order,
+    the same order the parts were staged in. Both maps are refreshed: a
+    cached page image re-uploaded by the fallback gets a new resource, and a
+    pasted file must not be uploaded again by the next autosave."""
+    index = load_json(IMAGE_INDEX, {})
+    known = {entry.get("src", "") for entry in index.get("files", {}).values()}
+    known.update(entry.get("src", "") for entry in index.get("staged", {}).values())
+    new_srcs = [el["src"] for el in structure if el["kind"] == "image" and el.get("src", "") not in known]
+    files, pastes = index.get("files", {}), index.get("staged", {})
+    for (path, width), src in zip(staged, new_srcs):
+        if os.path.dirname(path) == ONENOTE_IMG_DIR:
+            files[os.path.basename(path)] = {"src": src, "width": width}
+        else:
+            pastes[path] = {"src": src, "width": width}
+    index["files"] = files
+    index["staged"] = {p: e for p, e in pastes.items() if os.path.exists(p)}
+    save_private(IMAGE_INDEX, index)
+
+
 def prune_image_cache():
     """Keep the image cache under its file-count and byte ceilings, oldest first."""
     try:
         entries = []
         for name in os.listdir(ONENOTE_IMG_DIR):
+            if name == "index.json":             # bookkeeping, not a cached image
+                continue
             path = os.path.join(ONENOTE_IMG_DIR, name)
             try:
                 st = os.stat(path)
@@ -198,50 +278,40 @@ def prune_image_cache():
 
 def cached_image(src, width=0):
     """A page image, fetched through Graph into the cache; returns a file://
-    URL the editor can show, or None when the source is not Graph's resource
-    endpoint (then the page shows the image's alt text instead)."""
-    import hashlib, shutil, subprocess, tempfile
+    URL, or None when the source is not Graph's resource endpoint (then the
+    page shows the image's alt text instead).
+
+    The bytes are kept exactly as Graph served them — the editor caps its own
+    display width, and a save may upload these bytes back, so nothing here may
+    rescale or re-encode. `width` is only recorded (via the caller) so a save
+    can write the same display width back into the page.
+    """
+    import hashlib, tempfile
     if not image_allowed(src):
         return None
     if _image_budget[1] >= MAX_PAGE_IMAGES or (_image_budget[0] and time.monotonic() > _image_budget[0]):
         return None                      # the page's image budget is spent
-    try:
-        width = int(width)
-    except (TypeError, ValueError):
-        width = 0
-    width = max(0, min(width, MAX_IMAGE_WIDTH))
     os.makedirs(ONENOTE_IMG_DIR, mode=0o700, exist_ok=True)
-    name = hashlib.sha1(("%s@%d" % (src, width)).encode()).hexdigest()
+    name = hashlib.sha1(src.encode()).hexdigest()
     path = os.path.join(ONENOTE_IMG_DIR, name)
-    if os.path.exists(path):
-        return "file://" + path
+    try:
+        if os.path.getsize(path) > 0:
+            return "file://" + path
+        os.remove(path)                  # a failed fetch left a stub
+    except OSError:
+        pass
     req = urllib.request.Request(src, headers={"Authorization": "Bearer " + access_token()})
     fd, tmp = tempfile.mkstemp(prefix=".", suffix=".tmp", dir=ONENOTE_IMG_DIR)   # fresh, 0600, never a symlink
     try:
         deadline = _image_budget[0] or (time.monotonic() + IMAGE_BUDGET_SECONDS)
         with _image_opener.open(req, timeout=20) as r, os.fdopen(fd, "wb") as f:
-            f.write(read_with_deadline(r, MAX_IMAGE, deadline))
+            data = read_with_deadline(r, MAX_IMAGE, deadline)
+            if not data:
+                # Graph serves a just-written resource as 200 with an empty
+                # body; caching that would poison the page for good.
+                raise OverflowError("empty image response")
+            f.write(data)
         _image_budget[1] += 1
-        magick = shutil.which("magick") or shutil.which("convert")
-        if width > 0 and magick:
-            # Bounded decode: memory/area/size limits and a timeout, so a crafted
-            # image cannot exhaust the machine or hang the provider. Only the
-            # first frame is read.
-            scaled = tmp + ".out"
-            try:
-                subprocess.run([magick, "-limit", "memory", "128MiB", "-limit", "map", "256MiB", "-limit", "area", "50MP",
-                                "-limit", "width", "16000", "-limit", "height", "16000", "-limit", "time", str(MAGICK_TIMEOUT),
-                                tmp + "[0]", "-resize", "%dx>" % width, "png:" + scaled],
-                               stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=MAGICK_TIMEOUT + 5)
-                if os.path.exists(scaled) and os.path.getsize(scaled) > 0:
-                    os.chmod(scaled, 0o600)          # ImageMagick created it with the umask
-                    os.replace(scaled, tmp)
-            except (subprocess.TimeoutExpired, OSError):
-                pass
-            try:
-                os.remove(scaled)
-            except OSError:
-                pass
         os.replace(tmp, path)
         prune_image_cache()
         return "file://" + path
@@ -283,22 +353,275 @@ def cmd_onenote_page(page_id):
         except ValueError:
             fail("Graph error %s" % status)
     r = onenote_md.html_to_markdown(html, cached_image)
+    remember_images(page_id, r["images"], r["editable"])
     out({"title": r["title"], "body": r["body"], "editable": r["editable"], "markdown": True})
+
+
+MIME_BY_SUFFIX = {".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg",
+                  ".gif": "image/gif", ".bmp": "image/bmp", ".tif": "image/tiff", ".tiff": "image/tiff"}
+
+
+class Uploads:
+    """The images a save has to carry, and the rules about how many.
+
+    An image already on the page is handed back by its own resource src and
+    costs nothing. A pasted one is read from disk into a part of the request —
+    which is where Graph's 4 MB limit bites, so the count and the bytes are
+    both bounded and an over-large picture is refused out loud.
+    """
+
+    def __init__(self, upload_known=False):
+        self.parts = []          # [(part name, mime, bytes)]
+        self.staged = []         # [(file path, width)] — same order as parts
+        self.bytes = 0
+        self.error = ""
+        # True: even an image already on the page is re-uploaded from its
+        # cached bytes — the fallback for pages that must be rebuilt whole,
+        # because handing an image back by src makes OneNote copy it, and a
+        # copy can come back empty (docs/engine-notes.md).
+        self.upload_known = upload_known
+
+    def ref(self, url, alt):
+        """(src for the <img>, width) — the resolver onenote_md renders with."""
+        known = known_image(url)
+        if known and not self.upload_known:
+            return known.get("src", ""), known.get("width", 0)
+        if known:
+            return self.part(file_path_of(url), "image/png", known.get("width", 0))
+        if url.startswith(("https://", "http://")):
+            return url, 0                       # a public image OneNote fetches itself
+        if not url.startswith("file://"):
+            return "", 0
+        path = file_path_of(url)
+        mime = MIME_BY_SUFFIX.get(os.path.splitext(path)[1].lower())
+        if not mime:
+            self.error = self.error or "only PNG, JPEG, GIF, BMP and TIFF images can be saved to OneNote"
+            return "", 0
+        return self.part(path, mime, 0)
+
+    def part(self, path, mime, width):
+        if len(self.parts) >= MAX_NEW_IMAGES:
+            self.error = self.error or "only %d images can go up in one save" % MAX_NEW_IMAGES
+            return "", 0
+        try:
+            with open(path, "rb") as f:
+                data = f.read(MAX_UPLOAD + 1)
+        except OSError:
+            data = b""
+        if not data:
+            self.error = self.error or "an image could not be read from disk — open the page again before saving"
+            return "", 0
+        if len(data) > MAX_UPLOAD:
+            self.error = self.error or "an image is larger than %d MB" % (MAX_UPLOAD // (1024 * 1024))
+            return "", 0
+        if self.bytes + len(data) > MAX_UPLOAD_TOTAL:
+            self.error = self.error or "the images in this save are larger than Graph accepts at once"
+            return "", 0
+        name = "nn-image-%d" % (len(self.parts) + 1)
+        self.parts.append((name, mime, data))
+        self.staged.append((path, width))
+        self.bytes += len(data)
+        return "name:" + name, width
+
+
+def multipart(commands, parts):
+    """The Commands part plus one part per image, as Graph wants them."""
+    boundary = "NoteNotePart" + uuid.uuid4().hex
+    body = [("--%s\r\nContent-Disposition: form-data; name=\"Commands\"\r\n"
+             "Content-Type: application/json\r\n\r\n%s\r\n" % (boundary, json.dumps(commands))).encode()]
+    for name, mime, data in parts:
+        body.append(("--%s\r\nContent-Disposition: form-data; name=\"%s\"\r\n"
+                     "Content-Type: %s\r\n\r\n" % (boundary, name, mime)).encode())
+        body.append(data + b"\r\n")
+    body.append(("--%s--\r\n" % boundary).encode())
+    return "multipart/form-data; boundary=" + boundary, b"".join(body)
+
+
+def patch_page(url, commands, parts):
+    if parts:
+        content_type, body = multipart(commands, parts)
+    else:
+        content_type, body = "application/json", json.dumps(commands).encode()
+    return graph_raw("PATCH", url, body, content_type)
+
+
+def wrap_runs(runs):
+    """Runs -> a page body: text in divs a later save can find again, images
+    beside them, never inside. Every text run carries a data-id so the next
+    save can look up the generated id it needs to replace it."""
+    out = []
+    for i, run in enumerate(runs):
+        if run["kind"] == "image":
+            out.append(run["html"])
+        else:
+            out.append('<div data-id="%s">%s</div>' % (onenote_md.TEXT_RUN_ID % i, run["html"]))
+    return "".join(out) or "<div><p></p></div>"
+
+
+# ---- the surgical save ------------------------------------------------
+#
+# OneNote copies an image every time it is handed back by its own src — and
+# the copy of a resource it has not materialised yet comes back empty forever
+# (docs/engine-notes.md). So a save may NEVER send an unchanged image, in any
+# form. Instead the page is transformed in place: text runs are replaced where
+# they stand, a deleted image becomes an empty div (which OneNote drops), and
+# a pasted one is uploaded as a part of the same request. An image that did
+# not change is not mentioned by any command at all.
+
+EMPTY_DIV = "<div></div>"
+
+
+def plan_commands(runs, structure):
+    """The PATCH commands that turn the page into the note, or None when the
+    page's shape rules the surgical path out (then the caller decides)."""
+    for element in structure:
+        # A paragraph sitting directly in the outer div (a page written by the
+        # OneNote apps) cannot be replaced — only whole divs can.
+        if element["kind"] == "text" and not element.get("id", "").startswith("div:"):
+            return None
+    kept = [run["ref"] for run in runs if run["kind"] == "image" and not run["ref"].startswith("name:")]
+    anchors = _anchor_indices(kept, structure)
+    if anchors is None:
+        return None                      # an image moved, or the page changed under us
+
+    commands = []
+    naming = _RunNames()
+    bounds = [-1] + anchors + [len(structure)]
+    note_segments = _note_segments(runs)
+    for k in range(len(kept) + 1):
+        page_gap = structure[bounds[k] + 1:bounds[k + 1]]
+        content = "".join(_gap_html(run, naming) for run in note_segments[k])
+        slots = [el for el in page_gap if el["kind"] == "text"]
+        spares = [el for el in page_gap if el["kind"] == "image"]   # deleted images
+        if content:
+            if slots:
+                target = slots.pop(0)["id"]
+            elif spares:
+                target = spares.pop(0)["id"]
+            else:
+                commands.append(_insert_command(content, structure, bounds, k))
+                target = None
+            if target:
+                commands.append({"target": target, "action": "replace", "content": content})
+        for el in slots + spares:
+            commands.append({"target": el["id"], "action": "replace", "content": EMPTY_DIV})
+    return [c for c in commands if c]
+
+
+def _anchor_indices(kept, structure):
+    """Where each kept image sits on the page — in order, each used once."""
+    srcs = [el.get("src", "") for el in structure]
+    out, position = [], 0
+    for ref in kept:
+        while position < len(structure) and not (structure[position]["kind"] == "image" and srcs[position] == ref):
+            position += 1
+        if position >= len(structure):
+            return None
+        out.append(position)
+        position += 1
+    return out
+
+
+def _note_segments(runs):
+    """The note's runs, split at its kept images: segment k is what belongs
+    between page anchors k-1 and k."""
+    segments, current = [], []
+    for run in runs:
+        if run["kind"] == "image" and not run["ref"].startswith("name:"):
+            segments.append(current)
+            current = []
+        else:
+            current.append(run)
+    segments.append(current)
+    return segments
+
+
+class _RunNames:
+    """Fresh, unique data-ids for the text runs a save writes."""
+
+    def __init__(self):
+        self.next = int(time.time()) % 1000000 * 100
+
+    def take(self):
+        self.next += 1
+        return onenote_md.TEXT_RUN_ID % self.next
+
+
+def _gap_html(run, naming):
+    if run["kind"] == "image":
+        return run["html"]
+    return '<div data-id="%s">%s</div>' % (naming.take(), run["html"])
+
+
+def _insert_command(content, structure, bounds, k):
+    """New content in a gap with nothing to replace: insert it beside an
+    anchor image, or append to the body of a page with no anchors at all."""
+    if bounds[k] >= 0:
+        return {"target": structure[bounds[k]]["id"], "action": "insert", "position": "after", "content": content}
+    if bounds[k + 1] < len(structure):
+        return {"target": structure[bounds[k + 1]]["id"], "action": "insert", "position": "before", "content": content}
+    return {"target": "body", "action": "append", "content": content}
+
+
+def upload_everything(body_md):
+    """The safe fallback for a page whose shape the surgical path cannot
+    handle: rewrite the whole body with every image uploaded from the local
+    cache — bytes we hold, so nothing depends on OneNote copying a resource.
+    Fails loudly when the images will not fit in one request."""
+    uploads = Uploads(upload_known=True)
+    runs = onenote_md.markdown_to_runs(body_md, uploads.ref)
+    if uploads.error:
+        fail(uploads.error + " — this page cannot be restructured in one save; edit it in OneNote")
+    return [{"target": "body", "action": "replace", "content": "<div>%s</div>" % wrap_runs(runs)}], uploads
 
 
 def cmd_onenote_update(page_id, path):
     payload = read_payload(path)
     if payload is None:
         fail("cannot read payload")
+    if not images_complete(page_id):
+        fail("an image on this page could not be loaded — open the page again before saving")
     url = "/me/onenote/pages/" + urllib.parse.quote(page_id, safe="") + "/content"
-    ops = [{"target": "body", "action": "replace",
-            "content": "<div>%s</div>" % onenote_md.markdown_to_onenote_html(payload.get("body", ""))}]
-    status, res = graph_raw("PATCH", url, json.dumps(ops).encode(), "application/json")
-    if status not in (200, 204):
-        try:
-            fail(graph_err(json.loads(res), status))
-        except ValueError:
-            fail("Graph error %s" % status)
+
+    uploads = Uploads()
+    runs = onenote_md.markdown_to_runs(payload.get("body", ""), uploads.ref)
+    if uploads.error:
+        fail(uploads.error)
+
+    if not any(r["kind"] == "image" for r in runs):
+        # No images to protect: one plain body replace, as it always was.
+        commands, parts = [{"target": "body", "action": "replace",
+                            "content": "<div>%s</div>" % wrap_runs(runs)}], uploads.parts
+    else:
+        # Only the generated ids can target a replace, and OneNote renews
+        # them on every write — so each save starts by reading the page back.
+        status, current = graph_raw("GET", url + "?includeIDs=true")
+        if status != 200:
+            try:
+                fail(graph_err(json.loads(current), status))
+            except ValueError:
+                fail("Graph error %s" % status)
+        commands = plan_commands(runs, onenote_md.page_structure(current))
+        if commands is None:
+            # A page shaped by the OneNote apps: rebuilt once, with its images
+            # uploaded from our own bytes, and surgical from then on.
+            commands, uploads = upload_everything(payload.get("body", ""))
+        parts = uploads.parts
+
+    if commands:
+        status, res = patch_page(url, commands, parts)
+        if status not in (200, 204):
+            try:
+                fail(graph_err(json.loads(res), status))
+            except ValueError:
+                fail("Graph error %s" % status)
+        if uploads.staged:
+            # One extra read so the next autosave knows these pastes are
+            # already on the page and does not upload them again.
+            status, current = graph_raw("GET", url + "?includeIDs=true")
+            if status == 200:
+                remember_staged(uploads.staged, onenote_md.page_structure(current))
+
     # The title goes in its own request, and only when it changed: on some
     # (older) pages Graph answers a title replace with a 500 "Transient
     # error" every time, and bundling it would sink the body save too.
@@ -317,10 +640,29 @@ def cmd_onenote_update(page_id, path):
 def cmd_onenote_create(section_id, path):
     payload = read_payload(path) or {}
     title = _html.escape(payload.get("title", "") or "")
-    html = "<!DOCTYPE html><html><head><title>%s</title></head><body>%s</body></html>" % (
-        title, onenote_md.markdown_to_onenote_html(payload.get("body", "")))
+    # A brand-new page has no images of its own to keep, so everything the
+    # note shows goes up as bytes — never as a reference OneNote would copy.
+    uploads = Uploads(upload_known=True)
+    runs = onenote_md.markdown_to_runs(payload.get("body", ""), uploads.ref)
+    if uploads.error:
+        fail(uploads.error)
+    html = "<!DOCTYPE html><html><head><title>%s</title></head><body>%s</body></html>" % (title, wrap_runs(runs))
+    if uploads.parts:
+        # A page created with an image is a multipart POST: the HTML is the
+        # "Presentation" part and each image is one of its own.
+        boundary = "NoteNotePart" + uuid.uuid4().hex
+        body = [("--%s\r\nContent-Disposition: form-data; name=\"Presentation\"\r\n"
+                 "Content-Type: text/html\r\n\r\n%s\r\n" % (boundary, html)).encode()]
+        for name, mime, data in uploads.parts:
+            body.append(("--%s\r\nContent-Disposition: form-data; name=\"%s\"\r\n"
+                         "Content-Type: %s\r\n\r\n" % (boundary, name, mime)).encode())
+            body.append(data + b"\r\n")
+        body.append(("--%s--\r\n" % boundary).encode())
+        content_type, payload_bytes = "multipart/form-data; boundary=" + boundary, b"".join(body)
+    else:
+        content_type, payload_bytes = "application/xhtml+xml", html.encode()
     status, res = graph_raw("POST", "/me/onenote/sections/" + urllib.parse.quote(section_id, safe="") + "/pages",
-                            html.encode(), "application/xhtml+xml")
+                            payload_bytes, content_type)
     if status not in (200, 201):
         try:
             fail(graph_err(json.loads(res), status))

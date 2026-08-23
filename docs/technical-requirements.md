@@ -7,10 +7,11 @@
 | Host | `omarchy-shell` — one long-running [Quickshell](https://quickshell.org) (Qt 6 / QML) process; the plugin is loaded into it |
 | Language | QML + JavaScript (ES5-era engine, see [engine-notes](engine-notes.md)), plus Python 3 for backends |
 | Dependencies | **standard library only**; no `pip`, no system packages. Markdown parsing uses a *vendored* mistune (BSD-3, `services/markdown/mistune/`) |
-| External binaries | `python3`, `sh`, `head`, `stat`, `awk`, `sort`, `rm`, `mkdir`, `inotifywait`, `wl-copy`, `xdg-open`; ImageMagick optional |
+| External binaries | `python3`, `sh`, `head`, `stat`, `awk`, `sort`, `rm`, `mkdir`, `inotifywait`, `wl-copy`, `wl-paste`, `xdg-open`; ImageMagick optional |
 | Privileges | none — no sudo, no pkexec, no services, no config files of other apps |
 | Sandbox | none: an Omarchy plugin runs unsandboxed inside the shell. Behave accordingly |
 | Reloading | QML changes need `omarchy-restart-shell`; Python changes take effect on the next call |
+| Editor format | the document is **rich text** (HTML); notes and the provider contract are **Markdown**, converted at both ends by `services/markdown/qthtml/` ([decisions](decisions.md)) |
 
 ## Layout
 
@@ -24,8 +25,11 @@ providers/local/            Markdown folders in ~/Notes
 providers/sticky/           Microsoft Sticky Notes  (sticky.py)
 providers/onenote/          OneNote                 (onenote.py, onenote_md.py)
 providers/notion/           Notion                  (notion.py, notion_md.py)
+services/clipboard/         the clipboard's image    (Clipboard.qml, clipboard.py)
 services/microsoft/         shared Graph sign-in    (Account.qml, msgraph.py)
 services/markdown/          vendored mistune + parse.py (one Markdown parser)
+                            qthtml/ — Markdown <-> the editor's rich text, and its selftest
+                            Markdown.qml — the QML side of that conversion
 examples/hello/             minimal external provider, incl. its own setup screen
 docs/                       these documents
 ```

@@ -62,7 +62,29 @@ Page content is attacker-controlled. An `<img src>` inside a OneNote page is
   302 cannot move a bearer token to another origin.
 - Anything not allowed is never requested; it is rendered as text.
 
-### 5. Bound time and disk, not only single responses
+### 5. What goes *out* is bounded too
+
+Pasting a picture sends bytes to someone else's service, so the same care
+applies in reverse (`services/clipboard/clipboard.py`,
+`providers/onenote/onenote.py`).
+
+- The clipboard is read with a ceiling, into a file opened `O_EXCL` with mode
+  `0600` under the user's own cache — never a predictable shared path (rule 2).
+- Only real image types are accepted, by an allow-list of media types, and the
+  suffix written is ours rather than anything the clipboard suggested.
+- An upload is capped per image, per request and in count. Over the cap the
+  save **fails loudly**; it never drops the picture quietly.
+- A page whose images could not all be fetched refuses to save at all, so a
+  half-loaded note can never overwrite a full one.
+- An unchanged image is **never sent back in any form** — not even as its own
+  resource URL: OneNote copies a referenced resource, and the copy of one it
+  has not materialised yet is empty forever. A save that had to touch every
+  image (a page being restructured) uploads the bytes we hold, or fails
+  loudly; it never asks the service to copy them.
+- Staged pastes are pruned by age and count: a directory that only grows is a
+  disk-fill waiting to happen.
+
+### 6. Bound time and disk, not only single responses
 
 - A socket timeout bounds one read, not the transfer: a drip-fed response can
   hold a connection open forever. Use a **wall-clock deadline** across all
@@ -71,7 +93,7 @@ Page content is attacker-controlled. An `<img src>` inside a OneNote page is
 - Prune caches by count *and* by total bytes (400 files / 200 MiB), oldest
   first.
 
-### 6. Anything that decodes untrusted data gets limits and a timeout
+### 7. Anything that decodes untrusted data gets limits and a timeout
 
 ImageMagick is invoked with
 `-limit memory 128MiB -limit map 256MiB -limit area 50MP -limit width 16000
@@ -79,7 +101,7 @@ ImageMagick is invoked with
 with `subprocess.run(..., timeout=…)`, and a remotely declared width clamped
 to a sane maximum before it is used.
 
-### 7. Shell commands take arguments, never interpolation
+### 8. Shell commands take arguments, never interpolation
 
 `["sh", "-c", 'head -c "$2" -- "$1"', "sh", path, String(cap)]` — the path is
 an argument, never spliced into the script text. `--` ends option parsing so a
