@@ -7,6 +7,7 @@ all live in the same list.
 
 ![Note Note showing a OneNote checklist, with local notebooks, Sticky Notes and the OneNote tree down the left](preview.png)
 
+**[Docs](docs/README.md)** ·
 **[Install](#install)** · **[Removal](#removal)** · **[Notebooks](#notebooks)** ·
 **[Microsoft Sticky Notes](#microsoft-sticky-notes)** · **[OneNote](#onenote)** ·
 **[Keys](#keys)**
