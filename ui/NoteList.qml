@@ -189,7 +189,7 @@ Item {
               : (rowHover.hovered ? Style.hoverFill : "transparent")
             // Action rows ("New note…", sign in/out, settings) are dimmed so
             // notes stand out from the things you can do; hover lifts them.
-            opacity: dragArea.drag.active ? 0.85 : ((slot.isNew || slot.isAction) && !rowHover.hovered ? 0.55 : 1)
+            opacity: dragArea.drag.active ? 0.85 : ((slot.isNew || slot.isAction) && !rowHover.hovered ? 0.38 : 1)
 
             HoverHandler { id: rowHover }
 
@@ -209,7 +209,7 @@ Item {
                   : (slot.isTree ? Qt.lighter(root.accent, 1.4)
                   : (row.current ? root.selectedText : Qt.darker(root.foreground, 1.3)))
                 font.family: Style.fontFamily
-                font.pixelSize: Style.font.icon
+                font.pixelSize: (slot.isNew || slot.isAction) ? Style.font.iconSmall : Style.font.icon
                 horizontalAlignment: Text.AlignHCenter
               }
 
@@ -223,7 +223,9 @@ Item {
                 color: row.current ? root.selectedText : (slot.isTree ? Qt.lighter(root.accent, 1.4) : root.foreground)
                 font.bold: slot.isTree && (slot.modelData.level || 0) === 0
                 font.family: root.fontFamily
-                font.pixelSize: Style.font.body
+                // Actions ("New note…", sign in/out, settings) read as chrome,
+                // not as notes: dimmed above, and a size smaller here.
+                font.pixelSize: (slot.isNew || slot.isAction) ? Style.font.bodySmall : Style.font.body
                 elide: Text.ElideRight
               }
             }
@@ -365,7 +367,7 @@ Item {
           text: newNotebookRow.editing ? "󰉋" : "+"
           color: root.accent
           font.family: Style.fontFamily
-          font.pixelSize: Style.font.icon
+          font.pixelSize: Style.font.iconSmall
           horizontalAlignment: Text.AlignHCenter
         }
 
@@ -376,7 +378,7 @@ Item {
           text: "New notebook…"
           color: root.foreground
           font.family: root.fontFamily
-          font.pixelSize: Style.font.body
+          font.pixelSize: Style.font.bodySmall
         }
 
         TextField {
