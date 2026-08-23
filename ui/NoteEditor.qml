@@ -110,6 +110,8 @@ Item {
     root.edited()
   }
   function focusEditor() { area.forceActiveFocus() }
+  function undo() { if (area.canUndo) { area.undo(); root.edited() } }
+  function redo() { if (area.canRedo) { area.redo(); root.edited() } }
 
   // ── formatting tools ────────────────────────────────────────────────
   // Inline styles use the selection's font. Block styles cannot be set from
@@ -121,129 +123,52 @@ Item {
   readonly property string nbsp4: "\u00a0\u00a0\u00a0\u00a0"
 
   readonly property string sep: "\u2029"
-  // getText() separates paragraphs with U+2029 and table cells with U+FDD0/U+FDD1.
-  function plainText2() { return area.getText(0, area.length).replace(/[\n\uFDD0\uFDD1]/g, root.sep) }
-  function paragraphBounds(pos) {
-    var all = plainText2()
-    var start = all.lastIndexOf(root.sep, pos - 1) + 1
-    var end = all.indexOf(root.sep, pos)
-    return { start: start, end: end < 0 ? all.length : end }
+  // ── editing tools ───────────────────────────────────────────────────
+  // Block styles and snippets are Markdown, which QML cannot set on the
+  // document directly. So a tool reads the note's Markdown with
+  // getFormattedText(), edits the lines, and writes it back with
+  // remove()+insert(): both are ordinary edits, so undo keeps working
+  // (assigning `text` would wipe the undo stack).
+  function docMarkdown() { return area.getFormattedText(0, area.length).replace(/\n+$/, "") }
+
+  // Which Markdown line the caret sits on. The Markdown of everything before
+  // the caret ends on that line (trailing blank lines belong to the next).
+  function caretLine() { return lineAt(area.cursorPosition) }
+  function lineAt(pos) {
+    return area.getFormattedText(0, Math.max(0, pos)).replace(/\n+$/, "").split("\n").length - 1
   }
-  function paragraphIndexAt(pos) { return plainText2().substring(0, pos).split(root.sep).length - 1 }
-  function caretToParagraphEnd(index) {
-    var plain = plainText2(), idx = 0
-    for (var n = 0; n < index; n++) { var k = plain.indexOf(root.sep, idx); if (k < 0) break; idx = k + 1 }
-    var endOfPara = plain.indexOf(root.sep, idx)
-    area.cursorPosition = endOfPara < 0 ? plain.length : endOfPara
+
+  // caret < 0 means "the end of the note".
+  function replaceDoc(md, caret) {
+    var pos = caret === undefined ? area.cursorPosition : (caret < 0 ? Number.MAX_VALUE : caret)
+    area.remove(0, area.length)
+    area.insert(0, md)
+    area.cursorPosition = Math.max(0, Math.min(pos, area.length))
+    root.edited()
   }
 
   function setBlockStyle(style) {
     if (root.readOnly || root.plain) return
-    var s = area.selectionStart, e = area.selectionEnd
-    if (s > e) { var tmp = s; s = e; e = tmp }
-    var first = paragraphBounds(s), firstIndex = paragraphIndexAt(first.start)
-    // mark paragraphs from the last to the first so positions stay valid
-    var ends = []
-    for (var p = paragraphBounds(e); ; p = paragraphBounds(p.start - 1)) {
-      ends.push(p.end)
-      if (p.start <= first.start || p.start === 0) break
-    }
-    root.settingText = true
-    for (var k = 0; k < ends.length; k++) area.insert(ends[k], root.marker)
-    var md = area.text
-    root.settingText = false
-    var lines = md.split("\n"), inFence = false
+    var lines = docMarkdown().split("\n")
+    var first = lineAt(Math.min(area.selectionStart, area.selectionEnd))
+    var last = lineAt(Math.max(area.selectionStart, area.selectionEnd))
+    var caret = area.cursorPosition, changed = false, inFence = false
     for (var i = 0; i < lines.length; i++) {
-      if (/^\s*```/.test(lines[i])) inFence = !inFence
-      if (lines[i].indexOf(root.marker) < 0) continue
-      var clean = lines[i].split(root.marker).join("")
-      // table rows and code fences are not restyled — that would corrupt them
-      lines[i] = (inFence || /^\s*\|/.test(clean)) ? clean : restyleLine(clean, style)
+      if (/^\s*```/.test(lines[i])) { inFence = !inFence; continue }
+      if (i < first || i > last) continue
+      // table rows and fenced code are never restyled: it would corrupt them
+      if (inFence || /^\s*\|/.test(lines[i])) continue
+      var next = restyleLine(lines[i], style)
+      if (next !== lines[i]) { lines[i] = next; changed = true }
     }
-    var body = lines.join("\n")
-    if (body === md.split(root.marker).join("")) {
-      // nothing changed (e.g. indent outside a list): just drop the markers
-      setNote(titleField.text, body)
-      caretToParagraphEnd(firstIndex)
+    if (!changed) {
       if (style === "indent") root.statusRequestedText = "A nested list item needs one above it"
       return
     }
-    setNote(titleField.text, body)
-    caretToParagraphEnd(firstIndex)
+    replaceDoc(lines.join("\n"), caret)
     focusEditor()
-    root.edited()
   }
 
-  function restyleLine(line, style) {
-    var m = /^([ \t]*)((?:#{1,6}[ \t]+)|(?:[-*+][ \t]+(?:\[[ xX]\][ \t]+)?)|(?:\d+[.)][ \t]+)|(?:>[ \t]+))?([\s\S]*)$/.exec(line)
-    var indent = m[1] || "", prefix = m[2] || "", content = m[3] || ""
-    var isList = /^([-*+]|\d+[.)])[ \t]/.test(prefix)
-    switch (style) {
-      case "p": return content
-      case "h1": return "# " + content
-      case "h2": return "## " + content
-      case "h3": return "### " + content
-      case "ul": return indent + (/^[-*+]\s(?!\[)/.test(prefix) ? "" : "- ") + content
-      case "ol": return indent + (/^\d+[.)]\s/.test(prefix) ? "" : "1. ") + content
-      // an empty checkbox needs some content or Qt drops the box: a non-breaking space
-      case "todo": return indent + (/\[[ xX]\]/.test(prefix) ? "" : "- [ ] ") + (content || "\u00a0")
-      case "quote": return (/^>\s/.test(prefix) ? "" : "> ") + content
-      // Lists nest; plain text gets four non-breaking spaces per level, which
-      // Markdown keeps and OneNote maps to a real paragraph indent.
-      case "indent": return isList ? "  " + indent + prefix + content : indent + prefix + root.nbsp4 + content
-      case "outdent": return isList ? indent.substring(2) + prefix + content
-                                    : indent + prefix + (content.indexOf(root.nbsp4) === 0 ? content.substring(4) : content)
-    }
-    return line
-  }
-
-  function insertSnippet(md) {
-    if (root.readOnly || root.plain) return
-    var b = paragraphBounds(area.cursorPosition), index = paragraphIndexAt(b.start)
-    root.settingText = true
-    area.insert(b.end, root.marker)
-    var src = area.text
-    root.settingText = false
-    var lines = src.split("\n"), at = -1
-    for (var i = 0; i < lines.length; i++) {
-      if (lines[i].indexOf(root.marker) < 0) continue
-      lines[i] = lines[i].split(root.marker).join("")
-      at = i
-      break
-    }
-    if (at < 0) {
-      setNote(titleField.text, lines.join("\n") + "\n\n" + md)
-      focusEditor()
-      root.edited()
-      return
-    }
-    // The caret can sit inside a table or a fenced code block; a snippet
-    // dropped between their lines would break them, so it goes after the
-    // whole block instead.
-    var end = at
-    if (/^\s*\|/.test(lines[at])) {
-      while (end + 1 < lines.length && /^\s*\|/.test(lines[end + 1])) end++
-    } else {
-      var fences = 0
-      for (var f = 0; f < at; f++) if (/^\s*```/.test(lines[f])) fences++
-      if (fences % 2 === 1 || /^\s*```/.test(lines[at])) {
-        end = at
-        while (end + 1 < lines.length && !/^\s*```/.test(lines[end + 1])) end++
-        if (end + 1 < lines.length) end++          // the closing fence
-      }
-    }
-    var out = lines.slice(0, end + 1)
-    // Qt's writer corrupts a table/code block that directly follows a quote
-    // or a code fence; an empty-line paragraph in between avoids it.
-    var last = lines[end]
-    if (/^\s*>/.test(last) || /^\s*```/.test(last)) { out.push(""); out.push("\u00a0") }
-    out.push(""); out.push(md); out.push("")
-    out = out.concat(lines.slice(end + 1))
-    setNote(titleField.text, out.join("\n"))
-    caretToParagraphEnd(index)        // tables/code have their own paragraphs; stay put
-    focusEditor()
-    root.edited()
-  }
 
   // ── tables: add/remove rows and columns around the caret's cell ──────
   // Qt's plain text separates table cells with U+FDD0 and ends a table with
@@ -272,6 +197,67 @@ Item {
     root.inTable = beforeChar === root.cellSep && (afterChar === root.cellSep || afterChar === root.tableEnd)
   }
 
+  function restyleLine(line, style) {
+    var m = /^([ \t]*)((?:#{1,6}[ \t]+)|(?:[-*+][ \t]+(?:\[[ xX]\][ \t]+)?)|(?:\d+[.)][ \t]+)|(?:>[ \t]+))?([\s\S]*)$/.exec(line)
+    var indent = m[1] || "", prefix = m[2] || "", content = m[3] || ""
+    var isList = /^([-*+]|\d+[.)])[ \t]/.test(prefix)
+    switch (style) {
+      case "p": return content
+      case "h1": return "# " + content
+      case "h2": return "## " + content
+      case "h3": return "### " + content
+      case "ul": return indent + (/^[-*+][ \t](?!\[)/.test(prefix) ? "" : "- ") + content
+      case "ol": return indent + (/^\d+[.)][ \t]/.test(prefix) ? "" : "1. ") + content
+      // an empty checkbox needs some content or Qt drops the box
+      case "todo": return indent + (/\[[ xX]\]/.test(prefix) ? "" : "- [ ] ") + (content || "\u00a0")
+      case "quote": return (/^>[ \t]/.test(prefix) ? "" : "> ") + content
+      // Lists nest; plain text gets four non-breaking spaces per level, which
+      // Markdown keeps and OneNote maps to a real paragraph indent.
+      case "indent": return isList ? "  " + indent + prefix + content : indent + prefix + root.nbsp4 + content
+      case "outdent": return isList ? indent.substring(2) + prefix + content
+                                    : indent + prefix + (content.indexOf(root.nbsp4) === 0 ? content.substring(4) : content)
+    }
+    return line
+  }
+
+  // Where the block holding Markdown line `i` ends (a table, a fenced code
+  // block or a single line): snippets go after it, never inside.
+  function blockEndLine(lines, i) {
+    if (/^\s*\|/.test(lines[i])) {
+      while (i + 1 < lines.length && /^\s*\|/.test(lines[i + 1])) i++
+      return i
+    }
+    var fences = 0
+    for (var f = 0; f < i; f++) if (/^\s*```/.test(lines[f])) fences++
+    if (fences % 2 === 1 || /^\s*```/.test(lines[i])) {
+      while (i + 1 < lines.length && !/^\s*```/.test(lines[i + 1])) i++
+      if (i + 1 < lines.length) i++
+    }
+    return i
+  }
+
+  function insertSnippet(md) {
+    if (root.readOnly || root.plain) return
+    var lines = docMarkdown().split("\n")
+    var at = blockEndLine(lines, Math.min(caretLine(), lines.length - 1))
+    var rest = lines.slice(at + 1)
+    var atEnd = rest.join("").trim() === ""
+    var out = lines.slice(0, at + 1)
+    // Qt's writer corrupts a table or code block that directly follows a
+    // quote; an empty-line paragraph in between avoids it.
+    if (/^\s*>/.test(lines[at])) { out.push(""); out.push("\u00a0") }
+    out.push("")
+    out = out.concat(md.split("\n"), [""])
+    // A block at the very end leaves the caret inside it, and Qt then repeats
+    // that block on every Enter (a rule breeds rules). Give it a paragraph to
+    // land in instead.
+    if (atEnd) out.push("\u00a0")
+    else out = out.concat(rest)
+    replaceDoc(out.join("\n"), atEnd ? -1 : area.cursorPosition)
+    focusEditor()
+  }
+
+  // ── tables ──────────────────────────────────────────────────────────
   function splitRow(line) {
     var t = line.trim()
     if (t.charAt(0) === "|") t = t.substring(1)
@@ -281,74 +267,51 @@ Item {
   }
   function joinRow(cells) { return "| " + cells.map(function(c) { return c.trim() }).join(" | ") + " |" }
 
-  function tableOp(op) {
-    if (root.readOnly || root.plain) return
-    var caret = area.cursorPosition
-    root.settingText = true
-    area.insert(caret, root.marker)
-    var src = area.text
-    root.settingText = false
-    var lines = src.split("\n"), at = -1
-    for (var i = 0; i < lines.length; i++) if (lines[i].indexOf(root.marker) >= 0) { at = i; break }
-    var isRow = function(l) { return /^\s*\|/.test(l) }
-    if (at < 0 || !isRow(lines[at])) {
-      // not in a table: just drop the marker and say so
-      setNote(titleField.text, src.split(root.marker).join(""))
-      area.cursorPosition = Math.min(caret, area.length)
-      root.statusText = "Put the cursor in a table cell first"
-      return
-    }
-    var start = at, end = at
-    while (start > 0 && isRow(lines[start - 1])) start--
-    while (end + 1 < lines.length && isRow(lines[end + 1])) end++
-    var rows = []
-    for (var r = start; r <= end; r++) rows.push(splitRow(lines[r]))
-    var rowIdx = at - start, colIdx = 0
-    for (var c = 0; c < rows[rowIdx].length; c++) if (rows[rowIdx][c].indexOf(root.marker) >= 0) { colIdx = c; rows[rowIdx][c] = rows[rowIdx][c].split(root.marker).join("") }
-    var cols = rows[0].length
-    var blank = function(n) { var a = []; for (var k = 0; k < n; k++) a.push(""); return a }
-    if (op === "addRow") {
-      var after = rowIdx === 0 ? 1 : rowIdx            // below the header means below the separator
-      rows.splice(after + 1, 0, blank(cols))
-      rowIdx = after + 1
-    } else if (op === "addCol") {
-      for (var r2 = 0; r2 < rows.length; r2++) rows[r2].push(r2 === 1 ? "---" : "")
-      colIdx = cols
-    } else if (op === "delRow") {
-      if (rowIdx <= 1) { root.statusText = "The header row stays; delete the table by selecting it"; setNote(titleField.text, src.split(root.marker).join("")); area.cursorPosition = Math.min(caret, area.length); return }
-      rows.splice(rowIdx, 1)
-      rowIdx = Math.min(rowIdx, rows.length - 1)
-    } else if (op === "delCol") {
-      if (cols <= 1) { root.statusText = "A table needs at least one column"; setNote(titleField.text, src.split(root.marker).join("")); area.cursorPosition = Math.min(caret, area.length); return }
-      for (var r3 = 0; r3 < rows.length; r3++) rows[r3].splice(colIdx, 1)
-      colIdx = Math.min(colIdx, cols - 2)
-    }
-    var rebuilt = rows.map(function(cells, k) { return k === 1 ? "|" + cells.map(function() { return "---" }).join("|") + "|" : joinRow(cells) })
-    var outLines = lines.slice(0, start).concat(rebuilt).concat(lines.slice(end + 1))
-    setNote(titleField.text, outLines.join("\n"))
-    // caret back into the cell: table cells are consecutive paragraphs, row-major, no separator row
-    var before = paragraphIndexAtMarkdownLine(outLines, start)
-    var cell = before + (rowIdx === 0 ? 0 : rowIdx - 1) * rows[0].length + colIdx
-    caretToParagraphEnd(cell)
-    focusEditor()
-    root.edited()
+  // The caret's cell, counted from the table's leading cell separator.
+  function caretCell() {
+    var t = area.getText(0, area.length), caret = area.cursorPosition
+    var prev = Math.max(t.lastIndexOf(root.sep, caret - 1), t.lastIndexOf(root.tableEnd, caret - 1))
+    var start = t.indexOf(root.cellSep, prev + 1)
+    if (start < 0 || start > caret) return -1
+    var n = -1                                   // the leading separator is not a cell
+    for (var i = start; i < caret; i++) if (t.charAt(i) === root.cellSep) n++
+    return Math.max(0, n)
   }
 
-  // How many editor paragraphs precede a given Markdown line (approximate:
-  // one per non-blank, non-fence, non-separator line; table cells counted).
-  function paragraphIndexAtMarkdownLine(lines, lineIndex) {
-    var n = 0, inFence = false
-    for (var i = 0; i < lineIndex; i++) {
-      var l = lines[i]
-      if (/^\s*```/.test(l)) { if (!inFence) n++; inFence = !inFence; continue }
-      if (inFence) continue
-      if (!l.trim()) continue
-      if (/^\s*\|[\s:\-|]*\|\s*$/.test(l)) continue          // separator row
-      if (/^\s*\|/.test(l)) { n += splitRow(l).length; continue }  // a cell per column
-      n++
+  function tableOp(op) {
+    if (root.readOnly || root.plain) return
+    if (!root.inTable) { root.statusRequestedText = "Put the cursor in a table cell first"; return }
+    var lines = docMarkdown().split("\n")
+    var at = Math.min(caretLine(), lines.length - 1)
+    while (at >= 0 && !/^\s*\|/.test(lines[at])) at--
+    if (at < 0) return
+    var first = at, last = at
+    while (first > 0 && /^\s*\|/.test(lines[first - 1])) first--
+    while (last + 1 < lines.length && /^\s*\|/.test(lines[last + 1])) last++
+    var rows = lines.slice(first, last + 1).map(splitRow), cols = rows[0].length
+    var cell = caretCell()
+    var rowIdx = cell < 0 ? 0 : Math.floor(cell / cols), colIdx = cell < 0 ? 0 : cell % cols
+    if (rowIdx > 0) rowIdx += 1                  // the separator row is not a document row
+    var blank = function(n) { var out = []; for (var k = 0; k < n; k++) out.push(""); return out }
+    if (op === "addRow") {
+      rows.splice((rowIdx === 0 ? 1 : rowIdx) + 1, 0, blank(cols))
+    } else if (op === "addCol") {
+      for (var r2 = 0; r2 < rows.length; r2++) rows[r2].push(r2 === 1 ? "---" : "")
+    } else if (op === "delRow") {
+      if (rowIdx <= 1) { root.statusRequestedText = "The header row stays"; return }
+      rows.splice(rowIdx, 1)
+    } else if (op === "delCol") {
+      if (cols <= 1) { root.statusRequestedText = "A table needs at least one column"; return }
+      for (var r3 = 0; r3 < rows.length; r3++) rows[r3].splice(colIdx, 1)
     }
-    return n
+    var rebuilt = rows.map(function(cells, k) {
+      return k === 1 ? "|" + cells.map(function() { return "---" }).join("|") + "|" : joinRow(cells)
+    })
+    var out = lines.slice(0, first).concat(rebuilt, lines.slice(last + 1))
+    replaceDoc(out.join("\n"), area.cursorPosition)
+    focusEditor()
   }
+
 
   function toggleCode() {
     if (root.readOnly || root.plain) return

@@ -209,8 +209,11 @@ Item {
   function displayTitle(title, preview) {
     if (title) return title
     if (!preview) return "Untitled"
-    var words = preview.split(/\s+/).slice(0, 5).join(" ")
-    return words.length < preview.length ? words + "…" : words
+    // A checkbox line reads as a box, not as its Markdown.
+    var text = preview.replace(/^\[[xX]\]\s*/, "☑ ").replace(/^\[\s?\]\s*/, "☐ ").replace(/\u00a0/g, " ").trim()
+    if (!text) return "Untitled"
+    var words = text.split(/\s+/).slice(0, 5).join(" ")
+    return words.length < text.length ? words + "…" : words
   }
   // The section string carries key, name and count so a change produces a
   // fresh heading. Keys are never empty (they start with the provider id).
@@ -315,6 +318,7 @@ Item {
   }
   function sectionsOf(providerId) { var p = providerById(providerId); return p ? JSON.stringify(p.sections.map(function(s) { return s.key + "(" + s.rows.length + ")" })) : "no provider" }
   function editorTool(id) { editor.tool(id); return true }
+  function editorUndo(n) { for (var i = 0; i < Number(n || 1); i++) editor.undo(); return editor.text.length }
   function editorCursor(pos) { editor.setCursorPosition(Number(pos)); editor.updateInTable(); return editor.cursorPosition() + (editor.inTable ? " in-table" : " outside") }
   function treeToggle(id) {
     for (var i = 0; i < root.rows.length; i++)

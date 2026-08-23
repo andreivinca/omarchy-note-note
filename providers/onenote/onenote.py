@@ -128,6 +128,14 @@ IMAGE_HOST = "graph.microsoft.com"
 IMAGE_PATH_RE = re.compile(r"^/v1\.0/(?:me|users\('[^']*'\))/onenote/resources/[A-Za-z0-9!._-]+/\$value$")
 MAX_IMAGE_WIDTH = 4000
 MAGICK_TIMEOUT = 20
+# One page's images share a wall-clock budget and a count; the cache as a
+# whole is bounded too, so a page full of unique images can neither hold a
+# fetch open nor fill the disk.
+IMAGE_BUDGET_SECONDS = 45
+MAX_PAGE_IMAGES = 40
+MAX_CACHE_BYTES = 200 * 1024 * 1024
+MAX_CACHE_FILES = 400
+_image_budget = [0.0, 0]        # [deadline (monotonic), images fetched]
 
 
 class _NoRedirect(urllib.request.HTTPRedirectHandler):
@@ -146,6 +154,47 @@ def image_allowed(src):
     return u.scheme == "https" and u.netloc.lower() == IMAGE_HOST and bool(IMAGE_PATH_RE.match(u.path)) and not u.query and not u.fragment
 
 
+def read_with_deadline(resp, max_bytes, deadline):
+    """Read at most max_bytes, giving up if the whole body has not arrived by
+    `deadline`: urllib's timeout only bounds a single socket read, so a
+    drip-fed response would otherwise never end."""
+    chunks, total = [], 0
+    while True:
+        if time.monotonic() > deadline:
+            raise OverflowError("image took too long")
+        chunk = resp.read(65536)
+        if not chunk:
+            return b"".join(chunks)
+        total += len(chunk)
+        if total > max_bytes:
+            raise OverflowError("image too large")
+        chunks.append(chunk)
+
+
+def prune_image_cache():
+    """Keep the image cache under its file-count and byte ceilings, oldest first."""
+    try:
+        entries = []
+        for name in os.listdir(ONENOTE_IMG_DIR):
+            path = os.path.join(ONENOTE_IMG_DIR, name)
+            try:
+                st = os.stat(path)
+            except OSError:
+                continue
+            entries.append((st.st_mtime, st.st_size, path))
+    except OSError:
+        return
+    entries.sort()
+    total = sum(e[1] for e in entries)
+    while entries and (len(entries) > MAX_CACHE_FILES or total > MAX_CACHE_BYTES):
+        _, size, path = entries.pop(0)
+        try:
+            os.remove(path)
+            total -= size
+        except OSError:
+            pass
+
+
 def cached_image(src, width=0):
     """A page image, fetched through Graph into the cache; returns a file://
     URL the editor can show, or None when the source is not Graph's resource
@@ -153,6 +202,8 @@ def cached_image(src, width=0):
     import hashlib, shutil, subprocess, tempfile
     if not image_allowed(src):
         return None
+    if _image_budget[1] >= MAX_PAGE_IMAGES or (_image_budget[0] and time.monotonic() > _image_budget[0]):
+        return None                      # the page's image budget is spent
     try:
         width = int(width)
     except (TypeError, ValueError):
@@ -166,11 +217,10 @@ def cached_image(src, width=0):
     req = urllib.request.Request(src, headers={"Authorization": "Bearer " + access_token()})
     fd, tmp = tempfile.mkstemp(prefix=".", suffix=".tmp", dir=ONENOTE_IMG_DIR)   # fresh, 0600, never a symlink
     try:
-        with _image_opener.open(req, timeout=60) as r, os.fdopen(fd, "wb") as f:
-            raw = r.read(MAX_IMAGE + 1)
-            if len(raw) > MAX_IMAGE:
-                raise OverflowError("image too large")
-            f.write(raw)
+        deadline = _image_budget[0] or (time.monotonic() + IMAGE_BUDGET_SECONDS)
+        with _image_opener.open(req, timeout=20) as r, os.fdopen(fd, "wb") as f:
+            f.write(read_with_deadline(r, MAX_IMAGE, deadline))
+        _image_budget[1] += 1
         magick = shutil.which("magick") or shutil.which("convert")
         if width > 0 and magick:
             # Bounded decode: memory/area/size limits and a timeout, so a crafted
@@ -192,6 +242,7 @@ def cached_image(src, width=0):
             except OSError:
                 pass
         os.replace(tmp, path)
+        prune_image_cache()
         return "file://" + path
     except (urllib.error.URLError, OSError, OverflowError):
         try:
@@ -222,6 +273,8 @@ def cmd_onenote_pages(section_ids):
 
 
 def cmd_onenote_page(page_id):
+    _image_budget[0] = time.monotonic() + IMAGE_BUDGET_SECONDS
+    _image_budget[1] = 0
     status, html = graph_raw("GET", "/me/onenote/pages/" + urllib.parse.quote(page_id, safe="") + "/content")
     if status != 200:
         try:
