@@ -1,6 +1,8 @@
 import Quickshell
 import Quickshell.Io
 import QtQuick
+import qs.Commons
+import qs.Ui
 
 // OneNote: one section holding the whole tree — notebooks → sections →
 // pages, expandable in place. Pages are fetched on demand as Markdown
@@ -77,6 +79,7 @@ Item {
         var open = root.expanded.indexOf(books[b].id) >= 0
         rows.push({ kind: "tree", path: books[b].id, title: books[b].name, level: 0, expanded: open })
         if (!open) continue
+        rows.push({ kind: "action", path: "newsection:" + books[b].id, title: "New section…", icon: "+", level: 1 })
         for (var k = 0; k < root.onSections.length; k++) {
           var sec = root.onSections[k]
           if (sec.notebookId !== books[b].id) continue
@@ -117,8 +120,120 @@ Item {
     else if (id === "relogin") ms.relogin()
     else if (id === "logout") ms.logout()
     else if (id === "refresh") { listProc.cached = false; listProc.force = true; listProc.running = true }
+    else if (id.indexOf("newsection:") === 0) {
+      root.newSectionNotebook = id.substring(11)
+      root.newSectionError = ""
+      root.viewRequested("New section in " + notebookName(root.newSectionNotebook), sectionView, {})
+    }
     else if (id === "unavailable") root.noticeRequested("Microsoft sign-in is not configured in this build",
       "This copy of Note Note has no Microsoft app registration built in (CLIENT_ID in services/microsoft/msgraph.py), so nobody can sign in yet.", "", [])
+  }
+
+  function notebookName(id) {
+    for (var i = 0; i < root.onSections.length; i++)
+      if (root.onSections[i].notebookId === id) return root.onSections[i].notebook || "OneNote"
+    return "OneNote"
+  }
+
+  // ── new section ─────────────────────────────────────────────────────
+  property string newSectionNotebook: ""
+  property string newSectionError: ""
+  property bool newSectionBusy: false
+  function createSection(name) {
+    var n = name.trim()
+    if (!n) { root.newSectionError = "A section needs a name."; return }
+    if (sectionProc.running) return
+    root.newSectionBusy = true
+    root.newSectionError = ""
+    sectionProc.command = ["python3", root.script, "create-section", root.newSectionNotebook, "-"]
+    sectionProc.stdinEnabled = true
+    sectionProc.running = true
+    sectionProc.write(JSON.stringify({ name: n }))
+    sectionProc.stdinEnabled = false          // close stdin: the script reads to EOF
+  }
+
+  Component {
+    id: sectionView
+    FocusScope {
+      width: parent ? parent.width : Style.space(600)
+      height: column.implicitHeight
+      Column {
+        id: column
+        spacing: Style.spacing.md
+        leftPadding: Style.spacing.md
+        topPadding: Style.spacing.md
+
+        Text {
+          textFormat: Text.PlainText
+          width: Style.space(520)
+          wrapMode: Text.Wrap
+          text: "The section is created in OneNote and appears in the tree; pages you add go into it."
+          color: Color.menu.text
+          font.family: Style.font.menuFamily
+          font.pixelSize: Style.font.body
+        }
+        TextField {
+          id: nameField
+          width: Style.space(320)
+          placeholderText: "Section name"
+          foreground: Color.menu.text
+          accent: Color.accent
+          font.family: Style.font.menuFamily
+          focus: true
+          Keys.onReturnPressed: root.createSection(text)
+        }
+        Text {
+          textFormat: Text.PlainText
+          visible: root.newSectionError.length > 0
+          text: root.newSectionError
+          color: Color.urgent
+          font.family: Style.font.menuFamily
+          font.pixelSize: Style.font.bodySmall
+        }
+        Row {
+          spacing: Style.spacing.sm
+          Button {
+            text: root.newSectionBusy ? "Creating…" : "Create"
+            iconText: "+"
+            bordered: true
+            enabled: !root.newSectionBusy
+            foreground: Color.menu.text
+            accent: Color.accent
+            onClicked: root.createSection(nameField.text)
+          }
+          Button {
+            text: "Cancel"
+            bordered: true
+            foreground: Color.menu.text
+            accent: Color.accent
+            onClicked: root.viewCleared()
+          }
+        }
+      }
+    }
+  }
+
+  Process {
+    id: sectionProc
+    environment: root.ms ? root.ms.env : ({})
+    stdout: StdioCollector {
+      onStreamFinished: {
+        root.newSectionBusy = false
+        var r = root.parse(this.text)
+        if (r.error) { root.newSectionError = r.error; return }
+        var sct = r.section
+        if (!sct.notebook) sct.notebook = root.notebookName(sct.notebookId)
+        root.onSections = root.onSections.concat([sct])
+        var exp = root.expanded.slice()
+        if (exp.indexOf(sct.notebookId) < 0) exp.push(sct.notebookId)
+        if (exp.indexOf(sct.id) < 0) exp.push(sct.id)
+        root.expanded = exp
+        root.viewCleared()
+        root.rebuild()
+        root.persistRequested()
+        root.statusRequested("Section created")
+      }
+    }
   }
 
   function refresh() {

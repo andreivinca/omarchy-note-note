@@ -8,6 +8,7 @@
   onenote.py update <id> <file>         -> reads {"title","originalTitle","body"}
   onenote.py create <sectionId> <file>  -> {"ok":true,"page":{...}}
   onenote.py delete <id>
+  onenote.py create-section <notebookId> <file|->  -> {"ok":true,"section":{...}}
 """
 import html as _html
 import json, os, re, sys, time, urllib.parse, urllib.request, urllib.error
@@ -334,6 +335,28 @@ def cmd_onenote_create(section_id, path):
     out({"ok": True, "page": page})
 
 
+def cmd_onenote_create_section(notebook_id, path):
+    payload = read_payload(path) or {}
+    name = (payload.get("name") or "").strip()
+    if not name:
+        fail("a section needs a name")
+    status, res = graph("POST", "/me/onenote/notebooks/%s/sections" % urllib.parse.quote(notebook_id, safe=""),
+                        {"displayName": name[:50]})
+    if status not in (200, 201) or "id" not in res:
+        fail(graph_err(res, status))
+    section = {"id": res["id"], "name": res.get("displayName", name),
+               "notebook": "", "notebookId": notebook_id}
+    c = load_json(ONENOTE_CACHE, None)
+    if c:
+        for sct in c.get("sections", []):
+            if sct.get("notebookId") == notebook_id:
+                section["notebook"] = sct.get("notebook", "")
+                break
+        c["sections"] = c.get("sections", []) + [section]
+        save_private(ONENOTE_CACHE, c)
+    out({"ok": True, "section": section})
+
+
 def cmd_onenote_delete(page_id):
     status, res = graph_raw("DELETE", "/me/onenote/pages/" + urllib.parse.quote(page_id, safe=""))
     if status not in (204, 200, 404):
@@ -369,6 +392,8 @@ def main(argv):
         cmd_onenote_create(argv[2], argv[3])
     elif cmd == "delete" and len(argv) >= 3:
         cmd_onenote_delete(argv[2])
+    elif cmd == "create-section" and len(argv) >= 4:
+        cmd_onenote_create_section(argv[2], argv[3])
     elif cmd == "clear-cache":
         try:
             os.remove(ONENOTE_CACHE)
@@ -376,7 +401,7 @@ def main(argv):
             pass
         out({"ok": True})
     else:
-        fail("usage: onenote.py list [--cached]|page <id>|update <id> <file>|create <sectionId> <file>|delete <id>|clear-cache", 2)
+        fail("usage: onenote.py list [--cached]|page <id>|update <id> <file>|create <sectionId> <file>|delete <id>|create-section <notebookId> <file>|clear-cache", 2)
 
 
 if __name__ == "__main__":
