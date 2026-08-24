@@ -266,8 +266,13 @@ class Converter:
             # A bare <br/> between blocks is a visual empty line in OneNote.
             # Markdown has no such thing, so it becomes a paragraph holding a
             # single non-breaking space, which the editor draws as a blank line.
-            if self.lines and self.lines[-1] not in ("", GAP):
-                self.lines.append("")
+            # Only a page that *opens* with one loses it: every other block
+            # ends with a "" separator, so testing the last line for emptiness
+            # would swallow the blank line after an image, heading, list or
+            # table — which is how a picture ended up glued to the text below.
+            if self.lines:
+                if self.lines[-1] != "":
+                    self.lines.append("")
                 self.lines.append(GAP)
                 self.lines.append("")
             self.last = None

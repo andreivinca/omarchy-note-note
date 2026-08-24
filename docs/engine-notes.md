@@ -90,8 +90,17 @@ inserts an empty block above it on its own, so the writer emits that block
 itself, or our idea of the document and Qt's drift apart by one.
 
 **A list item with no content is dropped, and takes the list's checkbox
-markers with it** — an empty checkbox carries one U+00A0. This is the only
-filler character left in the pipeline.
+markers with it** — an empty checkbox carries one U+00A0. This is one of the
+two filler characters left in the pipeline.
+
+**An empty block is one U+00A0, never `<p><br /></p>`.** `<p></p>` is dropped
+outright, and a `<br />` inside the block opens a *second* line in it — so a
+blank line written that way is drawn **twice as tall as a line of text** (92px
+against 75px for three blocks at 15px, measured). A non-breaking space is one
+line, and one character, so the caret map is the same either way
+(`writer.BLANK`). It is also the tidier one to type into: typing on a
+`<br />` blank leaves the break behind as a trailing hard line break *and* an
+extra blank line, which is the same bug all over again.
 
 **Formatting is flattened into sibling runs.** `**bold with ==mark== inside**`
 comes back as three spans that each repeat `font-weight:700`; wrapping each
@@ -193,7 +202,12 @@ class is set: extended property `String 0x001A` = `IPM.StickyNote`.
   `style="margin-top:0pt;margin-bottom:0pt"` or every line looks
   double-spaced. Indentation is `margin-left`, 36 px per level.
 - A bare `<br/>` between paragraphs is a **visual empty line**; a
-  `<p><br/></p>` is the same thing written by the phone app.
+  `<p><br/></p>` is the same thing written by the phone app. Consecutive ones
+  are separate empty lines, and one may follow *any* block — a page routinely
+  reads `…<img/><br/><p>text</p>`, which is a picture with an empty line under
+  it. Do not collapse them, and do not decide there is already a blank line
+  from the last line of the Markdown being empty: every block ends with an
+  empty separator line, so that test throws the blank line away.
 - OData query values must be URL-encoded: a raw space in
   `$orderby=lastModifiedDateTime desc` makes `urllib` raise `InvalidURL`.
 - Throttling (HTTP 429, often **without** a `Retry-After`) arrives quickly if

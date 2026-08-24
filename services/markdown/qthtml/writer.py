@@ -13,7 +13,13 @@ from ._vendor import parse
 from .imagesize import width_of
 
 RULE = "<hr />"
-BLANK = "<p><br /></p>"
+# An empty block, drawn one line high. It cannot be `<p></p>` (Qt drops a
+# block with nothing in it) and it must not be `<p><br /></p>`: the break
+# opens a *second* line inside the block, so every deliberate blank line
+# would be drawn twice as tall as one. A single non-breaking space is one
+# line, one character — the same length as the break, so the caret map is
+# unchanged — and `reader` reads it back as a blank line either way.
+BLANK = "<p>%s</p>" % dialect.BLANK_PARAGRAPH
 
 # Qt renders an image at natural size and clips at the pane, so anything wider
 # than this gets a display width. Display only: `reader` never writes a width
