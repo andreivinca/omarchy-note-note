@@ -33,15 +33,17 @@ Item {
   //
   // `map.blocks[i]` is the document block Markdown line `i` came from, which
   // is how the toolbar finds the line the caret is on; `map.count` is how many
-  // blocks the document has. Both are -1 / 0 if the converter failed, and the
-  // callback still runs: a failed conversion must never lose the note.
+  // blocks the document has. `map.ok` is false when the converter failed, and
+  // only then — an empty answer is not a failure: a note holding one blank
+  // line converts to no Markdown at all, and that is the truth about it. The
+  // callback always runs: a failed conversion must never lose the note.
   function toMarkdown(html, callback) {
-    if (!html) { callback("", { blocks: [], count: 0 }); return }
+    if (!html) { callback("", { blocks: [], count: 0, ok: true }); return }
     run(["to-markdown", "--with-map"], html, function(text) {
       var result = null
       try { result = JSON.parse(text) } catch (error) { result = null }
-      if (!result) { console.warn("note-note: could not read the editor's document"); callback("", { blocks: [], count: 0 }); return }
-      callback(result.markdown || "", { blocks: result.blocks || [], count: result.count || 0 })
+      if (!result) { console.warn("note-note: could not read the editor's document"); callback("", { blocks: [], count: 0, ok: false }); return }
+      callback(result.markdown || "", { blocks: result.blocks || [], count: result.count || 0, ok: true })
     })
   }
 

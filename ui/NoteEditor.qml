@@ -43,10 +43,16 @@ Item {
   // Plain characters, not a serialisation — for backends that store text.
   function plainText() { return area.getText(0, area.length) }
 
-  // The document as HTML. `area.text` is *not* this: in rich text it answers
-  // with the string last assigned to it, not with what the document holds now,
-  // so reading it would save the note as it was opened.
-  function documentHtml() { return area.getFormattedText(0, area.length) }
+  // The document as HTML — a range, so that Qt marks the fragment and the
+  // reader can strip it. Except when there is no range: a note can hold no
+  // characters and still have a block that is a checkbox item (deleting an
+  // item's text leaves the box behind), and `getFormattedText(0, 0)` answers
+  // with nothing at all — which reads back as a blank note, so the toolbar
+  // sees nothing to toggle. `text` is the whole document, live, and it is the
+  // only way to see that block.
+  function documentHtml() {
+    return area.length > 0 ? area.getFormattedText(0, area.length) : area.text
+  }
 
   // The note as it belongs on disk.  callback(markdown)
   function requestMarkdown(callback) {
@@ -228,7 +234,7 @@ Item {
   function withMarkdown(edit) {
     if (root.readOnly || root.plain || !root.markdown) return
     root.markdown.toMarkdown(documentHtml(), function(md, map) {
-      if (!md && area.length > 0) return          // a failed conversion changes nothing
+      if (!map.ok) return                         // a failed conversion changes nothing
       edit(md.replace(/\n+$/, "").split("\n"), map)
     })
   }

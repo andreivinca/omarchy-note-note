@@ -71,11 +71,25 @@ against these, and `qthtml/selftest.py` fails the moment one changes.
 | a checkbox | `<li class="unchecked">` / `class="checked"` | `- [ ]` / `- [x]` |
 | a highlight | `background-color:` on the span — **kept**, unlike in Markdown | `==text==` |
 
-**`text` is not the document.** In rich text, `TextEdit.text` answers with the
-string last *assigned* to it, not with what the document now holds: reading it
-after an edit returns the note as it was opened. Always
-`getFormattedText(0, length)`. (In `MarkdownText` it did regenerate, which is
-why the old code got away with `area.text`.)
+**Read the document as a range, not as `text`.** `getFormattedText(0, length)`
+is what the converter is written against: Qt brackets a range with fragment
+markers, and the reader strips them. `TextEdit.text` does answer with the live
+document (measured on 6.11: it follows typing, `insert()`, `remove()` and undo)
+but without those markers, so the two are not interchangeable.
+
+**A document with no characters has no range** — `getFormattedText(0, 0)` is
+the empty string, and a note can hold no characters and still be *something*:
+delete the text of a checkbox item and Qt keeps the item, box and all. Read
+that way the note comes back blank, so a toolbar action sees a plain empty line
+and re-adds the style that is already there — the button looks dead. This is
+the one place `text` is the right answer (`NoteEditor.documentHtml`).
+
+**No Markdown is a real answer, not a failed conversion.** A note holding one
+blank line — a typed space, or the U+00A0 an empty item carries — converts to
+the empty string, because a trailing blank line belongs to no block and is
+dropped (`reader._join`). Telling that apart from a converter that died by
+looking at the text is what left the toolbar dead on exactly those notes; the
+converter says which it was (`Markdown.toMarkdown`, `map.ok`).
 
 **Qt's own output, fed back in, loses the first block's format.** The writer
 brackets its output with `<!--StartFragment-->` / `<!--EndFragment-->`; on the
