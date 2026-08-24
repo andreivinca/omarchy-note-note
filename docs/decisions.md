@@ -5,6 +5,53 @@ rejected, so they are not tried again by accident.
 
 ---
 
+### One notebook at a time, on a binder rail
+
+*Considered:* keeping the collapsible headings and only colouring them.
+*Rejected:* folding is a thing you undo, and with three sources and a folder of
+notebooks the list was still a single column of everything — the headings told
+you where you were only if you could see one. Colouring them changed nothing
+about that.
+
+*Considered:* while searching, listing the hits from every section at once.
+*Rejected:* it would be worse than what it replaced. The old headings said which
+notebook a hit came from; with them gone a mixed list is unattributable. Hits
+stay inside their tab, every tab carries its own hit count, and a search that
+the open tab cannot answer moves you to the first tab that can.
+
+*Chosen:* one tab open at a time, kept between runs, `Ctrl+Tab` to walk them.
+Which tab opens on a fresh state is not a provider's to claim — it is the first
+local notebook, because the user's own files come first, and a rule the host
+owns cannot be fought over by two providers. `collapsedByDefault` is left in the
+contract, ignored, so nobody's provider breaks.
+
+### A tab's colour is the provider's to name and the rail's to render
+
+A provider hands over its brand raw — `#7719AA` for OneNote — and the rail
+pastelises it (hue kept, lightness and saturation taken from the palette) and
+washes it over the background. So a provider states its identity without knowing
+anything about the theme, and a brand purple cannot arrive as a block of purple.
+A provider that names no colour, which is what the local one does because it has
+a tab per notebook folder, gets a pastel hashed from the section's name: hashed
+rather than indexed, so a notebook keeps its colour when another is added above
+it. The host walks a duplicate along the palette afterwards, since it is the only
+thing that sees every tab at once.
+
+The panel is painted from the same number as the tab, not a fainter version of
+it — a divider and the page it divides are one sheet, and one number is the only
+way the two are provably identical.
+
+*Considered:* making that number strong enough to turn the sidebar into a
+coloured surface, the way the paper dividers this imitates are. *Rejected:* it
+works, and it was built, but it drags the whole sidebar with it — a light page
+needs its rows inked dark instead of lit, which means a second palette living
+alongside the theme's, and the panel stops being able to follow a theme it no
+longer takes its text colour from. The wash is a shade instead: low enough that
+the theme's own foreground sits on it untouched, so nothing in the sidebar has
+to know whether the theme is dark or light.
+
+---
+
 ### Providers as folders inside this repo, not separate Omarchy plugins
 
 *Considered:* shipping Sticky Notes and OneNote as their own marketplace

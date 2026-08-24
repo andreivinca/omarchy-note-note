@@ -18,7 +18,9 @@
 ```
 manifest.json               plugin id, kinds: ["overlay"], entry point, keepLoaded
 Notes.qml                   the host
-ui/NoteList.qml             sidebar (sections, rows, drag, scrolling)
+ui/NoteList.qml             sidebar (rows, drag, scrolling, the coloured page)
+ui/NotebookTabs.qml         the binder rail down the left edge
+ui/TabColors.js             the tab palette, and the wash both it and the page use
 ui/NoteEditor.qml           title, toolbar, editor, notices and provider views
 providers/PROVIDERS.md      the provider contract — the file to read first
 providers/local/            Markdown folders in ~/Notes
@@ -64,12 +66,14 @@ people write against: change it additively, never silently.
 - A note is addressed by `"<providerId>:<opaque>"`. Only the provider parses
   the part after the colon.
 - A row is `{ kind, path, title, preview, icon, level, expanded, fixed,
-  version }` with `kind` ∈ `note | new | action | tree | placeholder`.
+  version }` with `kind` ∈ `note | new | action | tree | placeholder`. The host
+  no longer emits `placeholder`; a provider may still want a spacer.
 - `version` is an opaque change marker (file mtime, `lastModifiedDateTime`,
   `last_edited_time`). The host reloads the open note when a listing reports a
   newer version and the note has no unsaved edits.
-- Host state (`~/.local/state/omarchy/note-note.json`, version 2): detached
-  flag, collapsed/opened sections, and a `providers` object each provider owns.
+- Host state (`~/.local/state/omarchy/note-note.json`, version 3): detached
+  flag, the open tab's section key, and a `providers` object each provider owns.
+  Version 2's two fold lists are ignored on read and dropped on the next write.
 
 ## Storage
 

@@ -61,7 +61,7 @@ community marketplace at <https://omarchyplugins.com>.
 | Note order is a `.order` file per folder; notebook order in `.notebooks` | a move must not rewrite every note; sync tools travel with the order |
 | Sticky Notes has no title field | Sticky Notes stores the subject as a copy of the first line — a second field would be a lie |
 | Sticky Notes are plain text; OneNote and Notion are Markdown | Sticky Notes has no formatting; the others do |
-| Remote notebooks start collapsed, local ones expanded | the user's own files come first; remote trees can be hundreds of rows |
+| One notebook open at a time, picked from a tab rail; the user's own files open first | a flat list of every source is unreadable past a few hundred rows, and a tab is a place you go to, not a fold you undo |
 | Highlight is shown as `==text==` markers | the editor cannot round-trip a background colour; markers survive editing, colour would not |
 | Every provider signs in separately | signing out of OneNote must not sign out of Sticky Notes |
 | The app is silent while hidden | no timers, no watchers, no requests unless the window is open |

@@ -9,6 +9,7 @@ Item {
 
   readonly property string id: "sticky"
   readonly property string name: "Sticky Notes"
+  readonly property url logo: Qt.resolvedUrl("logo.svg")
   readonly property bool markdown: false
   readonly property bool hasTitle: false      // subject == first line
   readonly property bool canCreate: true
@@ -62,7 +63,9 @@ Item {
       rows.push({ kind: "new", path: "new" })
       rows.push({ kind: "action", path: "logout", title: "Sign out" + (ms.account ? " (" + ms.account + ")" : ""), icon: "󰍃" })
     }
-    root.sections = [{ key: "sticky", name: "Microsoft Sticky Notes", collapsedByDefault: true, rows: rows }]
+    // The sticky-note yellow, which is recognisable where Microsoft's
+    // corporate purple is not. "Sticky Notes" because a tab is narrow.
+    root.sections = [{ key: "sticky", name: "Sticky Notes", color: "#F5D33F", rows: rows }]
     root.updated()
   }
 

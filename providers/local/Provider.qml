@@ -83,7 +83,9 @@ Item {
         rows.push({ kind: "note", path: n.path, title: n.title, preview: n.preview, version: n.version || "" })
       }
       rows.push({ kind: "new", path: "section:" + nb.key })
-      out.push({ key: nb.key, name: nb.name, collapsedByDefault: false, rows: rows })
+      // No colour: a notebook takes its own from its name, so Work and
+      // Personal never look alike.
+      out.push({ key: nb.key, name: nb.name, rows: rows })
     }
     root.sections = out
     root.updated()
@@ -289,7 +291,7 @@ Item {
         root.persistNotebookOrder()
       }
       root.rebuild()
-      if (cb) cb({ key: key })
+      if (cb) cb({ key: key, target: "section:" + key })
     }
   }
 

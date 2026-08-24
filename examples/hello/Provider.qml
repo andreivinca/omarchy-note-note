@@ -10,6 +10,8 @@ Item {
 
   readonly property string id: "hello"
   readonly property string name: "Hello"
+  // Optional: ship a logo.svg beside this file and it heads your tabs.
+  // readonly property url logo: Qt.resolvedUrl("logo.svg")
   readonly property bool markdown: true
   readonly property bool hasTitle: true
   readonly property bool canCreate: true
@@ -48,7 +50,9 @@ Item {
       rows.push({ kind: "new", path: "new" })
       rows.push({ kind: "action", path: "settings", title: "Settings…", icon: "󰒓" })
     }
-    root.sections = [{ key: "hello", name: root.configured ? "Hello, " + root.owner : "Hello", collapsedByDefault: false, rows: rows }]
+    // `color` is optional: name one and the tab is yours, leave it out and
+    // the tab takes a pastel from the section name.
+    root.sections = [{ key: "hello", name: root.configured ? "Hello, " + root.owner : "Hello", color: "#a9dcc0", rows: rows }]
     root.updated()
   }
   function refresh() { rebuild() }

@@ -17,11 +17,31 @@ is enough). The host instantiates each with `host` and `services` set.
 | `canCreate`         | bool   | `create()` is supported |
 | `canDelete`         | bool   | `remove()` is supported |
 | `canReorder`        | bool   | rows may be dragged within a section; `setOrder()` persists |
-| `canCreateSection`  | bool   | `createSection()` is supported (the "New notebook…" row) |
+| `canCreateSection`  | bool   | `createSection()` is supported. The "New notebook…" row is shown only while a tab of yours is open, and makes the notebook in *your* provider |
 | `canImages`         | bool   | a pasted picture can be stored: the editor writes it into the note as `![](file:///…)` and `save()` must upload it. False (the default) makes ctrl+v say so rather than swallow the paste |
 | `tools`             | list   | optional: formatting-toolbar tool ids the backend can store — `bold italic underline strikeout highlight code h1 h2 h3 p ul ol todo indent outdent quote codeblock table rule link`; omitted = all (when `markdown`), `[]` = no toolbar |
 | `microsoftScopes`   | list   | Graph scopes the provider asks for when it creates its own Microsoft account |
-| `sections`          | list   | `[{ key, name, collapsedByDefault, rows, count? }]` — `count` overrides the heading's note count |
+| `logo`              | url    | optional: a mark shown at the head of every one of this provider's tabs |
+| `sections`          | list   | `[{ key, name, rows, color?, count? }]` — one binder tab each; `count` overrides the tab's note count |
+
+`name` is the tab's label, turned a quarter turn and elided if it is long, so
+keep it short. `color` is your brand's, given raw as `#rrggbb`: the rail softens
+it into a pastel and lays it on as a shade — on the tab, and on the panel beside
+it from the same number — so you state your identity and never think about the
+theme, and a loud brand cannot arrive loud. Leave `color` out and the tab takes
+a pastel of its own from `name` — which is what a provider with many notebooks
+wants, since each one then looks different.
+
+`logo` is an image the provider ships beside its own `Provider.qml` —
+`Qt.resolvedUrl("logo.svg")`. SVG and raster both load; it is drawn at icon size
+and shown exactly as given, so a provider that has a mark has already decided
+what it looks like (which means it should read on a dark theme and a light one).
+Leave it out and the tab simply has no mark, which is what the local notebooks
+do — a folder is not a brand.
+
+`collapsedByDefault` is ignored since 2.8: the sidebar shows one section at a
+time and which one is open is the user's, kept between runs. Passing it is
+harmless.
 
 A row is `{ kind, path, title, preview, icon, level, expanded, fixed, version }` with
 `kind` one of `note`, `new` (path = create target), `action` (path = action
@@ -46,7 +66,11 @@ is open (and it has no unsaved edits), the host reloads it.
   backend by reference rather than uploading them again.
 - `create(target, cb)` → `cb({ path, error })`
 - `remove(path, cb)` → `cb({ error })`
-- `createSection(name, cb)` → `cb({ key, error })`
+- `createSection(name, cb)` → `cb({ key, target, error })`. `key` is the new
+  section's key; the host opens it as the active tab. `target` is optional — the
+  create target for a first note in it (the same string your `new` row carries),
+  and the host makes that note when you give one. Have the section listed before
+  you call back, or the tab it opens will be empty.
 - `action(id)`, `toggleTree(id)`
 - `setOrder(sectionKey, paths)`
 - `crumb(path)` → string for the editor's description line

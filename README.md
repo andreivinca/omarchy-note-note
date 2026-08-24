@@ -60,9 +60,24 @@ milk, eggs
 
 A note with an empty title shows the first words of its body in the list.
 
-The sidebar groups notes under collapsible notebook headings (click a heading
-to fold it). Each notebook ends with a `+ New note…` row; `+ New notebook…` at
-the bottom of the sidebar asks for a name and creates the folder. Drag rows to
+Down the left edge is a rail of binder tabs, one per notebook and one per
+source, each carrying a shade of its own colour — a source brings its own
+(OneNote purple, the sticky-note yellow), a notebook takes one from its name.
+Click a tab, or `Ctrl+Tab` through them, to open it: its notes fill the panel,
+and the panel carries the same shade, so the open divider and its page are one
+thing. The open tab is the one that reaches the panel; the rest stop just short
+of it. One tab is open at a time, and the one you left open comes back next
+time.
+
+The number on a tab is its note count, or, while you are searching, how many of
+its notes match — search still spans every tab, and typing something only
+another tab has moves you there. A source that ships a logo shows it at the head
+of its tabs; your own notebooks have none.
+
+Each notebook ends with a `+ New note…` row. `+ New notebook…` at the bottom
+asks for a name and makes the notebook in whichever source's tab is open — which
+today means your own notes, the only source that can make one from here; it
+appears as a new tab and opens. Drag rows to
 reorder within a notebook — the order is kept in that folder's `.order`, and
 the notebook order in `~/Notes/.notebooks`. Delete a note with the `×` on its
 row (asks for confirmation). Rename or remove a notebook by renaming or
@@ -233,6 +248,7 @@ files.
 | `Esc` | clear search, else close (saves first) |
 | `Ctrl+N` | new note in the current notebook |
 | `Ctrl+Shift+N` | new notebook |
+| `Ctrl+Tab` / `Ctrl+Shift+Tab` | next / previous notebook tab |
 | `Ctrl+K` | search |
 | `Ctrl+D` | delete current note |
 | `Ctrl+B` / `Ctrl+I` / `Ctrl+U` / `Ctrl+S` | bold / italic / underline / strikethrough |

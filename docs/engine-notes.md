@@ -11,7 +11,8 @@ something that "should obviously work".
 Qt's property-change signals (`Duplicate signal name`), and
 `signal stateChanged()` collides with `Item.state`. Ours are `updated()` and
 `persistRequested()`. Likewise a `property var opened` in the host collided
-with the shell contract's `opened` bool — sidebar state is `openedSections`.
+with the shell contract's `opened` bool, and a tab delegate's `active` would
+collide with names Qt owns — the sidebar's are `activeSection` and `current`.
 
 **The JS engine has no regex lookbehind.** `"a|b".split(/(?<!\\)\|/)` silently
 returns the whole string as one element instead of throwing. Protect escaped
@@ -19,7 +20,24 @@ characters by substitution instead.
 
 **`ListView` with section headers does not keep `originY` at 0.** A scrollbar
 thumb computed from `contentY` alone sits too low; use
-`contentY - originY`.
+`contentY - originY`. The sidebar has no section headers any more — the tab
+rail replaced them — so its `originY` is 0, but the subtraction stays: it is
+right either way, and taking it out would quietly re-arm this the day a section
+delegate comes back.
+
+**A rotated `Text` is laid out before it is turned.** Its `width` is the run of
+the text and its `height` the thickness, whatever the angle. Size it that way
+round, and rotate with `rotation` (which turns about `transformOrigin`, centre
+by default) rather than `transform: Rotation`, which makes you compute both
+origins by hand.
+
+**To square one side of a rounded rectangle, clip it.** Put it in an
+`Item { clip: true }` and make it wider than the item by its radius, so the far
+corners fall outside. The obvious alternative — a rounded rect plus a square cap
+of the same colour — only works with opaque fills: two translucent rectangles
+that overlap composite twice and paint a visibly darker strip down the seam.
+(The tab rail was built this way and no longer needs it — its tabs are square —
+but the lesson holds and the compositing half of it still bites.)
 
 **Replacing a list model resets the scroll.** Both `ListModel.clear()` +
 refill and swapping a JS array reset the view to the top. Save

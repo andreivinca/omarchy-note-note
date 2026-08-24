@@ -12,6 +12,7 @@ Item {
 
   readonly property string id: "onenote"
   readonly property string name: "OneNote"
+  readonly property url logo: Qt.resolvedUrl("logo.svg")
   readonly property bool markdown: true
   readonly property bool hasTitle: true
   readonly property bool canCreate: true
@@ -100,7 +101,7 @@ Item {
       if (books.length === 0) rows.push({ kind: "action", path: "refresh", title: "No notebooks found — refresh", icon: "󰑐" })
       rows.push({ kind: "action", path: "logout", title: "Sign out" + (ms.account ? " (" + ms.account + ")" : ""), icon: "󰍃" })
     }
-    root.sections = [{ key: "onenote", name: "OneNote", collapsedByDefault: true, count: root.pages.length, rows: rows }]
+    root.sections = [{ key: "onenote", name: "OneNote", color: "#7719AA", count: root.pages.length, rows: rows }]
     root.updated()
   }
 

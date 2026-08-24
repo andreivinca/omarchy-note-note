@@ -71,6 +71,17 @@ Item {
   // the note; the provider owns what is inside.
   property Component customView: null
   property var customViewProps: ({})
+  // The tools and the note sit the same distance from the hairline as the
+  // toolbar sits from the title. The two numbers differ because the neighbours
+  // do: a toolbar button carries its own padding below its glyph, the first
+  // line of the note carries almost none, so equal numbers here would look
+  // unequal on screen.
+  readonly property real ruleRoomAbove: Style.spacing.lg
+  readonly property real ruleRoomBelow: Style.space(17)
+
+  // The title, a step above `heading`. The shell's scale goes 16 then straight
+  // to 24, and a note's title wants the size in between.
+  readonly property int titleSize: Math.round(Style.font.heading * 1.25)
   readonly property bool showingNotice: noticeText.length > 0 || customView !== null
   function showView(component, props) {
     customView = component; customViewProps = props || ({})
@@ -527,77 +538,80 @@ Item {
     anchors.fill: parent
     spacing: Style.spacing.md
 
-    // ---- header
-    Item {
-      width: parent.width
-      height: titleColumn.implicitHeight
-
-      Column {
-        id: titleColumn
-        anchors.left: parent.left
-        anchors.right: parent.right
-        spacing: Style.spacing.xxs
-
-        Text {
-          textFormat: Text.PlainText
-          visible: root.showingNotice
-          width: parent.width
-          text: root.noticeTitle
-          color: root.foreground
-          font.family: root.fontFamily
-          font.pixelSize: Style.font.heading
-          elide: Text.ElideRight
-        }
-
-        TextField {
-          id: titleField
-          width: parent.width
-          // Sticky Notes have no separate title (subject = first line).
-          visible: !root.showingNotice && root.hasTitle
-          enabled: root.hasNote && !root.readOnly
-          placeholderText: root.hasNote ? "Untitled" : "Note Note"
-          foreground: root.foreground
-          accent: root.accent
-          font.family: root.fontFamily
-          font.pixelSize: Style.font.heading
-          horizontalPadding: Style.spacing.xs
-          verticalPadding: 0
-          onTextEdited: root.edited()
-          Keys.priority: Keys.BeforeItem
-          Keys.onPressed: function(event) { root.shortcut(event) }
-          Keys.onReturnPressed: root.focusEditor()
-          Keys.onEnterPressed: root.focusEditor()
-          Keys.onDownPressed: root.focusEditor()
-        }
-
-        // Only the empty-state hint lives here; where a note comes from is
-        // what the sidebar shows.
-        Text {
-          textFormat: Text.PlainText
-          visible: !root.showingNotice && !root.hasNote
-          width: parent.width
-          text: "Pick a note on the left, or press ctrl+n for a new one."
-          color: Qt.darker(root.foreground, 1.45)
-          font.family: root.fontFamily
-          font.pixelSize: Style.font.bodySmall
-          elide: Text.ElideRight
-        }
-      }
-    }
-
-    // ---- content pane (CodeArea-shaped)
-    BorderSurface {
+    // ---- the note's sheet: title, toolbar and body on one surface. No frame
+    // around it and no rule beside it — a box drawn around a page is one line
+    // too many.
+    Rectangle {
       id: frame
       width: parent.width
-      height: parent.height - y
-      radius: Style.cornerRadius
-      color: Util.alpha(root.foreground, 0.03)
-      borderSpec: Border.controlSpec(area.activeFocus ? "focus" : "normal", root.foreground, root.accent)
+      height: parent.height
+      color: "transparent"
 
       Column {
         anchors.fill: parent
-        anchors.margins: Style.spacing.sm
+        anchors.margins: Style.spacing.panelPadding
         spacing: Style.spacing.xs
+
+      // ---- header: the title belongs on the note's own sheet
+      Item {
+        width: parent.width
+        height: titleColumn.implicitHeight + Style.spacing.md
+
+        Column {
+          id: titleColumn
+          anchors.left: parent.left
+          anchors.right: parent.right
+          spacing: Style.spacing.xxs
+
+          Text {
+            textFormat: Text.PlainText
+            visible: root.showingNotice
+            width: parent.width
+            text: root.noticeTitle
+            color: root.foreground
+            font.family: root.fontFamily
+            font.pixelSize: root.titleSize
+            elide: Text.ElideRight
+          }
+
+          TextField {
+            id: titleField
+            width: parent.width
+            // Sticky Notes have no separate title (subject = first line).
+            visible: !root.showingNotice && root.hasTitle
+            enabled: root.hasNote && !root.readOnly
+            placeholderText: root.hasNote ? "Untitled" : "Note Note"
+            foreground: root.foreground
+            accent: root.accent
+            font.family: root.fontFamily
+            font.pixelSize: root.titleSize
+            horizontalPadding: Style.spacing.xs
+            verticalPadding: 0
+            // A title is a title: no box around it. The padding still comes off
+            // the spec the field would have drawn, so nothing shifts.
+            background: null
+            onTextEdited: root.edited()
+            Keys.priority: Keys.BeforeItem
+            Keys.onPressed: function(event) { root.shortcut(event) }
+            Keys.onReturnPressed: root.focusEditor()
+            Keys.onEnterPressed: root.focusEditor()
+            Keys.onDownPressed: root.focusEditor()
+          }
+
+          // Only the empty-state hint lives here; where a note comes from is
+          // what the sidebar shows.
+          Text {
+            textFormat: Text.PlainText
+            visible: !root.showingNotice && !root.hasNote
+            width: parent.width
+            text: "Pick a note on the left, or press ctrl+n for a new one."
+            color: Qt.darker(root.foreground, 1.45)
+            font.family: root.fontFamily
+            font.pixelSize: Style.font.bodySmall
+            elide: Text.ElideRight
+          }
+        }
+      }
 
       // ---- formatting toolbar (Markdown notes only)
       Flow {
@@ -681,11 +695,17 @@ Item {
       }
 
         // A hairline under the tools, so they read as the note's own strip.
-        Rectangle {
+        Item {
           visible: toolbar.visible
           width: parent.width
-          height: Style.spacing.hairline
-          color: Util.alpha(root.foreground, 0.12)
+          height: root.ruleRoomAbove + Style.spacing.hairline + root.ruleRoomBelow
+
+          Rectangle {
+            y: root.ruleRoomAbove
+            width: parent.width
+            height: Style.spacing.hairline
+            color: Util.alpha(root.foreground, 0.12)
+          }
         }
 
         Loader {
@@ -828,8 +848,8 @@ Item {
         visible: root.hasNote && !root.showingNotice
         anchors.right: parent.right
         anchors.bottom: parent.bottom
-        anchors.rightMargin: frame.borderRight + Style.spacing.xs
-        anchors.bottomMargin: frame.borderBottom + Style.spacing.xs
+        anchors.rightMargin: Style.spacing.xs
+        anchors.bottomMargin: Style.spacing.xs
         width: counter.implicitWidth + Style.spacing.sm * 2
         height: counter.implicitHeight + Style.spacing.xxs * 2
         radius: Style.cornerRadius

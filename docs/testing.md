@@ -34,7 +34,8 @@ $C selectPath "local:/home/you/Notes/x.md"
 $C editorTool h1                 # any toolbar tool id
 $C editorCursor 42               # move the caret; prints position + in-table
 $C runAction setup               # a sidebar action row
-$C treeToggle "<id>" / toggleSection "onenote/onenote"
+$C treeToggle "<id>" / activateSection "onenote/onenote"
+$C tabsInfo ""                   # every tab: key, name, colour, count, search hits
 $C scrollList 300 / listOffset ""
 ```
 

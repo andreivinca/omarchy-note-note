@@ -5,6 +5,7 @@ import QtQuick
 import qs.Commons
 import qs.Ui
 import "ui"
+import "ui/TabColors.js" as TabColors
 import "services/clipboard" as Clipboard
 import "services/markdown" as Markdown
 import "services/microsoft" as Microsoft
@@ -147,6 +148,9 @@ Item {
     return null
   }
   function providerById(id) { return providerOf(id + ":") }
+  // The provider of the open tab. Section keys start with the provider's id.
+  function activeProvider() { var k = activeKey(); return k ? providerById(k.substring(0, k.indexOf("/"))) : null }
+  function canCreateNotebook() { var p = activeProvider(); return !!p && p.canCreateSection === true }
 
   function addProvider(url) {
     var comp = Qt.createComponent(url)
@@ -189,26 +193,59 @@ Item {
   property var rows: []
   property int revision: 0
   property bool pickedInitial: false
-  // Explicit fold overrides: sections open by default remember being
-  // collapsed; sections collapsed by default remember being opened.
-  property var collapsed: []
-  property var openedSections: []
+  // The tab the sidebar is open at, persisted verbatim. It is deliberately not
+  // resolved against the live sections here: a provider that has not listed yet
+  // (OneNote is async) must not cost the user their tab.
+  property string activeSection: ""
+  property var tabs: []
+  property bool switchingTab: false
   function sectionKey(p, s) { return p.id + "/" + s.key }
-  function isFolded(key, byDefault) { return byDefault ? root.openedSections.indexOf(key) < 0 : root.collapsed.indexOf(key) >= 0 }
+  function sectionKeys() { var out = []; eachSection(function(p, s, k) { out.push(k) }); return out }
+  // What the rail actually opens: the stored tab while it exists, else the
+  // first local notebook — the user's own files come first, which is where this
+  // used to land the selection anyway.
+  function activeKey() {
+    var keys = sectionKeys()
+    if (keys.indexOf(root.activeSection) >= 0) return root.activeSection
+    for (var i = 0; i < keys.length; i++) if (keys[i].indexOf("local/") === 0) return keys[i]
+    return keys.length ? keys[0] : ""
+  }
   function eachSection(fn) {
     for (var p = 0; p < root.providers.length; p++) {
       var prov = root.providers[p], secs = prov.sections || []
       for (var s = 0; s < secs.length; s++) fn(prov, secs[s], sectionKey(prov, secs[s]))
     }
   }
-  function toggleSection(key) {
-    var byDefault = false
-    eachSection(function(p, s, k) { if (k === key) byDefault = s.collapsedByDefault === true })
-    var list2 = byDefault ? root.openedSections.slice() : root.collapsed.slice(), i = list2.indexOf(key)
-    if (i >= 0) list2.splice(i, 1); else list2.push(key)
-    if (byDefault) root.openedSections = list2; else root.collapsed = list2
+  function setActiveSection(key) {
+    if (!key || key === activeKey()) return
+    root.activeSection = key
+    root.switchingTab = true
     rebuildRows()
     saveState()
+  }
+  function cycleSection(delta) {
+    var keys = sectionKeys()
+    if (keys.length < 2) return
+    setActiveSection(keys[(keys.indexOf(activeKey()) + delta + keys.length) % keys.length])
+  }
+  // Two notebooks whose names happen to hash to the same pastel are told apart
+  // by walking the second one along the palette. Only the host can do this: it
+  // is the only thing that sees every tab at once. A provider that named its
+  // own colour keeps it — a brand is not ours to move.
+  function decollide(tabs) {
+    var taken = {}, i, j, c
+    for (i = 0; i < tabs.length; i++) if (tabs[i].color) taken[TabColors.pastelize(tabs[i].color)] = true
+    for (i = 0; i < tabs.length; i++) {
+      if (tabs[i].color) continue
+      var from = TabColors.indexFor(tabs[i].name)
+      for (j = 0; j < TabColors.PALETTE.length; j++) {
+        c = TabColors.PALETTE[(from + j) % TabColors.PALETTE.length]
+        if (!taken[TabColors.pastelize(c)]) break
+      }
+      taken[TabColors.pastelize(c)] = true
+      tabs[i].color = c
+    }
+    return tabs
   }
   function matches(r) {
     if (!root.filterText) return true
@@ -224,11 +261,8 @@ Item {
     var words = text.split(/\s+/).slice(0, 5).join(" ")
     return words.length < text.length ? words + "…" : words
   }
-  // The section string carries key, name and count so a change produces a
-  // fresh heading. Keys are never empty (they start with the provider id).
-  function groupOf(key, name, count) { return key + "" + name + "" + count }
-  function row(provider, key, group, r) {
-    return { provider: provider.id, notebook: key, group: group, kind: r.kind || "note", path: r.path || "",
+  function row(provider, key, r) {
+    return { provider: provider.id, notebook: key, kind: r.kind || "note", path: r.path || "",
              title: r.title || "", preview: r.preview || "", icon: r.icon || "",
              fixed: r.fixed === true || !provider.canReorder, level: r.level || 0, expanded: r.expanded === true,
              version: r.version || "" }
@@ -236,20 +270,28 @@ Item {
   function rebuildRows() {
     root.revision++
     root.currentCrumb = crumbOf(root.currentPath)
-    var keep = list.scrollOffset(), out = []
+    // Opening another tab starts at the top; a refresh of the one already open
+    // keeps its place.
+    var keep = root.switchingTab ? 0 : list.scrollOffset(), out = [], tabs = [], active = activeKey()
+    root.switchingTab = false
     eachSection(function(prov, s, key) {
       var all = s.rows || [], notes = all.filter(function(r) { return r.kind === "note" })
-      var group = groupOf(key, s.name, s.count !== undefined ? s.count : notes.length)
+      // Every tab counts its own hits, the closed ones included — that is what
+      // the number on a tab says while a search is running.
+      tabs.push({ key: key, name: s.name, color: s.color || "", logo: prov.logo || "",
+                  count: s.count !== undefined ? s.count : notes.length,
+                  matches: root.filterText ? notes.filter(matches).length : 0 })
+      if (key !== active) return
       if (root.filterText) {
-        for (var i = 0; i < notes.length; i++) if (matches(notes[i])) out.push(row(prov, key, group, notes[i]))
+        for (var i = 0; i < notes.length; i++) if (matches(notes[i])) out.push(row(prov, key, notes[i]))
         return
       }
-      if (isFolded(key, s.collapsedByDefault === true)) { out.push(row(prov, key, group, { kind: "placeholder" })); return }
-      for (var j = 0; j < all.length; j++) out.push(row(prov, key, group, all[j]))
+      for (var j = 0; j < all.length; j++) out.push(row(prov, key, all[j]))
     })
+    root.tabs = decollide(tabs)
     root.rows = out
     if (keep > 0) Qt.callLater(function() { list.setScrollOffset(keep) })
-    // First open: land on the most recent local note rather than nothing.
+    // First open: land on the most recent note of the tab that opened.
     if (!root.currentPath && !root.filterText && !root.pickedInitial) {
       var local = root.providerById("local")
       if (local && local.sections.length) {
@@ -258,7 +300,7 @@ Item {
       }
     }
     // A note that vanished from its provider (deleted elsewhere, signed out)
-    // is deselected; one merely hidden by folding is kept.
+    // is deselected; one merely sitting in another tab is kept.
     if (root.currentPath && !root.filterText && !noteExists(root.currentPath)) { selectPath(""); return }
     // The open note changed elsewhere (its version moved): reload it, unless
     // there are unsaved edits here.
@@ -303,13 +345,18 @@ Item {
   function setFilter(text) {
     root.filterText = text
     rebuildRows()
+    // Searching still spans every tab. When the open one has nothing, move to
+    // the first that does, so a first keystroke always lands on something.
+    if (root.filterText && root.rows.length === 0)
+      for (var t = 0; t < root.tabs.length; t++) if (root.tabs[t].matches > 0) { setActiveSection(root.tabs[t].key); break }
     if (root.filterText && rowIndexOf(root.currentPath) < 0)
       for (var i = 0; i < root.rows.length; i++) if (root.rows[i].kind === "note") { selectPath(root.rows[i].path); break }
   }
   function crumbOf(path) { var p = providerOf(path); return p ? p.crumb(path) : "" }
-  function foldedKeys() { return root.rows.filter(function(r) { return r.kind === "placeholder" }).map(function(r) { return r.notebook }) }
 
   // IPC helpers (omarchy-shell shell call <id> scrollList 400).
+  function activateSection(key) { setActiveSection(String(key)); return root.activeSection }
+  function tabsInfo(x) { return JSON.stringify(root.tabs) }
   function scrollList(y) { list.setScrollOffset(Number(y)); return list.scrollOffset() }
   function listOffset() { return list.scrollOffset() }
   function debugState() {
@@ -317,10 +364,15 @@ Item {
                             status: root.statusText, readOnly: editor.readOnly, words: editor.wordCount, notice: editor.noticeTitle, viewFocused: editor.viewHasFocus,
                             providers: root.providers.map(function(p) { return p.id }) })
   }
+  // Asked of the providers rather than of the visible rows: an action belonging
+  // to a tab that is not open is still an action.
   function runAction(id) {
-    for (var i = 0; i < root.rows.length; i++)
-      if (root.rows[i].kind === "action" && root.rows[i].path === id) { var p = providerById(root.rows[i].provider); if (p) p.action(id); return true }
-    return false
+    var done = false
+    eachSection(function(prov, s, key) {
+      if (done || !(s.rows || []).some(function(r) { return r.kind === "action" && r.path === id })) return
+      prov.action(id); done = true
+    })
+    return done
   }
   function rowsOf(providerId) {
     return JSON.stringify(root.rows.filter(function(r) { return r.provider === providerId }).map(function(r) { return r.kind + ":" + r.path.substring(0, 24) }))
@@ -331,9 +383,12 @@ Item {
   function editorUndo(n) { for (var i = 0; i < Number(n || 1); i++) editor.undo(); return editor.wordCount }
   function editorCursor(pos) { editor.setCursorPosition(Number(pos)); editor.updateInTable(); return editor.cursorPosition() + (editor.inTable ? " in-table" : " outside") }
   function treeToggle(id) {
-    for (var i = 0; i < root.rows.length; i++)
-      if (root.rows[i].kind === "tree" && root.rows[i].path === id) { var p = providerById(root.rows[i].provider); if (p) p.toggleTree(id); return true }
-    return false
+    var done = false
+    eachSection(function(prov, s, key) {
+      if (done || !(s.rows || []).some(function(r) { return r.kind === "tree" && r.path === id })) return
+      prov.toggleTree(id); done = true
+    })
+    return done
   }
 
   // ── selection ───────────────────────────────────────────────────────
@@ -385,7 +440,7 @@ Item {
     var p = providerId ? providerById(providerId) : providerOf(root.currentPath)
     if (p && target === undefined) target = p.createTargetFor(root.currentPath)
     if (!p || !target) { p = providerById("local"); target = p ? p.createTargetFor("") : "" }
-    if (!p || !target) { list.startNewNotebook(); return }
+    if (!p || !target) { root.startNewNotebook(); return }
     if (!p.canCreate) return
     p.create(target, function(r) {
       if (r.error) { showStatus(p.name + ": " + r.error); return }
@@ -397,12 +452,24 @@ Item {
     })
   }
 
+  // "New notebook…" makes one inside the tab you are on, and only where the
+  // provider says it can: the local one, whose notebooks are folders and each
+  // its own tab, so a new one opens the moment it exists. The others keep
+  // their notebooks inside their single tab and are made where they live.
   function newNotebook(name) {
-    var p = providerById("local")
-    if (p && p.canCreateSection) p.createSection(name, function(r) {
+    var p = activeProvider()
+    if (!p || !p.canCreateSection) return
+    p.createSection(name, function(r) {
       if (r.error) { showStatus(p.name + ": " + r.error); return }
-      root.newNote("local", "section:" + r.key)
+      setActiveSection(p.id + "/" + r.key)
+      // Where a note in the new section goes is the provider's to say.
+      if (r.target) root.newNote(p.id, r.target)
     })
+  }
+  function startNewNotebook() {
+    var p = activeProvider()
+    if (canCreateNotebook()) { list.startNewNotebook(); return }
+    showStatus((p ? p.name : "This tab") + ": notebooks are made where they live, not here")
   }
 
   property string deletePath: ""
@@ -439,10 +506,16 @@ Item {
     var ctrl = event.modifiers & Qt.ControlModifier
     if (event.key === Qt.Key_Escape) { root.goBack(); return true }
     if (ctrl && (event.key === Qt.Key_K || event.key === Qt.Key_L)) { searchField.forceActiveFocus(); searchField.selectAll(); return true }
-    if (ctrl && event.key === Qt.Key_N) { if (event.modifiers & Qt.ShiftModifier) list.startNewNotebook(); else root.newNote(); return true }
+    if (ctrl && event.key === Qt.Key_N) { if (event.modifiers & Qt.ShiftModifier) root.startNewNotebook(); else root.newNote(); return true }
     if (ctrl && event.key === Qt.Key_D) { root.requestDelete(root.currentPath); return true }
     if (ctrl && (event.key === Qt.Key_Down || event.key === Qt.Key_J)) { root.moveSelection(1); return true }
     if (ctrl && event.key === Qt.Key_Up) { root.moveSelection(-1); return true }
+    // Ctrl+Tab walks the binder, the way Ctrl+up/down walks the notes in it.
+    // Shift+Tab arrives as Key_Backtab on some layouts and as Key_Tab on others.
+    if (ctrl && (event.key === Qt.Key_Tab || event.key === Qt.Key_Backtab)) {
+      root.cycleSection((event.key === Qt.Key_Backtab || (event.modifiers & Qt.ShiftModifier)) ? -1 : 1)
+      return true
+    }
     if (ctrl && editor.bodyFocused && !editor.plain && !editor.readOnly) {
       if (event.key === Qt.Key_B) { editor.toggleFormat("bold"); return true }
       if (event.key === Qt.Key_I) { editor.toggleFormat("italic"); return true }
@@ -509,14 +582,15 @@ Item {
   function saveState() {
     var ps = {}
     for (var i = 0; i < root.providers.length; i++) ps[root.providers[i].id] = root.providers[i].saveState()
-    stateFile.setText(JSON.stringify({ version: 2, detached: root.detached, collapsed: root.collapsed, opened: root.openedSections, providers: ps }, null, 2) + "\n")
+    // version 3: the open tab, where 2 kept two lists of folded sections. An
+    // older file simply has no `active`, and the first local notebook opens.
+    stateFile.setText(JSON.stringify({ version: 3, detached: root.detached, active: root.activeSection, providers: ps }, null, 2) + "\n")
   }
   function loadState(raw) {
     try {
       var s = JSON.parse(raw || "{}")
       if (s.detached === true) root.detached = true
-      if (Array.isArray(s.collapsed)) root.collapsed = s.collapsed
-      if (Array.isArray(s.opened)) root.openedSections = s.opened
+      if (typeof s.active === "string") root.activeSection = s.active
       if (s.providers) root.providerState = s.providers
     } catch (e) { /* a corrupt state file costs nothing */ }
     scanProviders.running = true
@@ -588,7 +662,8 @@ Item {
           Keys.onPressed: function(event) {
             if (event.key === Qt.Key_Down) { root.moveSelection(1); event.accepted = true }
             else if (event.key === Qt.Key_Up) { root.moveSelection(-1); event.accepted = true }
-            else if (event.key === Qt.Key_Return || event.key === Qt.Key_Enter || event.key === Qt.Key_Tab) { editor.focusEditor(); event.accepted = true }
+            else if (event.key === Qt.Key_Return || event.key === Qt.Key_Enter
+                     || (event.key === Qt.Key_Tab && !(event.modifiers & Qt.ControlModifier))) { editor.focusEditor(); event.accepted = true }
             else if (root.handleShortcut(event)) event.accepted = true
           }
         }
@@ -618,7 +693,7 @@ Item {
           anchors.right: shapeButton.left
           anchors.rightMargin: Style.spacing.md
           anchors.verticalCenter: parent.verticalCenter
-          text: root.statusText.length > 0 ? root.statusText : "ctrl+k search · ctrl+↑↓ note · ctrl+n new · ctrl+shift+n notebook · esc back"
+          text: root.statusText.length > 0 ? root.statusText : "ctrl+k search · ctrl+↑↓ note · ctrl+tab notebook · ctrl+n new · esc back"
           color: root.statusText.length > 0 ? root.accent : Qt.darker(root.foreground, 1.55)
           font.family: Style.font.menuFamily
           font.pixelSize: Style.font.caption
@@ -637,12 +712,14 @@ Item {
 
         NoteList {
           id: list
-          width: Style.space(215)
+          width: Style.space(215) + list.railWidth
           height: parent.height
           model: root.rows
           currentPath: root.currentPath
           filtering: root.filterText.length > 0
-          collapsed: root.revision < 0 ? [] : root.foldedKeys()
+          sections: root.tabs
+          activeKey: root.revision < 0 ? "" : root.activeKey()
+          canCreateNotebook: root.revision < 0 ? false : root.canCreateNotebook()
           foreground: root.foreground
           accent: root.accent
           selectedBackground: root.selectedBackground
@@ -657,7 +734,7 @@ Item {
           onNewNotebookRequested: function(name) { root.newNotebook(name) }
           onActionRequested: function(id) { root.runAction(id) }
           onTreeToggled: function(id) { root.treeToggle(id) }
-          onSectionToggled: function(key) { root.toggleSection(key) }
+          onSectionActivated: function(key) { root.setActiveSection(key) }
           onDeleteRequested: function(path) { root.requestDelete(path) }
           onMoveRequested: function(from, to) {
             var mf = root.rowIndexOf(from), mt = root.rowIndexOf(to)
@@ -673,11 +750,9 @@ Item {
           }
         }
 
-        Rectangle { width: 1; height: parent.height; color: Util.alpha(root.foreground, 0.15) }
-
         NoteEditor {
           id: editor
-          width: parent.width - list.width - Style.spacing.lg * 2 - 1
+          width: parent.width - list.width - Style.spacing.lg
           height: parent.height
           markdown: markdownService
           clipboard: clipboardService

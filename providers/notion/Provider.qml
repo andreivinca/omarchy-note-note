@@ -12,6 +12,7 @@ Item {
 
   readonly property string id: "notion"
   readonly property string name: "Notion"
+  readonly property url logo: Qt.resolvedUrl("logo.svg")
   readonly property bool markdown: true
   readonly property bool hasTitle: true
   readonly property bool canCreate: true
@@ -63,7 +64,9 @@ Item {
       rows.push({ kind: "action", path: "refresh", title: "Refresh", icon: "󰑐" })
       rows.push({ kind: "action", path: "settings", title: "Settings…" + (root.workspace ? " (" + root.workspace + ")" : ""), icon: "󰒓" })
     }
-    root.sections = [{ key: "notion", name: "Notion", collapsedByDefault: true, rows: rows }]
+    // Notion is black and white, which has no hue to soften; a warm
+    // neutral is the honest answer.
+    root.sections = [{ key: "notion", name: "Notion", color: "#B8B0A8", rows: rows }]
     root.updated()
   }
 
