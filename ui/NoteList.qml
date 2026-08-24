@@ -32,6 +32,11 @@ Item {
   property string activeKey: ""
   // Only a provider that can make notebooks offers the row that makes them.
   property bool canCreateNotebook: false
+  readonly property string activeName: {
+    for (var i = 0; i < root.sections.length; i++)
+      if (root.sections[i].key === root.activeKey) return root.sections[i].name || ""
+    return ""
+  }
   property color foreground: Color.menu.text
   property color accent: Color.accent
   property color selectedBackground: Color.menu.selectedBackground
@@ -57,6 +62,10 @@ Item {
   // The page's own margin. The rows sit inside it, so a title never starts on
   // the panel's edge and the list has air above and below it.
   readonly property real pagePadding: Style.spacing.lg
+  // The bar that marks the open note, and where a row's contents start because
+  // of it — the search panel measures itself the same way.
+  readonly property real markWidth: Style.space(2)
+  readonly property real textInset: markWidth + Style.spacing.md
 
   // The page the open divider is attached to, painted in exactly the tab's
   // colour — the same wash over the same background, from the same number,
@@ -117,9 +126,30 @@ Item {
         color: panel.fill
       }
 
+    // Searching swaps the whole page for its own panel rather than bending this
+    // one into a results list: no headings to keep, no rows to drag, nothing to
+    // create. See SearchResults.qml.
+    SearchResults {
+      anchors.fill: parent
+      anchors.margins: root.pagePadding
+      visible: root.filtering
+      model: root.filtering ? listView.model : []
+      currentPath: root.currentPath
+      notebook: root.activeName
+      foreground: root.foreground
+      accent: root.accent
+      selectedBackground: root.selectedBackground
+      selectedText: root.selectedText
+      fontFamily: root.fontFamily
+      titleFor: root.titleFor
+      rowHeight: root.rowHeight
+      onActivated: function(path) { root.activated(path) }
+    }
+
     Column {
       anchors.fill: parent
       anchors.margins: root.pagePadding
+      visible: !root.filtering
       spacing: 0
 
       Item {
@@ -177,6 +207,15 @@ Item {
               readonly property bool current: slot.isNote && slot.modelData.path === root.currentPath
               color: current ? root.selectedBackground
                 : (rowHover.hovered ? Style.hoverFill : "transparent")
+
+              // A bar on the open note's edge, in the accent — the same idea as
+              // the tab that reaches the panel, said one level down.
+              Rectangle {
+                width: root.markWidth
+                height: parent.height
+                visible: row.current
+                color: root.accent
+              }
               // Action rows ("New note…", sign in/out, settings) are dimmed so
               // notes stand out from the things you can do; hover lifts them.
               opacity: dragArea.drag.active ? 0.85 : ((slot.isNew || slot.isAction) && !rowHover.hovered ? 0.38 : 1)
@@ -185,7 +224,7 @@ Item {
 
               Row {
                 anchors.fill: parent
-                anchors.leftMargin: Style.spacing.sm + slot.indent
+                anchors.leftMargin: root.textInset + slot.indent
                 anchors.rightMargin: Style.spacing.sm
                 spacing: Style.spacing.md
 
@@ -195,9 +234,12 @@ Item {
                   width: Style.font.icon + Style.space(2)
                   text: slot.isNew ? "+" : (slot.isAction ? (slot.modelData.icon || "󰊻")
                     : (slot.isTree ? (slot.modelData.expanded ? "󰅀" : "󰅂") : "󰎞"))
+                  // Every note carries the same glyph, so it says nothing a
+                  // title does not — kept for the column it holds, dimmed so
+                  // the eye goes to the words.
                   color: slot.isNew || slot.isAction ? root.accent
                     : (slot.isTree ? Qt.lighter(root.accent, 1.4)
-                    : (row.current ? root.selectedText : Qt.darker(root.foreground, 1.3)))
+                    : (row.current ? root.selectedText : Util.alpha(root.foreground, 0.4)))
                   font.family: Style.fontFamily
                   font.pixelSize: (slot.isNew || slot.isAction) ? Style.font.iconSmall : Style.font.icon
                   horizontalAlignment: Text.AlignHCenter
@@ -248,7 +290,9 @@ Item {
                 anchors.rightMargin: Style.spacing.xs
                 anchors.verticalCenter: parent.verticalCenter
                 visible: slot.isNote
-                opacity: row.current || rowHover.hovered ? 1 : 0.3
+                // Off entirely until you are on the row: 200 of these at a
+                // third of an opacity is a texture, not an affordance.
+                opacity: row.current || rowHover.hovered ? 1 : 0
                 Behavior on opacity { NumberAnimation { duration: 120 } }
                 iconText: "󰅖"
                 tooltipText: "Delete this note"
@@ -348,7 +392,7 @@ Item {
 
         Row {
           anchors.fill: parent
-          anchors.leftMargin: Style.spacing.sm
+          anchors.leftMargin: root.textInset
           anchors.rightMargin: Style.spacing.sm
           spacing: Style.spacing.md
 

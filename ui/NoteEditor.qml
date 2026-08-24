@@ -618,7 +618,7 @@ Item {
         id: toolbar
         visible: root.hasNote && !root.plain && !root.readOnly && !root.showingNotice && (root.enabledTools === null || root.enabledTools.length > 0)
         width: parent.width
-        spacing: Style.spacing.xs
+        spacing: Style.spacing.sm
 
         Repeater {
           // Material Design glyphs from the shell's Nerd Font, by name:
@@ -848,19 +848,20 @@ Item {
         visible: root.hasNote && !root.showingNotice
         anchors.right: parent.right
         anchors.bottom: parent.bottom
-        anchors.rightMargin: Style.spacing.xs
-        anchors.bottomMargin: Style.spacing.xs
-        width: counter.implicitWidth + Style.spacing.sm * 2
-        height: counter.implicitHeight + Style.spacing.xxs * 2
-        radius: Style.cornerRadius
-        color: Util.alpha(root.foreground, 0.06)
+        // Lined up with the note's own margin, not tucked into the corner:
+        // it reads as the last line of the page rather than a badge on it.
+        anchors.rightMargin: Style.spacing.panelPadding
+        anchors.bottomMargin: Style.spacing.panelPadding
+        width: counter.implicitWidth
+        height: counter.implicitHeight
+        color: "transparent"
 
         Text {
           id: counter
           anchors.centerIn: parent
           textFormat: Text.PlainText
           text: root.wordCount + (root.wordCount === 1 ? " word" : " words")
-          color: Qt.darker(root.foreground, 1.5)
+          color: Util.alpha(root.foreground, 0.35)
           font.family: root.fontFamily
           font.pixelSize: Style.font.caption
         }

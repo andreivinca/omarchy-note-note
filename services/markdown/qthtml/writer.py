@@ -148,7 +148,9 @@ class _Renderer:
                             for row in part.get("children") or [])
         cells = "".join("<tr>%s</tr>" % "".join("<td><p>%s</p></td>" % (c or "<br />") for c in row)
                         for row in rows)
-        return '<table border="1" cellspacing="2" cellpadding="0">%s</table>' % cells
+        # cellspacing 0 or every cell's border sits beside the table's own and
+        # the grid reads doubled; the padding is what keeps text off the rules.
+        return '<table border="1" cellspacing="0" cellpadding="6">%s</table>' % cells
 
     # ---- inline ---------------------------------------------------------
 

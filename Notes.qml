@@ -86,7 +86,7 @@ Item {
 
   function goBack() {
     if (searchField.activeFocus) {
-      if (root.filterText.length > 0) { searchField.text = ""; setFilter("") }
+      if (root.filterText.length > 0) { root.clearSearch() }
       else if (!root.detached) root.dismiss()
       return
     }
@@ -218,6 +218,10 @@ Item {
   }
   function setActiveSection(key) {
     if (!key || key === activeKey()) return
+    // Opening another notebook puts the one you were reading away: a note from
+    // a tab you have left is not what the panel beside it is showing. Unsaved
+    // edits are flushed on the way out.
+    selectPath("")
     root.activeSection = key
     root.switchingTab = true
     rebuildRows()
@@ -341,6 +345,14 @@ Item {
     if (!path) return -1
     for (var i = 0; i < root.rows.length; i++) if (root.rows[i].kind === "note" && root.rows[i].path === path) return i
     return -1
+  }
+  // Ends a search and puts the field back. The open note is deliberately left
+  // alone: it is the one you found, and it is what you want to be looking at
+  // once the full list comes back.
+  function clearSearch() {
+    searchField.text = ""
+    setFilter("")
+    searchField.forceActiveFocus()
   }
   function setFilter(text) {
     root.filterText = text
@@ -658,6 +670,25 @@ Item {
           font.family: Style.font.menuFamily
           verticalPadding: Style.spacing.xxs
           onTextEdited: root.setFilter(text)
+          rightPadding: root.filterText.length > 0
+            ? clearSearchButton.width + Style.spacing.xs : horizontalPadding
+
+          Button {
+            id: clearSearchButton
+            visible: root.filterText.length > 0
+            anchors.right: parent.right
+            anchors.rightMargin: Style.spacing.xxs
+            anchors.verticalCenter: parent.verticalCenter
+            iconText: "󰅖"
+            tooltipText: "Clear the search (esc)"
+            foreground: root.foreground
+            accent: root.accent
+            iconSize: Style.font.iconSmall
+            horizontalPadding: Style.spacing.xs
+            verticalPadding: Style.spacing.xxs
+            onClicked: root.clearSearch()
+          }
+
           Keys.priority: Keys.BeforeItem
           Keys.onPressed: function(event) {
             if (event.key === Qt.Key_Down) { root.moveSelection(1); event.accepted = true }
@@ -701,8 +732,6 @@ Item {
           horizontalAlignment: Text.AlignRight
         }
       }
-
-      PanelSeparator { width: parent.width; foreground: root.foreground }
 
       // ---- body
       Row {

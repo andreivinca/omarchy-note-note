@@ -73,3 +73,5 @@ Template:
 | 2.4.0 | formatting toolbar, word count, empty-checkbox and table fixes |
 | 2.5.0 | toolbar keeps undo history; image fetch budget and cache pruning |
 | 2.6.0 | create OneNote sections from the sidebar |
+| 2.7.0 | rich-text editor with Markdown at both ends; OneNote pages with images |
+| 2.8.0 | **notebooks and sources as binder tabs**, one open at a time; its own search panel; sections carry a colour and providers a logo |
