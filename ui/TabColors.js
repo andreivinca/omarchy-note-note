@@ -43,9 +43,9 @@ function pastelize(hex) {
   var out
   if (!c) out = PALETTE[0]
   else {
-    var s = c.hslSaturation < 0.06 ? c.hslSaturation : Math.max(0.25, Math.min(0.45, c.hslSaturation))
+    var s = c.hslSaturation < 0.14 ? c.hslSaturation : Math.max(0.45, Math.min(0.75, c.hslSaturation))
     // Qt answers -1 for the hue of a grey; any number works once s is 0.
-    out = Qt.hsla(Math.max(0, c.hslHue), s, 0.78, 1).toString()
+    out = Qt.hsla(Math.max(0, c.hslHue), s, 0.75, 1).toString()
   }
   _pastel[hex] = out
   return out
@@ -67,4 +67,11 @@ function baseFor(color, name) { return pastelize(color || fromName(name)) }
 //
 // The panel is painted from this same number, so a tab and the page it belongs
 // to are provably the same colour.
-function fillAlpha() { return 0.05 }
+function fillAlpha() { return 0.14 }
+
+// A tab's words are written in its own ink: the theme's text colour tinted
+// this far toward the tab's pastel. Starting from the theme's foreground —
+// not from the pastel itself — is what keeps it readable on any theme: a dark
+// theme's white becomes a pale wash of the hue, a light theme's black a deep
+// one, and contrast comes along from the foreground either way.
+function inkAlpha() { return 0.55 }

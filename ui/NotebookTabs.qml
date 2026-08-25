@@ -120,6 +120,8 @@ Item {
           readonly property int hits: root.matchCounts[modelData.key] || 0
           readonly property bool dimmed: root.filtering && hits === 0
           readonly property color base: TabColors.baseFor(modelData.color || "", modelData.name || "")
+          // The theme's text, leaning toward this tab's colour (see inkAlpha).
+          readonly property color ink: Qt.tint(root.foreground, Util.alpha(base, TabColors.inkAlpha()))
 
           // A closed tab stops a hair short of the panel; the open one runs into
           // it. That is the whole of what says which tab you are on.
@@ -177,7 +179,7 @@ Item {
             height: tab.width
             rotation: -90
             text: tab.modelData.name || ""
-            color: root.foreground
+            color: tab.ink
             opacity: tab.dimmed ? 0.5 : 1
             font.family: Style.font.menuFamily
             font.pixelSize: Style.font.caption
@@ -197,7 +199,7 @@ Item {
             anchors.horizontalCenter: parent.horizontalCenter
             anchors.horizontalCenterOffset: tab.centred
             text: root.filtering ? String(tab.hits) : String(tab.modelData.count || 0)
-            color: Util.alpha(root.foreground, 0.55)
+            color: Util.alpha(tab.ink, 0.7)
             opacity: tab.dimmed ? 0.5 : 1
             font.family: Style.font.menuFamily
             font.pixelSize: Style.font.caption
