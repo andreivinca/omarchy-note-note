@@ -6,6 +6,7 @@ Qt normalises it into the verbose form on the way in, and `reader` recognises
 that form on the way out.
 """
 import html as _html
+import re
 import urllib.parse
 
 from . import dialect
@@ -25,6 +26,10 @@ BLANK = "<p>%s</p>" % dialect.BLANK_PARAGRAPH
 # than this gets a display width. Display only: `reader` never writes a width
 # back into the note, so the note and the backends see the image untouched.
 MAX_IMAGE_DISPLAY = 640
+
+# An image opening a list item is mispainted whether or not a link wraps it
+# (measured on 6.11), so the guard below must see through the anchor.
+OPENS_WITH_IMAGE = re.compile(r"(?:<a [^>]*>)?<img")
 
 # Inline spans, by AST token type. `mark` is the odd one out: its colour is
 # the caller's, so it is built in `_Renderer.inline`.
@@ -129,7 +134,7 @@ class _Renderer:
                         if c["type"] in ("block_text", "paragraph")).strip()
         if is_task and not body:
             body = dialect.EMPTY_ITEM        # Qt drops an item with no content
-        if body.startswith("<img"):
+        if OPENS_WITH_IMAGE.match(body):
             body = dialect.IMAGE_LEAD + body  # Qt paints a leading image in the wrong place
         nested = "".join(self.list(c, indent, quote)
                          for c in token.get("children") or [] if c["type"] == "list")

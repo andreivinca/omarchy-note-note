@@ -8,15 +8,18 @@ import "TabColors.js" as TabColors
 // straight where the open one meets the list. The label is turned a quarter
 // turn; the number under it is the section's note count.
 //
-// Sections are { key, name, color, logo, count, matches }. `color` is the
-// provider's own, given raw: pastelising and washing it is this file's
-// business, so a provider states its identity and never has to think about the
-// theme. `logo` is optional — a provider that has a mark shows it at the head
-// of its tabs, and one that does not (the local notebooks) simply does not.
+// Sections are { key, name, color, logo, count }. `color` is the provider's
+// own, given raw: pastelising and washing it is this file's business, so a
+// provider states its identity and never has to think about the theme. `logo`
+// is optional — a provider that has a mark shows it at the head of its tabs,
+// and one that does not (the local notebooks) simply does not. Search hits
+// arrive per key in `matchCounts`, apart from the sections so a keystroke
+// moves the numbers without rebuilding the tabs.
 Item {
   id: root
 
   property var sections: []
+  property var matchCounts: ({})
   property string activeKey: ""
   property bool filtering: false
   property color foreground: Color.menu.text
@@ -52,18 +55,37 @@ Item {
     font.pixelSize: Style.font.caption
     font.bold: true
   }
-
-  function naturalHeight(section) {
-    probe.text = (section && section.name) || ""
-    var extra = (section && section.logo) ? root.logoTop + root.logoSize + Style.spacing.xs : 0
-    return Util.clamp(probe.width + root.endPadding + Style.space(12) + extra, root.minHeight, root.maxHeight)
+  // The count line's real height — the same font the counts under the labels
+  // use, so the sum below and the tabs it sizes cannot drift apart.
+  Text {
+    id: countProbe
+    visible: false
+    text: "0"
+    font.family: Style.font.menuFamily
+    font.pixelSize: Style.font.caption
   }
 
-  // A function, not a binding: a binding that assigns probe.text and then reads
-  // probe.width declares a dependency on the very thing it mutates.
+  // One formula for estimate and tab alike: relayout() sums it to choose the
+  // squeeze, each delegate multiplies it by that squeeze. The label width is
+  // measured by the caller (the delegate keeps its own TextMetrics — a
+  // binding that assigned probe.text and then read probe.width would depend
+  // on the very thing it mutates). The logo term tests the section's declared
+  // logo, not the Image's load state, so the layout is the same before and
+  // after the file loads.
+  function naturalHeight(labelWidth, section) {
+    var extra = logoRoomFor(section)
+    return Util.clamp(labelWidth + root.endPadding + countProbe.implicitHeight + extra, root.minHeight, root.maxHeight)
+  }
+  function logoRoomFor(section) {
+    return (section && section.logo && String(section.logo).length) ? root.logoTop + root.logoSize + Style.spacing.xs : 0
+  }
+
   function relayout() {
     var total = 0
-    for (var i = 0; i < root.sections.length; i++) total += naturalHeight(root.sections[i]) + root.gap
+    for (var i = 0; i < root.sections.length; i++) {
+      probe.text = root.sections[i].name || ""
+      total += naturalHeight(probe.width, root.sections[i]) + (i > 0 ? root.gap : 0)
+    }
     root.squeeze = (total > root.height && total > 0) ? Math.max(0.45, root.height / total) : 1
   }
 
@@ -79,16 +101,7 @@ Item {
     interactive: contentHeight > height
     clip: true
 
-    // Same wheel treatment as the note list: touchpad pixels scaled, a mouse
-    // notch a fixed step.
-    WheelHandler {
-      target: null
-      acceptedDevices: PointerDevice.Mouse | PointerDevice.TouchPad
-      onWheel: function(event) {
-        var dy = event.pixelDelta.y !== 0 ? event.pixelDelta.y * 3 : (event.angleDelta.y / 120) * Style.space(72)
-        rail.contentY = Math.max(0, Math.min(rail.contentY - dy, Math.max(0, rail.contentHeight - rail.height)))
-      }
-    }
+    ListWheel { flick: rail }
 
     Column {
       id: stack
@@ -104,7 +117,8 @@ Item {
           // Not `active`: the house rule after the `opened` collision is to
           // stay clear of Qt's own property names.
           readonly property bool current: modelData.key === root.activeKey
-          readonly property bool dimmed: root.filtering && (modelData.matches || 0) === 0
+          readonly property int hits: root.matchCounts[modelData.key] || 0
+          readonly property bool dimmed: root.filtering && hits === 0
           readonly property color base: TabColors.baseFor(modelData.color || "", modelData.name || "")
 
           // A closed tab stops a hair short of the panel; the open one runs into
@@ -114,9 +128,8 @@ Item {
           // centred on the rail rather than on the tab, so opening a tab does
           // not slide its own text sideways by the width of that hair.
           readonly property real centred: (stack.width - width) / 2
-          readonly property real logoRoom: logo.status === Image.Ready ? root.logoTop + logo.height + Style.spacing.xs : 0
-          height: Math.round(Util.clamp(metrics.width + root.endPadding + countText.height + logoRoom,
-                                        root.minHeight, root.maxHeight) * root.squeeze)
+          readonly property real logoRoom: root.logoRoomFor(tab.modelData)
+          height: Math.round(root.naturalHeight(metrics.width, tab.modelData) * root.squeeze)
           clip: true
 
           TextMetrics { id: metrics; font: label.font; text: tab.modelData.name || "" }
@@ -160,7 +173,7 @@ Item {
             anchors.centerIn: parent
             anchors.verticalCenterOffset: (tab.logoRoom - countText.height) / 2
             anchors.horizontalCenterOffset: tab.centred
-            width: tab.height - root.endPadding - countText.height - tab.logoRoom
+            width: Math.max(0, tab.height - root.endPadding - countText.height - tab.logoRoom)
             height: tab.width
             rotation: -90
             text: tab.modelData.name || ""
@@ -183,7 +196,7 @@ Item {
             anchors.bottomMargin: Style.spacing.xs
             anchors.horizontalCenter: parent.horizontalCenter
             anchors.horizontalCenterOffset: tab.centred
-            text: root.filtering ? String(tab.modelData.matches || 0) : String(tab.modelData.count || 0)
+            text: root.filtering ? String(tab.hits) : String(tab.modelData.count || 0)
             color: Util.alpha(root.foreground, 0.55)
             opacity: tab.dimmed ? 0.5 : 1
             font.family: Style.font.menuFamily

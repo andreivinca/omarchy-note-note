@@ -101,7 +101,11 @@ Item {
       if (books.length === 0) rows.push({ kind: "action", path: "refresh", title: "No notebooks found — refresh", icon: "󰑐" })
       rows.push({ kind: "action", path: "logout", title: "Sign out" + (ms.account ? " (" + ms.account + ")" : ""), icon: "󰍃" })
     }
-    root.sections = [{ key: "onenote", name: "OneNote", color: "#7719AA", count: root.pages.length, rows: rows }]
+    // `notes` is every page, fold state ignored: rows only carry the pages of
+    // expanded sections, and a search (and the hit count on the tab) must see
+    // the closed ones too.
+    var all = root.pages.map(function(p) { return { path: pathOf(p.id), title: p.title, preview: "" } })
+    root.sections = [{ key: "onenote", name: "OneNote", color: "#7719AA", count: root.pages.length, notes: all, rows: rows }]
     root.updated()
   }
 

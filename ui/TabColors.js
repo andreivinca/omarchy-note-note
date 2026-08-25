@@ -31,12 +31,29 @@ function fromName(name) { return PALETTE[indexFor(name)] }
 // OneNote without shouting. Colours already in that range come back near
 // enough unchanged, so the palette passes through this untouched. A grey stays
 // grey — inventing a hue for Notion's black-and-white would be a lie.
+//
+// Pure, so each colour is converted once and remembered: the host re-derives
+// every tab's colour on each rebuild, and the inputs are a handful of
+// constants.
+var _pastel = {}
 function pastelize(hex) {
-  var rgb = toRgb(hex)
-  if (!rgb) return PALETTE[0]
-  var hsl = toHsl(rgb)
-  var s = hsl.s < 0.06 ? hsl.s : Math.max(0.25, Math.min(0.45, hsl.s))
-  return toHex(fromHsl(hsl.h, s, 0.78))
+  var done = _pastel[hex]
+  if (done !== undefined) return done
+  var c = parseColor(hex)
+  var out
+  if (!c) out = PALETTE[0]
+  else {
+    var s = c.hslSaturation < 0.06 ? c.hslSaturation : Math.max(0.25, Math.min(0.45, c.hslSaturation))
+    // Qt answers -1 for the hue of a grey; any number works once s is 0.
+    out = Qt.hsla(Math.max(0, c.hslHue), s, 0.78, 1).toString()
+  }
+  _pastel[hex] = out
+  return out
+}
+
+// Qt.color throws on a malformed name rather than answering invalid.
+function parseColor(hex) {
+  try { var c = Qt.color(String(hex || "")); return c.valid ? c : null } catch (e) { return null }
 }
 
 function baseFor(color, name) { return pastelize(color || fromName(name)) }
@@ -51,49 +68,3 @@ function baseFor(color, name) { return pastelize(color || fromName(name)) }
 // The panel is painted from this same number, so a tab and the page it belongs
 // to are provably the same colour.
 function fillAlpha() { return 0.05 }
-
-// ── hex ↔ hsl ─────────────────────────────────────────────────────────
-function toRgb(hex) {
-  var s = String(hex || "").replace("#", "")
-  if (s.length === 3) s = s[0] + s[0] + s[1] + s[1] + s[2] + s[2]
-  if (s.length < 6) return null
-  var n = parseInt(s.substring(0, 6), 16)
-  if (isNaN(n)) return null
-  return { r: ((n >> 16) & 255) / 255, g: ((n >> 8) & 255) / 255, b: (n & 255) / 255 }
-}
-
-function toHsl(c) {
-  var max = Math.max(c.r, c.g, c.b), min = Math.min(c.r, c.g, c.b), d = max - min
-  var l = (max + min) / 2, h = 0, s = 0
-  if (d > 0) {
-    s = l > 0.5 ? d / (2 - max - min) : d / (max + min)
-    if (max === c.r) h = ((c.g - c.b) / d + (c.g < c.b ? 6 : 0)) / 6
-    else if (max === c.g) h = ((c.b - c.r) / d + 2) / 6
-    else h = ((c.r - c.g) / d + 4) / 6
-  }
-  return { h: h, s: s, l: l }
-}
-
-function fromHsl(h, s, l) {
-  if (s === 0) return { r: l, g: l, b: l }
-  var q = l < 0.5 ? l * (1 + s) : l + s - l * s, p = 2 * l - q
-  return { r: channel(p, q, h + 1 / 3), g: channel(p, q, h), b: channel(p, q, h - 1 / 3) }
-}
-
-function channel(p, q, t) {
-  if (t < 0) t += 1
-  if (t > 1) t -= 1
-  if (t < 1 / 6) return p + (q - p) * 6 * t
-  if (t < 1 / 2) return q
-  if (t < 2 / 3) return p + (q - p) * (2 / 3 - t) * 6
-  return p
-}
-
-function toHex(c) {
-  return "#" + pair(c.r) + pair(c.g) + pair(c.b)
-}
-
-function pair(v) {
-  var s = Math.round(Math.max(0, Math.min(1, v)) * 255).toString(16)
-  return s.length < 2 ? "0" + s : s
-}

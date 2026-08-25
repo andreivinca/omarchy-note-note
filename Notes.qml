@@ -150,7 +150,17 @@ Item {
   function providerById(id) { return providerOf(id + ":") }
   // The provider of the open tab. Section keys start with the provider's id.
   function activeProvider() { var k = activeKey(); return k ? providerById(k.substring(0, k.indexOf("/"))) : null }
-  function canCreateNotebook() { var p = activeProvider(); return !!p && p.canCreateSection === true }
+  // The provider a "New notebook…" would go to: the open tab's — or, when it
+  // cannot and the local provider has no notebook at all yet (a fresh
+  // ~/Notes), the local one. Without that a fresh install has no tab that can
+  // create, so no path to the first notebook.
+  function notebookMaker() {
+    var p = activeProvider()
+    if (p && p.canCreateSection === true) return p
+    var local = providerById("local")
+    return local && local.canCreateSection === true && local.sections.length === 0 ? local : null
+  }
+  function canCreateNotebook() { return notebookMaker() !== null }
 
   function addProvider(url) {
     var comp = Qt.createComponent(url)
@@ -198,16 +208,21 @@ Item {
   // (OneNote is async) must not cost the user their tab.
   property string activeSection: ""
   property var tabs: []
+  // Per-tab search hit counts, keyed by tab key — beside `tabs`, not inside
+  // them: the counts move on every keystroke, and a Repeater over a plain
+  // array rebuilds every delegate when its model changes, so the rail's tabs
+  // stay a stable model and only these numbers change under them.
+  property var tabMatches: ({})
   property bool switchingTab: false
   function sectionKey(p, s) { return p.id + "/" + s.key }
   function sectionKeys() { var out = []; eachSection(function(p, s, k) { out.push(k) }); return out }
   // What the rail actually opens: the stored tab while it exists, else the
-  // first local notebook — the user's own files come first, which is where this
-  // used to land the selection anyway.
+  // first section listed. Providers are registered local-first (loadProviders),
+  // so a missing or stale tab lands on the user's own files without the host
+  // naming any provider here.
   function activeKey() {
     var keys = sectionKeys()
     if (keys.indexOf(root.activeSection) >= 0) return root.activeSection
-    for (var i = 0; i < keys.length; i++) if (keys[i].indexOf("local/") === 0) return keys[i]
     return keys.length ? keys[0] : ""
   }
   function eachSection(fn) {
@@ -216,8 +231,13 @@ Item {
       for (var s = 0; s < secs.length; s++) fn(prov, secs[s], sectionKey(prov, secs[s]))
     }
   }
-  function setActiveSection(key) {
+  // `persist: false` is for switches the user did not ask for (a search
+  // hopping to the tab that has hits): they are not worth a state-file write
+  // per keystroke, and not the tab to come back to next run.
+  function setActiveSection(key, persist) {
     if (!key || key === activeKey()) return
+    // Switching tabs is engagement: from here on no note is picked unasked.
+    root.pickedInitial = true
     // Opening another notebook puts the one you were reading away: a note from
     // a tab you have left is not what the panel beside it is showing. Unsaved
     // edits are flushed on the way out.
@@ -225,7 +245,7 @@ Item {
     root.activeSection = key
     root.switchingTab = true
     rebuildRows()
-    saveState()
+    if (persist !== false) saveState()
   }
   function cycleSection(delta) {
     var keys = sectionKeys()
@@ -251,9 +271,7 @@ Item {
     }
     return tabs
   }
-  function matches(r) {
-    if (!root.filterText) return true
-    var q = root.filterText.toLowerCase()
+  function matchesQuery(r, q) {
     return (r.title || "").toLowerCase().indexOf(q) >= 0 || (r.preview || "").toLowerCase().indexOf(q) >= 0
   }
   function displayTitle(title, preview) {
@@ -276,32 +294,43 @@ Item {
     root.currentCrumb = crumbOf(root.currentPath)
     // Opening another tab starts at the top; a refresh of the one already open
     // keeps its place.
-    var keep = root.switchingTab ? 0 : list.scrollOffset(), out = [], tabs = [], active = activeKey()
+    var keep = root.switchingTab ? 0 : list.scrollOffset(), out = [], tabs = [], hits = {}, active = activeKey()
+    var q = root.filterText.toLowerCase()
     root.switchingTab = false
     eachSection(function(prov, s, key) {
-      var all = s.rows || [], notes = all.filter(function(r) { return r.kind === "note" })
+      var all = s.rows || []
       // Every tab counts its own hits, the closed ones included — that is what
-      // the number on a tab says while a search is running.
+      // the number on a tab says while a search is running. A search reads
+      // every note the section holds, not only the rows its tree is showing:
+      // a provider whose rows fold away (OneNote) lists them all in s.notes,
+      // for the rest the note rows already are all of them.
+      var notes = q ? s.notes || all.filter(function(r) { return r.kind === "note" }) : all
+      var found = q ? notes.filter(function(r) { return matchesQuery(r, q) }) : []
       tabs.push({ key: key, name: s.name, color: s.color || "", logo: prov.logo || "",
-                  count: s.count !== undefined ? s.count : notes.length,
-                  matches: root.filterText ? notes.filter(matches).length : 0 })
+                  count: s.count !== undefined ? s.count : all.filter(function(r) { return r.kind === "note" }).length })
+      hits[key] = found.length
       if (key !== active) return
-      if (root.filterText) {
-        for (var i = 0; i < notes.length; i++) if (matches(notes[i])) out.push(row(prov, key, notes[i]))
+      if (q) {
+        for (var i = 0; i < found.length; i++) out.push(row(prov, key, found[i]))
         return
       }
       for (var j = 0; j < all.length; j++) out.push(row(prov, key, all[j]))
     })
-    root.tabs = decollide(tabs)
+    // The tabs themselves change rarely (a notebook made, a colour given); the
+    // hit counts change per keystroke. Keeping the model still while only the
+    // counts move is what keeps the rail from rebuilding its delegates.
+    var newTabs = decollide(tabs)
+    if (JSON.stringify(newTabs) !== JSON.stringify(root.tabs)) root.tabs = newTabs
+    root.tabMatches = hits
     root.rows = out
     if (keep > 0) Qt.callLater(function() { list.setScrollOffset(keep) })
-    // First open: land on the most recent note of the tab that opened.
+    // First open: land on the most recent note of the tab that opened —
+    // whichever provider's tab that is. A tab whose notes have not listed yet
+    // (OneNote is async) leaves the chance open for the rebuild that brings
+    // them; the first tab switch or selection closes it (pickedInitial), so a
+    // tab the user emptied on purpose is not refilled behind their back.
     if (!root.currentPath && !root.filterText && !root.pickedInitial) {
-      var local = root.providerById("local")
-      if (local && local.sections.length) {
-        root.pickedInitial = true
-        for (var i = out.length - 1; i >= 0; i--) if (out[i].kind === "note" && out[i].provider === "local") { selectPath(out[i].path); break }
-      }
+      for (var n = out.length - 1; n >= 0; n--) if (out[n].kind === "note") { selectPath(out[n].path); break }
     }
     // A note that vanished from its provider (deleted elsewhere, signed out)
     // is deselected; one merely sitting in another tab is kept.
@@ -358,9 +387,11 @@ Item {
     root.filterText = text
     rebuildRows()
     // Searching still spans every tab. When the open one has nothing, move to
-    // the first that does, so a first keystroke always lands on something.
+    // the first that does, so a first keystroke always lands on something —
+    // without persisting the hop as the user's chosen tab.
     if (root.filterText && root.rows.length === 0)
-      for (var t = 0; t < root.tabs.length; t++) if (root.tabs[t].matches > 0) { setActiveSection(root.tabs[t].key); break }
+      for (var t = 0; t < root.tabs.length; t++)
+        if ((root.tabMatches[root.tabs[t].key] || 0) > 0) { setActiveSection(root.tabs[t].key, false); break }
     if (root.filterText && rowIndexOf(root.currentPath) < 0)
       for (var i = 0; i < root.rows.length; i++) if (root.rows[i].kind === "note") { selectPath(root.rows[i].path); break }
   }
@@ -368,7 +399,9 @@ Item {
 
   // IPC helpers (omarchy-shell shell call <id> scrollList 400).
   function activateSection(key) { setActiveSection(String(key)); return root.activeSection }
-  function tabsInfo(x) { return JSON.stringify(root.tabs) }
+  function tabsInfo(x) {
+    return JSON.stringify(root.tabs.map(function(t) { return Object.assign({ matches: root.tabMatches[t.key] || 0 }, t) }))
+  }
   function scrollList(y) { list.setScrollOffset(Number(y)); return list.scrollOffset() }
   function listOffset() { return list.scrollOffset() }
   function debugState() {
@@ -376,15 +409,24 @@ Item {
                             status: root.statusText, readOnly: editor.readOnly, words: editor.wordCount, notice: editor.noticeTitle, viewFocused: editor.viewHasFocus,
                             providers: root.providers.map(function(p) { return p.id }) })
   }
-  // Asked of the providers rather than of the visible rows: an action belonging
-  // to a tab that is not open is still an action.
-  function runAction(id) {
-    var done = false
+  // The provider whose section holds a row of this kind and id. The open
+  // tab's answers first: row ids are bare strings ("logout", "refresh") that
+  // several providers use, and a click always lands on the open tab — load
+  // order must never pick a same-named row of another provider. Rows of
+  // closed tabs still resolve, so IPC can drive any tab.
+  function providerWithRow(kind, id) {
+    var active = activeKey(), onActive = null, anywhere = null
     eachSection(function(prov, s, key) {
-      if (done || !(s.rows || []).some(function(r) { return r.kind === "action" && r.path === id })) return
-      prov.action(id); done = true
+      if (!(s.rows || []).some(function(r) { return r.kind === kind && r.path === id })) return
+      if (key === active && !onActive) onActive = prov
+      if (!anywhere) anywhere = prov
     })
-    return done
+    return onActive || anywhere
+  }
+  function runAction(id) {
+    var p = providerWithRow("action", id)
+    if (p) p.action(id)
+    return !!p
   }
   function rowsOf(providerId) {
     return JSON.stringify(root.rows.filter(function(r) { return r.provider === providerId }).map(function(r) { return r.kind + ":" + r.path.substring(0, 24) }))
@@ -395,16 +437,16 @@ Item {
   function editorUndo(n) { for (var i = 0; i < Number(n || 1); i++) editor.undo(); return editor.wordCount }
   function editorCursor(pos) { editor.setCursorPosition(Number(pos)); editor.updateInTable(); return editor.cursorPosition() + (editor.inTable ? " in-table" : " outside") }
   function treeToggle(id) {
-    var done = false
-    eachSection(function(prov, s, key) {
-      if (done || !(s.rows || []).some(function(r) { return r.kind === "tree" && r.path === id })) return
-      prov.toggleTree(id); done = true
-    })
-    return done
+    var p = providerWithRow("tree", id)
+    if (p) p.toggleTree(id)
+    return !!p
   }
 
   // ── selection ───────────────────────────────────────────────────────
   function selectPath(path) {
+    // Any real selection — the user's or the first-open pick itself — ends
+    // the first-open window (see rebuildRows).
+    if (path) root.pickedInitial = true
     if (path === root.currentPath) return
     var p = providerOf(path)
     if (path && !p) return
@@ -457,11 +499,24 @@ Item {
     p.create(target, function(r) {
       if (r.error) { showStatus(p.name + ": " + r.error); return }
       root.currentPath = ""
+      // The fallback above may have filed the note in another provider's tab
+      // (ctrl+n on a tab with no create target): open that tab, or the note
+      // sits in the editor with no row anywhere on screen.
+      var home = sectionKeyOf(r.path)
+      if (home && home !== activeKey()) setActiveSection(home)
       selectPath(r.path)
       var mi = rowIndexOf(r.path)
       Qt.callLater(function() { if (mi >= 0) list.positionViewAtIndex(mi, ListView.Contain) })
       if (p.hasTitle) editor.focusTitle(); else editor.focusEditor()
     })
+  }
+  // The tab a note's row is on.
+  function sectionKeyOf(path) {
+    var found = ""
+    eachSection(function(prov, s, key) {
+      if (!found && (s.rows || []).some(function(r) { return r.kind === "note" && r.path === path })) found = key
+    })
+    return found
   }
 
   // "New notebook…" makes one inside the tab you are on, and only where the
@@ -469,8 +524,8 @@ Item {
   // its own tab, so a new one opens the moment it exists. The others keep
   // their notebooks inside their single tab and are made where they live.
   function newNotebook(name) {
-    var p = activeProvider()
-    if (!p || !p.canCreateSection) return
+    var p = notebookMaker()
+    if (!p) return
     p.createSection(name, function(r) {
       if (r.error) { showStatus(p.name + ": " + r.error); return }
       setActiveSection(p.id + "/" + r.key)
@@ -479,6 +534,9 @@ Item {
     })
   }
   function startNewNotebook() {
+    // The name field lives on the full list, not the search panel — and a
+    // field inside a hidden panel would still steal the keyboard.
+    if (root.filterText) clearSearch()
     var p = activeProvider()
     if (canCreateNotebook()) { list.startNewNotebook(); return }
     showStatus((p ? p.name : "This tab") + ": notebooks are made where they live, not here")
@@ -747,6 +805,7 @@ Item {
           currentPath: root.currentPath
           filtering: root.filterText.length > 0
           sections: root.tabs
+          matchCounts: root.tabMatches
           activeKey: root.revision < 0 ? "" : root.activeKey()
           canCreateNotebook: root.revision < 0 ? false : root.canCreateNotebook()
           foreground: root.foreground

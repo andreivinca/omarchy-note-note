@@ -200,6 +200,9 @@ Item {
   // non-breaking space in front of it is invisible and enough. The loader
   // does the same on the way in; the converter strips it on the way out.
   readonly property string objectChar: "\ufffc"
+  // Mirrors IMAGE_LEAD in services/markdown/qthtml/dialect.py \u2014 the loader,
+  // the writer and these live-edit guards must all plant the same character.
+  readonly property string imageLead: "\u00a0"
   function inListItem(pos) { return /<li\b/.test(area.getFormattedText(pos, Math.min(pos + 1, area.length))) }
   function atBlockStart(pos) { return pos === 0 || area.getText(pos - 1, pos) === root.sep }
   function guardImageAt(pos) {
@@ -208,7 +211,7 @@ Item {
     var text = area.getText(pos, Math.min(pos + 4, area.length)), i = text.indexOf(root.objectChar)
     if (i < 0) return
     var at = pos + i
-    if (atBlockStart(at) && inListItem(at)) { area.insert(at, "\u00a0"); area.cursorPosition = at + 2 }
+    if (atBlockStart(at) && inListItem(at)) { area.insert(at, root.imageLead); area.cursorPosition = at + 2 }
   }
   // Enter with the caret right before an image: the image would open the
   // new item. Put the space in first, with the caret still before it, so
@@ -217,7 +220,7 @@ Item {
     var at = area.cursorPosition
     if (area.selectionStart !== area.selectionEnd) return
     if (area.getText(at, at + 1) !== root.objectChar || !inListItem(at)) return
-    area.insert(at, "\u00a0")
+    area.insert(at, root.imageLead)
     area.cursorPosition = at
   }
   function undo() { if (area.canUndo) { area.undo(); root.edited() } }
@@ -534,339 +537,312 @@ Item {
     applying = false
   }
 
+  // ---- the note's sheet: title, toolbar and body on one surface. No frame
+  // around it and no rule beside it — a box drawn around a page is one line
+  // too many.
   Column {
     anchors.fill: parent
-    spacing: Style.spacing.md
+    anchors.margins: Style.spacing.panelPadding
+    spacing: Style.spacing.xs
 
-    // ---- the note's sheet: title, toolbar and body on one surface. No frame
-    // around it and no rule beside it — a box drawn around a page is one line
-    // too many.
-    Rectangle {
-      id: frame
+    // ---- header: the title belongs on the note's own sheet
+    Item {
       width: parent.width
-      height: parent.height
-      color: "transparent"
+      height: titleColumn.implicitHeight + Style.spacing.md
 
       Column {
-        anchors.fill: parent
-        anchors.margins: Style.spacing.panelPadding
-        spacing: Style.spacing.xs
-
-      // ---- header: the title belongs on the note's own sheet
-      Item {
-        width: parent.width
-        height: titleColumn.implicitHeight + Style.spacing.md
-
-        Column {
-          id: titleColumn
-          anchors.left: parent.left
-          anchors.right: parent.right
-          spacing: Style.spacing.xxs
-
-          Text {
-            textFormat: Text.PlainText
-            visible: root.showingNotice
-            width: parent.width
-            text: root.noticeTitle
-            color: root.foreground
-            font.family: root.fontFamily
-            font.pixelSize: root.titleSize
-            elide: Text.ElideRight
-          }
-
-          TextField {
-            id: titleField
-            width: parent.width
-            // Sticky Notes have no separate title (subject = first line).
-            visible: !root.showingNotice && root.hasTitle
-            enabled: root.hasNote && !root.readOnly
-            placeholderText: root.hasNote ? "Untitled" : "Note Note"
-            foreground: root.foreground
-            accent: root.accent
-            font.family: root.fontFamily
-            font.pixelSize: root.titleSize
-            horizontalPadding: Style.spacing.xs
-            verticalPadding: 0
-            // A title is a title: no box around it. The padding still comes off
-            // the spec the field would have drawn, so nothing shifts.
-            background: null
-            onTextEdited: root.edited()
-            Keys.priority: Keys.BeforeItem
-            Keys.onPressed: function(event) { root.shortcut(event) }
-            Keys.onReturnPressed: root.focusEditor()
-            Keys.onEnterPressed: root.focusEditor()
-            Keys.onDownPressed: root.focusEditor()
-          }
-
-          // Only the empty-state hint lives here; where a note comes from is
-          // what the sidebar shows.
-          Text {
-            textFormat: Text.PlainText
-            visible: !root.showingNotice && !root.hasNote
-            width: parent.width
-            text: "Pick a note on the left, or press ctrl+n for a new one."
-            color: Qt.darker(root.foreground, 1.45)
-            font.family: root.fontFamily
-            font.pixelSize: Style.font.bodySmall
-            elide: Text.ElideRight
-          }
-        }
-      }
-
-      // ---- formatting toolbar (Markdown notes only)
-      Flow {
-        id: toolbar
-        visible: root.hasNote && !root.plain && !root.readOnly && !root.showingNotice && (root.enabledTools === null || root.enabledTools.length > 0)
-        width: parent.width
-        spacing: Style.spacing.sm
-
-        Repeater {
-          // Material Design glyphs from the shell's Nerd Font, by name:
-          // md-format_bold, md-format_italic, … (see PROVIDERS.md for tool ids).
-          model: [
-            { id: "bold", icon: "󰉤", tip: "Bold (ctrl+b)" },
-            { id: "italic", icon: "󰉷", tip: "Italic (ctrl+i)" },
-            { id: "underline", icon: "󰊇", tip: "Underline (ctrl+u)" },
-            { id: "strikeout", icon: "󰊁", tip: "Strikethrough (ctrl+s)" },
-            { id: "highlight", icon: "󰙒", tip: "Highlight (ctrl+shift+h)" },
-            { id: "code", icon: "󰅴", tip: "Inline code" },
-            { id: "sep" },
-            { id: "h1", icon: "󰉫", tip: "Heading 1" },
-            { id: "h2", icon: "󰉬", tip: "Heading 2" },
-            { id: "h3", icon: "󰉭", tip: "Heading 3" },
-            { id: "p", icon: "󰉽", tip: "Normal text" },
-            { id: "sep" },
-            { id: "ul", icon: "󰉹", tip: "Bullet list" },
-            { id: "ol", icon: "󰉻", tip: "Numbered list" },
-            { id: "todo", icon: "󰥪", tip: "Checkbox" },
-            { id: "outdent", icon: "󰉵", tip: "Outdent" },
-            { id: "indent", icon: "󰉶", tip: "Indent" },
-            { id: "sep" },
-            { id: "quote", icon: "󰉾", tip: "Quote" },
-            { id: "codeblock", icon: "󰅩", tip: "Code block" },
-            { id: "rule", icon: "󰍴", tip: "Horizontal rule" },
-            { id: "link", icon: "󰌹", tip: "Insert link" },
-            { id: "sep" },
-            { id: "table", icon: "󰓫", tip: "Insert a table" },
-            { id: "addRow", icon: "󰓳", tip: "Add a row below" },
-            { id: "delRow", icon: "󰓵", tip: "Delete this row" },
-            { id: "addCol", icon: "󰓬", tip: "Add a column" },
-            { id: "delCol", icon: "󰓮", tip: "Delete this column" }
-          ]
-          delegate: Loader {
-            required property var modelData
-            sourceComponent: modelData.id === "sep" ? sepComp : buttonComp
-            readonly property bool tableOnly: ["addRow", "addCol", "delRow", "delCol"].indexOf(modelData.id) >= 0
-            readonly property bool allowed: modelData.id === "sep" || root.toolEnabled(tableOnly ? "table" : modelData.id)
-            visible: allowed && (tableOnly ? root.inTable : (modelData.id === "table" ? !root.inTable : true))
-            onLoaded: if (modelData.id !== "sep") { item.iconText = modelData.icon; item.tooltipText = modelData.tip; item.toolId = modelData.id }
-          }
-        }
-        Component { id: sepComp; Item { width: Style.spacing.md; height: Style.spacing.controlHeight } }
-        Component {
-          id: buttonComp
-          Button {
-            property string toolId: ""
-            property bool hovering: false
-            // Quiet toolbar: the outline appears only under the cursor.
-            bordered: hovering
-            foreground: root.foreground
-            accent: root.accent
-            iconSize: Style.font.icon
-            horizontalPadding: Style.spacing.sm
-            verticalPadding: Style.spacing.xxs
-            onHovered: function(isHovered) { hovering = isHovered }
-            onClicked: root.tool(toolId)
-          }
-        }
-      }
-
-      // ---- link bar
-      Row {
-        visible: root.linkBarOpen
-        width: parent.width
-        spacing: Style.spacing.sm
-        TextField { id: linkText; width: Style.space(200); placeholderText: "Text"; foreground: root.foreground; accent: root.accent; font.family: root.fontFamily; verticalPadding: Style.spacing.xxs
-          Keys.onReturnPressed: root.insertLink(); Keys.onEscapePressed: { root.linkBarOpen = false; root.focusEditor() } }
-        TextField { id: linkUrl; width: Style.space(340); placeholderText: "https://…"; foreground: root.foreground; accent: root.accent; font.family: root.fontFamily; verticalPadding: Style.spacing.xxs
-          Keys.onReturnPressed: root.insertLink(); Keys.onEscapePressed: { root.linkBarOpen = false; root.focusEditor() } }
-        Button { text: "Insert"; bordered: true; foreground: root.foreground; accent: root.accent; verticalPadding: Style.spacing.xxs; onClicked: root.insertLink() }
-        Button { text: "Cancel"; bordered: true; foreground: root.foreground; accent: root.accent; verticalPadding: Style.spacing.xxs; onClicked: { root.linkBarOpen = false; root.focusEditor() } }
-      }
-
-        // A hairline under the tools, so they read as the note's own strip.
-        Item {
-          visible: toolbar.visible
-          width: parent.width
-          height: root.ruleRoomAbove + Style.spacing.hairline + root.ruleRoomBelow
-
-          Rectangle {
-            y: root.ruleRoomAbove
-            width: parent.width
-            height: Style.spacing.hairline
-            color: Util.alpha(root.foreground, 0.12)
-          }
-        }
-
-        Loader {
-          id: customLoader
-          visible: root.customView !== null
-          width: parent.width
-          height: visible ? parent.height - y : 0
-          sourceComponent: root.customView
-          onLoaded: { for (var k in root.customViewProps) if (item.hasOwnProperty(k)) item[k] = root.customViewProps[k] }
-        }
-
-        Column {
-          visible: root.showingNotice && root.customView === null
-          width: parent.width
-          spacing: Style.spacing.lg
-          leftPadding: Style.spacing.md
-          topPadding: Style.spacing.md
-
-          Text {
-            textFormat: Text.PlainText
-            width: parent.width - Style.spacing.md * 2
-            text: root.noticeText
-            color: root.foreground
-            font.family: root.fontFamily
-            font.pixelSize: Style.font.body
-            wrapMode: Text.Wrap
-            lineHeight: 1.25
-          }
-
-          Text {
-            textFormat: Text.PlainText
-            visible: root.noticeCode.length > 0
-            text: root.noticeCode
-            color: root.accent
-            font.family: root.fontFamily
-            font.pixelSize: Style.font.displayLarge
-            font.letterSpacing: 4
-          }
-
-          Row {
-            spacing: Style.spacing.sm
-            Repeater {
-              model: root.noticeActions
-              Button {
-                required property var modelData
-                text: modelData.label
-                iconText: modelData.icon || ""
-                bordered: true
-                foreground: root.foreground
-                accent: root.accent
-                fontFamily: root.fontFamily
-                onClicked: if (typeof modelData.action === "function") modelData.action()
-              }
-            }
-          }
-        }
-
-        Flickable {
-          id: flick
-          visible: !root.showingNotice
-          width: parent.width
-          height: parent.height - y
-          clip: true
-          contentWidth: width
-          contentHeight: area.height
-          boundsBehavior: Flickable.StopAtBounds
-
-          WheelHandler {
-            target: null
-            acceptedDevices: PointerDevice.Mouse | PointerDevice.TouchPad
-            onWheel: function(event) {
-              var dy = event.pixelDelta.y !== 0 ? event.pixelDelta.y * 3 : (event.angleDelta.y / 120) * Style.space(72)
-              flick.contentY = Math.max(0, Math.min(flick.contentY - dy, Math.max(0, flick.contentHeight - flick.height)))
-            }
-          }
-
-          function ensureVisible(r) {
-            if (contentY >= r.y) contentY = r.y
-            else if (contentY + height <= r.y + r.height) contentY = r.y + r.height - height
-          }
-
-          TextEdit {
-            id: area
-            width: flick.width
-            // Fill the frame so a click anywhere in the empty area focuses
-            // the editor.
-            height: Math.max(implicitHeight, flick.height)
-            leftPadding: Style.spacing.xs
-            rightPadding: Style.spacing.xs
-            readOnly: !root.hasNote || root.readOnly
-            color: root.foreground
-            selectionColor: Style.selectionFill
-            selectedTextColor: root.foreground
-            // Rich text in, rich text out. Markdown cannot hold a highlight,
-            // an empty paragraph or an indent, so the document keeps HTML and
-            // services/markdown converts at both ends.
-            textFormat: root.plain ? TextEdit.PlainText : TextEdit.RichText
-            font.family: root.bodyFontFamily
-            font.pixelSize: Style.font.subtitle
-            wrapMode: TextEdit.Wrap
-            selectByMouse: true
-            Keys.priority: Keys.BeforeItem
-            Keys.onPressed: function(event) {
-              root.shortcut(event)
-              if (!event.accepted && !root.plain && (event.key === Qt.Key_Return || event.key === Qt.Key_Enter)) root.beforeReturn()
-            }
-            onCursorRectangleChanged: flick.ensureVisible(cursorRectangle)
-            onTextChanged: {
-              if (root.settingText) return
-              root.applyPendingToInsertion()
-              root.edited()
-            }
-            // A caret move that isn't the result of typing ends the pending
-            // style. While typing, cursorPositionChanged fires before
-            // textChanged, so a move that matches the grown length is typing.
-            onCursorPositionChanged: {
-              root.scheduleInTable()
-              if (!root.pending || root.applying) return
-              var byTyping = cursorPosition === root.pendingCursor + (length - root.pendingLen)
-              if (cursorPosition !== root.pendingCursor && !byTyping) root.clearPending()
-            }
-
-            Text {
-              anchors.fill: parent
-              anchors.leftMargin: Style.spacing.xs
-              visible: area.length === 0 && !!root.placeholder
-              text: root.placeholder
-              color: root.foreground
-              opacity: 0.45
-              font.family: root.bodyFontFamily
-              font.pixelSize: Style.font.subtitle
-              wrapMode: Text.Wrap
-            }
-          }
-        }
-      }
-
-      // Word count sits in the corner of the note's own surface.
-      Rectangle {
-        visible: root.hasNote && !root.showingNotice
+        id: titleColumn
+        anchors.left: parent.left
         anchors.right: parent.right
-        anchors.bottom: parent.bottom
-        // Lined up with the note's own margin, not tucked into the corner:
-        // it reads as the last line of the page rather than a badge on it.
-        anchors.rightMargin: Style.spacing.panelPadding
-        anchors.bottomMargin: Style.spacing.panelPadding
-        width: counter.implicitWidth
-        height: counter.implicitHeight
-        color: "transparent"
+        spacing: Style.spacing.xxs
 
         Text {
-          id: counter
-          anchors.centerIn: parent
           textFormat: Text.PlainText
-          text: root.wordCount + (root.wordCount === 1 ? " word" : " words")
-          color: Util.alpha(root.foreground, 0.35)
+          visible: root.showingNotice
+          width: parent.width
+          text: root.noticeTitle
+          color: root.foreground
           font.family: root.fontFamily
-          font.pixelSize: Style.font.caption
+          font.pixelSize: root.titleSize
+          elide: Text.ElideRight
+        }
+
+        TextField {
+          id: titleField
+          width: parent.width
+          // Sticky Notes have no separate title (subject = first line).
+          visible: !root.showingNotice && root.hasTitle
+          enabled: root.hasNote && !root.readOnly
+          placeholderText: root.hasNote ? "Untitled" : "Note Note"
+          foreground: root.foreground
+          accent: root.accent
+          font.family: root.fontFamily
+          font.pixelSize: root.titleSize
+          horizontalPadding: Style.spacing.xs
+          verticalPadding: 0
+          // A title is a title: no box around it. The padding still comes off
+          // the spec the field would have drawn, so nothing shifts.
+          background: null
+          onTextEdited: root.edited()
+          Keys.priority: Keys.BeforeItem
+          Keys.onPressed: function(event) { root.shortcut(event) }
+          Keys.onReturnPressed: root.focusEditor()
+          Keys.onEnterPressed: root.focusEditor()
+          Keys.onDownPressed: root.focusEditor()
+        }
+
+        // Only the empty-state hint lives here; where a note comes from is
+        // what the sidebar shows.
+        Text {
+          textFormat: Text.PlainText
+          visible: !root.showingNotice && !root.hasNote
+          width: parent.width
+          text: "Pick a note on the left, or press ctrl+n for a new one."
+          color: Qt.darker(root.foreground, 1.45)
+          font.family: root.fontFamily
+          font.pixelSize: Style.font.bodySmall
+          elide: Text.ElideRight
+        }
+      }
+    }
+
+    // ---- formatting toolbar (Markdown notes only)
+    Flow {
+      id: toolbar
+      visible: root.hasNote && !root.plain && !root.readOnly && !root.showingNotice && (root.enabledTools === null || root.enabledTools.length > 0)
+      width: parent.width
+      spacing: Style.spacing.sm
+
+      Repeater {
+        // Material Design glyphs from the shell's Nerd Font, by name:
+        // md-format_bold, md-format_italic, … (see PROVIDERS.md for tool ids).
+        model: [
+          { id: "bold", icon: "󰉤", tip: "Bold (ctrl+b)" },
+          { id: "italic", icon: "󰉷", tip: "Italic (ctrl+i)" },
+          { id: "underline", icon: "󰊇", tip: "Underline (ctrl+u)" },
+          { id: "strikeout", icon: "󰊁", tip: "Strikethrough (ctrl+s)" },
+          { id: "highlight", icon: "󰙒", tip: "Highlight (ctrl+shift+h)" },
+          { id: "code", icon: "󰅴", tip: "Inline code" },
+          { id: "sep" },
+          { id: "h1", icon: "󰉫", tip: "Heading 1" },
+          { id: "h2", icon: "󰉬", tip: "Heading 2" },
+          { id: "h3", icon: "󰉭", tip: "Heading 3" },
+          { id: "p", icon: "󰉽", tip: "Normal text" },
+          { id: "sep" },
+          { id: "ul", icon: "󰉹", tip: "Bullet list" },
+          { id: "ol", icon: "󰉻", tip: "Numbered list" },
+          { id: "todo", icon: "󰥪", tip: "Checkbox" },
+          { id: "outdent", icon: "󰉵", tip: "Outdent" },
+          { id: "indent", icon: "󰉶", tip: "Indent" },
+          { id: "sep" },
+          { id: "quote", icon: "󰉾", tip: "Quote" },
+          { id: "codeblock", icon: "󰅩", tip: "Code block" },
+          { id: "rule", icon: "󰍴", tip: "Horizontal rule" },
+          { id: "link", icon: "󰌹", tip: "Insert link" },
+          { id: "sep" },
+          { id: "table", icon: "󰓫", tip: "Insert a table" },
+          { id: "addRow", icon: "󰓳", tip: "Add a row below" },
+          { id: "delRow", icon: "󰓵", tip: "Delete this row" },
+          { id: "addCol", icon: "󰓬", tip: "Add a column" },
+          { id: "delCol", icon: "󰓮", tip: "Delete this column" }
+        ]
+        delegate: Loader {
+          required property var modelData
+          sourceComponent: modelData.id === "sep" ? sepComp : buttonComp
+          readonly property bool tableOnly: ["addRow", "addCol", "delRow", "delCol"].indexOf(modelData.id) >= 0
+          readonly property bool allowed: modelData.id === "sep" || root.toolEnabled(tableOnly ? "table" : modelData.id)
+          visible: allowed && (tableOnly ? root.inTable : (modelData.id === "table" ? !root.inTable : true))
+          onLoaded: if (modelData.id !== "sep") { item.iconText = modelData.icon; item.tooltipText = modelData.tip; item.toolId = modelData.id }
+        }
+      }
+      Component { id: sepComp; Item { width: Style.spacing.md; height: Style.spacing.controlHeight } }
+      Component {
+        id: buttonComp
+        Button {
+          property string toolId: ""
+          property bool hovering: false
+          // Quiet toolbar: the outline appears only under the cursor.
+          bordered: hovering
+          foreground: root.foreground
+          accent: root.accent
+          iconSize: Style.font.icon
+          horizontalPadding: Style.spacing.sm
+          verticalPadding: Style.spacing.xxs
+          onHovered: function(isHovered) { hovering = isHovered }
+          onClicked: root.tool(toolId)
+        }
+      }
+    }
+
+    // ---- link bar
+    Row {
+      visible: root.linkBarOpen
+      width: parent.width
+      spacing: Style.spacing.sm
+      TextField { id: linkText; width: Style.space(200); placeholderText: "Text"; foreground: root.foreground; accent: root.accent; font.family: root.fontFamily; verticalPadding: Style.spacing.xxs
+        Keys.onReturnPressed: root.insertLink(); Keys.onEscapePressed: { root.linkBarOpen = false; root.focusEditor() } }
+      TextField { id: linkUrl; width: Style.space(340); placeholderText: "https://…"; foreground: root.foreground; accent: root.accent; font.family: root.fontFamily; verticalPadding: Style.spacing.xxs
+        Keys.onReturnPressed: root.insertLink(); Keys.onEscapePressed: { root.linkBarOpen = false; root.focusEditor() } }
+      Button { text: "Insert"; bordered: true; foreground: root.foreground; accent: root.accent; verticalPadding: Style.spacing.xxs; onClicked: root.insertLink() }
+      Button { text: "Cancel"; bordered: true; foreground: root.foreground; accent: root.accent; verticalPadding: Style.spacing.xxs; onClicked: { root.linkBarOpen = false; root.focusEditor() } }
+    }
+
+      // A hairline under the tools, so they read as the note's own strip.
+      Item {
+        visible: toolbar.visible
+        width: parent.width
+        height: root.ruleRoomAbove + Style.spacing.hairline + root.ruleRoomBelow
+
+        Rectangle {
+          y: root.ruleRoomAbove
+          width: parent.width
+          height: Style.spacing.hairline
+          color: Util.alpha(root.foreground, 0.12)
         }
       }
 
-    }
+      Loader {
+        id: customLoader
+        visible: root.customView !== null
+        width: parent.width
+        height: visible ? parent.height - y : 0
+        sourceComponent: root.customView
+        onLoaded: { for (var k in root.customViewProps) if (item.hasOwnProperty(k)) item[k] = root.customViewProps[k] }
+      }
+
+      Column {
+        visible: root.showingNotice && root.customView === null
+        width: parent.width
+        spacing: Style.spacing.lg
+        leftPadding: Style.spacing.md
+        topPadding: Style.spacing.md
+
+        Text {
+          textFormat: Text.PlainText
+          width: parent.width - Style.spacing.md * 2
+          text: root.noticeText
+          color: root.foreground
+          font.family: root.fontFamily
+          font.pixelSize: Style.font.body
+          wrapMode: Text.Wrap
+          lineHeight: 1.25
+        }
+
+        Text {
+          textFormat: Text.PlainText
+          visible: root.noticeCode.length > 0
+          text: root.noticeCode
+          color: root.accent
+          font.family: root.fontFamily
+          font.pixelSize: Style.font.displayLarge
+          font.letterSpacing: 4
+        }
+
+        Row {
+          spacing: Style.spacing.sm
+          Repeater {
+            model: root.noticeActions
+            Button {
+              required property var modelData
+              text: modelData.label
+              iconText: modelData.icon || ""
+              bordered: true
+              foreground: root.foreground
+              accent: root.accent
+              fontFamily: root.fontFamily
+              onClicked: if (typeof modelData.action === "function") modelData.action()
+            }
+          }
+        }
+      }
+
+      Flickable {
+        id: flick
+        visible: !root.showingNotice
+        width: parent.width
+        height: parent.height - y
+        clip: true
+        contentWidth: width
+        contentHeight: area.height
+        boundsBehavior: Flickable.StopAtBounds
+
+        ListWheel { flick: flick }
+
+        function ensureVisible(r) {
+          if (contentY >= r.y) contentY = r.y
+          else if (contentY + height <= r.y + r.height) contentY = r.y + r.height - height
+        }
+
+        TextEdit {
+          id: area
+          width: flick.width
+          // Fill the frame so a click anywhere in the empty area focuses
+          // the editor.
+          height: Math.max(implicitHeight, flick.height)
+          leftPadding: Style.spacing.xs
+          rightPadding: Style.spacing.xs
+          readOnly: !root.hasNote || root.readOnly
+          color: root.foreground
+          selectionColor: Style.selectionFill
+          selectedTextColor: root.foreground
+          // Rich text in, rich text out. Markdown cannot hold a highlight,
+          // an empty paragraph or an indent, so the document keeps HTML and
+          // services/markdown converts at both ends.
+          textFormat: root.plain ? TextEdit.PlainText : TextEdit.RichText
+          font.family: root.bodyFontFamily
+          font.pixelSize: Style.font.subtitle
+          wrapMode: TextEdit.Wrap
+          selectByMouse: true
+          Keys.priority: Keys.BeforeItem
+          Keys.onPressed: function(event) {
+            root.shortcut(event)
+            if (!event.accepted && !root.plain && (event.key === Qt.Key_Return || event.key === Qt.Key_Enter)) root.beforeReturn()
+          }
+          onCursorRectangleChanged: flick.ensureVisible(cursorRectangle)
+          onTextChanged: {
+            if (root.settingText) return
+            root.applyPendingToInsertion()
+            root.edited()
+          }
+          // A caret move that isn't the result of typing ends the pending
+          // style. While typing, cursorPositionChanged fires before
+          // textChanged, so a move that matches the grown length is typing.
+          onCursorPositionChanged: {
+            root.scheduleInTable()
+            if (!root.pending || root.applying) return
+            var byTyping = cursorPosition === root.pendingCursor + (length - root.pendingLen)
+            if (cursorPosition !== root.pendingCursor && !byTyping) root.clearPending()
+          }
+
+          Text {
+            anchors.fill: parent
+            anchors.leftMargin: Style.spacing.xs
+            visible: area.length === 0 && !!root.placeholder
+            text: root.placeholder
+            color: root.foreground
+            opacity: 0.45
+            font.family: root.bodyFontFamily
+            font.pixelSize: Style.font.subtitle
+            wrapMode: Text.Wrap
+          }
+        }
+      }
+  }
+
+  // Word count sits in the corner of the note's own surface.
+  Text {
+    id: counter
+    visible: root.hasNote && !root.showingNotice
+    textFormat: Text.PlainText
+    anchors.right: parent.right
+    anchors.bottom: parent.bottom
+    // Lined up with the note's own margin, not tucked into the corner:
+    // it reads as the last line of the page rather than a badge on it.
+    anchors.rightMargin: Style.spacing.panelPadding
+    anchors.bottomMargin: Style.spacing.panelPadding
+    text: root.wordCount + (root.wordCount === 1 ? " word" : " words")
+    color: Util.alpha(root.foreground, 0.35)
+    font.family: root.fontFamily
+    font.pixelSize: Style.font.caption
   }
 }

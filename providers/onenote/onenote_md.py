@@ -672,18 +672,23 @@ def _image_para(token):
     return {"type": "paragraph", "children": [token]}
 
 
+def _has_content(run):
+    """The run holds something visible — anything but whitespace-only text."""
+    return any(not (t["type"] == "text" and not t.get("raw", "").strip()) for t in run)
+
+
 def _segments(children):
     """Inline tokens -> [("inline", tokens)] and [("image", token)] in order."""
     parts, run = [], []
     for c in children or []:
         if c["type"] == "image":
-            if any(not (t["type"] == "text" and not t.get("raw", "").strip()) for t in run):
+            if _has_content(run):
                 parts.append(("inline", run))
             run = []
             parts.append(("image", c))
         else:
             run.append(c)
-    if any(not (t["type"] == "text" and not t.get("raw", "").strip()) for t in run):
+    if _has_content(run):
         parts.append(("inline", run))
     return parts
 
@@ -720,9 +725,15 @@ def _is_image_para(token):
 
 def _hoist_list(token):
     """A list -> [list, image, list, …]: split at every item holding an image,
-    the item's text before the image staying in the first half and any text
-    after it opening the second."""
+    each text run keeping its place between the images around it, and a
+    nested sublist's own images following the item that held it."""
     out, items = [], []
+
+    def flush():
+        if items:
+            out.append(dict(token, children=list(items)))
+            items.clear()
+
     for item in token.get("children") or []:
         text = [c for c in item.get("children") or [] if c["type"] in ("block_text", "paragraph")]
         nested = [c for c in item.get("children") or [] if c["type"] == "list"]
@@ -731,27 +742,24 @@ def _hoist_list(token):
         if not any(kind == "image" for kind, _ in parts) and not any(_is_image_para(t) for t in nested_out):
             items.append(item)
             continue
-        # the item's own text, split around its images
-        head, tail = [], []
-        images = []
-        for kind, content in parts:
-            if kind == "image":
-                images.append(content)
-            elif not images:
-                head = content
-            else:
-                tail = content
-        first = dict(item, children=([dict(text[0], children=head)] if head else []) + [t for t in nested_out if not _is_image_para(t)])
+        # Text before the first image keeps the item (and its non-image
+        # sublists); every image closes the list so far; every later run
+        # opens a fresh half-item, so nothing between two images is lost.
+        head = parts[0][1] if parts and parts[0][0] == "inline" else None
+        first = dict(item, children=([dict(text[0], children=head)] if head else [])
+                     + [t for t in nested_out if not _is_image_para(t)])
         if first["children"]:
             items.append(first)
-        out.append(dict(token, children=items))
-        items = []
-        out.extend(_image_para(i) for i in images)
-        out.extend(t for t in nested_out if _is_image_para(t))
-        if tail:
-            items.append(dict(item, children=[dict(text[0], children=tail)]))
-    if items:
-        out.append(dict(token, children=items))
+        for kind, content in parts[1 if head else 0:]:
+            if kind == "image":
+                flush()
+                out.append(_image_para(content))
+            else:
+                items.append(dict(item, children=[dict(text[0], children=content)]))
+        if any(_is_image_para(t) for t in nested_out):
+            flush()
+            out.extend(t for t in nested_out if _is_image_para(t))
+    flush()
     return [t for t in out if t["type"] != "list" or t.get("children")]
 
 

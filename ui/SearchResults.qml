@@ -23,11 +23,14 @@ Item {
 
   signal activated(string path)
 
+  // Row geometry, handed down by NoteList: these results stand where its rows
+  // stood, so they must measure exactly as its rows do.
   property real rowHeight: Style.spacing.controlHeight + Style.spacing.xs
-  // The bar that marks the open note, and where the text starts because of it.
-  readonly property real markWidth: Style.space(2)
-  readonly property real textInset: markWidth + Style.spacing.md
+  property real markWidth: Style.space(2)
+  property real textInset: markWidth + Style.spacing.md
   readonly property int count: root.model ? root.model.length : 0
+
+  function positionViewAtIndex(i, mode) { results.positionViewAtIndex(i, mode) }
 
   Column {
     anchors.fill: parent
@@ -56,16 +59,7 @@ Item {
       boundsBehavior: Flickable.StopAtBounds
       model: root.model
 
-      // The same scroll feel as the ordinary list.
-      WheelHandler {
-        target: null
-        acceptedDevices: PointerDevice.Mouse | PointerDevice.TouchPad
-        onWheel: function(event) {
-          var dy = event.pixelDelta.y !== 0 ? event.pixelDelta.y * 3 : (event.angleDelta.y / 120) * Style.space(72)
-          var max = Math.max(0, results.contentHeight - results.height)
-          results.contentY = Math.max(0, Math.min(results.contentY - dy, max))
-        }
-      }
+      ListWheel { flick: results }
 
       delegate: Rectangle {
         id: hit

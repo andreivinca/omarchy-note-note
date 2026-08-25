@@ -19,16 +19,20 @@ import "TabColors.js" as TabColors
 //   kind "tree"        an expandable group inside a notebook (OneNote
 //                      notebook / section): `path` is its id, `expanded`
 //                      its state; rows are indented by `level`
-//   kind "placeholder" a zero-height row; the host no longer emits one, but a
-//                      provider may want a spacer
 Item {
   id: root
 
-  property alias model: listView.model
+  // The rows on show. While a filter is on, the search panel renders them and
+  // the main list goes empty — not merely invisible, or every match would be
+  // built twice, once with drag areas and buttons nobody can see.
+  property var model: []
   property string currentPath: ""
   property bool filtering: false
-  // The rail's tabs, as the host builds them: { key, name, color, count, matches }.
+  // The rail's tabs, as the host builds them: { key, name, color, count }.
   property var sections: []
+  // Search hits per tab key; kept beside `sections` so a keystroke moves the
+  // numbers without touching the tabs (see the host's rebuildRows).
+  property var matchCounts: ({})
   property string activeKey: ""
   // Only a provider that can make notebooks offers the row that makes them.
   property bool canCreateNotebook: false
@@ -76,7 +80,12 @@ Item {
                                         Util.alpha(rail.activeBase, TabColors.fillAlpha()))
 
 
-  function positionViewAtIndex(i, mode) { listView.positionViewAtIndex(i, mode) }
+  // Whichever list is on screen: the search panel replaces the main list
+  // while a filter is on, and a keyboard move must scroll the one visible.
+  function positionViewAtIndex(i, mode) {
+    if (root.filtering) searchPanel.positionViewAtIndex(i, mode)
+    else listView.positionViewAtIndex(i, mode)
+  }
 
   // Scroll offset, measured from the top of the content, so a model rebuild
   // (which resets contentY) can put the list back where it was.
@@ -105,6 +114,7 @@ Item {
       width: root.railWidth
       height: parent.height
       sections: root.sections
+      matchCounts: root.matchCounts
       activeKey: root.activeKey
       filtering: root.filtering
       foreground: root.foreground
@@ -130,10 +140,11 @@ Item {
     // one into a results list: no headings to keep, no rows to drag, nothing to
     // create. See SearchResults.qml.
     SearchResults {
+      id: searchPanel
       anchors.fill: parent
       anchors.margins: root.pagePadding
       visible: root.filtering
-      model: root.filtering ? listView.model : []
+      model: root.filtering ? root.model : []
       currentPath: root.currentPath
       notebook: root.activeName
       foreground: root.foreground
@@ -143,6 +154,8 @@ Item {
       fontFamily: root.fontFamily
       titleFor: root.titleFor
       rowHeight: root.rowHeight
+      markWidth: root.markWidth
+      textInset: root.textInset
       onActivated: function(path) { root.activated(path) }
     }
 
@@ -162,19 +175,10 @@ Item {
           clip: true
           spacing: 0
           boundsBehavior: Flickable.StopAtBounds
+          model: root.filtering ? [] : root.model
           displaced: Transition { NumberAnimation { properties: "y"; duration: 120; easing.type: Easing.OutQuad } }
 
-          // Flickable moves touchpad scrolls pixel-for-pixel, which feels slow
-          // for a long list; scale them, and give a mouse notch a fixed step.
-          WheelHandler {
-            target: null
-            acceptedDevices: PointerDevice.Mouse | PointerDevice.TouchPad
-            onWheel: function(event) {
-              var dy = event.pixelDelta.y !== 0 ? event.pixelDelta.y * 3 : (event.angleDelta.y / 120) * Style.space(72)
-              var max = Math.max(0, listView.contentHeight - listView.height)
-              listView.contentY = listView.originY + Math.max(0, Math.min(listView.contentY - listView.originY - dy, max))
-            }
-          }
+          ListWheel { flick: listView }
 
           // ---- rows
           delegate: Item {
@@ -188,8 +192,7 @@ Item {
             readonly property int indent: (modelData.level || 0) * Style.space(14)
             readonly property bool draggable: isNote && !modelData.fixed
             width: listView.width
-            height: modelData.kind === "placeholder" ? 0 : root.rowHeight
-            visible: modelData.kind !== "placeholder"
+            height: root.rowHeight
 
             DropArea {
               anchors.fill: parent

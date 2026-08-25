@@ -66,8 +66,8 @@ people write against: change it additively, never silently.
 - A note is addressed by `"<providerId>:<opaque>"`. Only the provider parses
   the part after the colon.
 - A row is `{ kind, path, title, preview, icon, level, expanded, fixed,
-  version }` with `kind` ∈ `note | new | action | tree | placeholder`. The host
-  no longer emits `placeholder`; a provider may still want a spacer.
+  version }` with `kind` ∈ `note | new | action | tree`. (`placeholder`,
+  a zero-height spacer, was dropped in 2.8.1: nothing emitted one.)
 - `version` is an opaque change marker (file mtime, `lastModifiedDateTime`,
   `last_edited_time`). The host reloads the open note when a listing reports a
   newer version and the note has no unsaved edits.

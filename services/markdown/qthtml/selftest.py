@@ -68,6 +68,7 @@ CASES = {
     "image between text": "before\n\n![](file:///tmp/note-note-test.png)\n\nafter\n",
     "image with a remote url": "![shot](https://graph.microsoft.com/v1.0/me/onenote/resources/abc/$value)\n",
     "image opening a list item": "- item\n- ![pic](file:///tmp/note-note-test.png) after\n- last\n",
+    "linked image opening a list item": "- item\n- [![pic](file:///tmp/note-note-test.png)](https://example.com) after\n- last\n",
     "long note": (
         "# Shopping\n\nBuy these **today**:\n\n- [ ] milk\n- [x] eggs\n- [ ] bread\n\n"
         "> remember the ==coupon==\n\n| item | qty |\n|---|---|\n| apples | 3 |\n\n"

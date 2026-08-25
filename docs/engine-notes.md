@@ -163,7 +163,10 @@ anything precedes the image — a `<br/>`, or one U+00A0. So the loader writes a
 non-breaking space in front of such an image (`dialect.IMAGE_LEAD`), the
 converter strips it again, and the editor does the same live: on Enter with
 the caret right before an image inside a list item, and after a paste that
-lands there (`NoteEditor.beforeReturn`, `guardImageAt`).
+lands there (`NoteEditor.beforeReturn`, `guardImageAt`; its `imageLead`
+mirrors the dialect constant). A link around the image changes nothing —
+`<li><a…><img …/></a>` is mispainted identically (measured offscreen, same
+rows) — so the writer's guard looks through an anchor too.
 
 **`insert()` parses HTML** in this mode, and `remove()` + `insert()` are
 ordinary edits, so ctrl+z still walks back through toolbar actions. Assigning
