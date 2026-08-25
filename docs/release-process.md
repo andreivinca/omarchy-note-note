@@ -76,3 +76,4 @@ Template:
 | 2.7.0 | rich-text editor with Markdown at both ends; OneNote pages with images |
 | 2.8.0 | **notebooks and sources as binder tabs**, one open at a time; its own search panel; sections carry a colour and providers a logo |
 | 2.9.0 | the 2.8 seams closed (actions, counts, first-open, ctrl+n per tab; search sees folded pages); local reads through one no-follow descriptor with a deadline (`lib/readfile.py`) |
+| 2.9.1 | tab colour polish (richer pastels, deeper wash, labels in the tab's ink); preview refreshed with the email address blurred |
