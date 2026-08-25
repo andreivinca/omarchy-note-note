@@ -666,12 +666,15 @@ Item {
     scanProviders.running = true
   }
   // The state file is the host's only input from disk; it holds a few flags
-  // and ids. It is read exactly once, at most maxStateBytes+1 bytes, and
-  // those bytes are what gets parsed — no size check followed by a reopen.
+  // and ids. It is read exactly once, through one descriptor
+  // (lib/readfile.py): no symlink following, regular files only, at most
+  // maxStateBytes+1 bytes against a deadline — and those bytes are what gets
+  // parsed. No size check followed by a reopen.
   readonly property int maxStateBytes: 1024 * 1024
+  readonly property string readScript: Qt.resolvedUrl("lib/readfile.py").toString().replace(/^file:\/\//, "")
   Process {
     id: stateRead
-    command: ["sh", "-c", 'head -c "$2" -- "$1" 2>/dev/null; true', "sh", root.statePath, String(root.maxStateBytes + 1)]
+    command: ["python3", root.readScript, root.statePath, String(root.maxStateBytes + 1)]
     stdout: StdioCollector {
       onStreamFinished: {
         if (this.text.length > root.maxStateBytes) { console.warn("note-note: state file too large, ignoring"); root.loadState(""); return }

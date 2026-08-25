@@ -62,8 +62,9 @@ to deliver EOF: `stdinEnabled = true` → `running = true` → `write(payload)` 
 `stdinEnabled = false`. Any other order hangs the script or loses the payload.
 
 **`FileView` has no bounded read.** It is fine for atomic writes
-(`atomicWrites: true`), but reading a file the user controls must go through a
-bounded `head -c` (see [security.md](security.md)).
+(`atomicWrites: true`), but reading a file the user controls must go through
+`lib/readfile.py` — no symlink following, regular files only, capped, with a
+deadline (see [security.md](security.md)).
 
 **Lint** with `qmllint -I /usr/share/omarchy/shell <file>` — the shell's
 `qs.Ui` / `qs.Commons` modules live there.

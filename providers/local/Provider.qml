@@ -23,6 +23,12 @@ Item {
   property var services: null
 
   readonly property string notesDir: Quickshell.env("NOTE_NOTE_DIR") || (Quickshell.env("HOME") + "/Notes")
+  readonly property string dir: Qt.resolvedUrl(".").toString().replace(/^file:\/\//, "").replace(/\/$/, "")
+  // Both readers refuse symlinks and special files and race a deadline
+  // (docs/security.md, rule 9): a path under ~/Notes is user-writable and
+  // cannot be trusted to be a plain file.
+  readonly property string listScript: dir + "/list.py"
+  readonly property string readScript: dir + "/../../lib/readfile.py"
   // This provider's limits: a note bigger than this is listed but not loaded
   // (it is almost certainly not a note), and the listing itself is capped.
   readonly property int maxNoteBytes: 2 * 1024 * 1024
@@ -139,9 +145,11 @@ Item {
   }
 
   // ── notes ───────────────────────────────────────────────────────────
-  // A note is read exactly once, at most maxNoteBytes+1 bytes, and those
-  // bytes are what is shown: no size check followed by a reopen, so a file
-  // that grows between listing and opening cannot exceed the cap.
+  // A note is read exactly once, through one descriptor (lib/readfile.py):
+  // no symlink following, regular files only, at most maxNoteBytes+1 bytes,
+  // against a deadline — and those bytes are what is shown. No size check
+  // followed by a reopen, so a file that grows between listing and opening
+  // cannot exceed the cap, and a FIFO cannot hold the queue.
   property var loadQueue: []
   function load(path, cb) {
     root.loadQueue.push({ path: path, cb: cb })
@@ -150,7 +158,7 @@ Item {
   function nextRead() {
     if (root.loadQueue.length === 0) return
     var job = root.loadQueue[0]
-    readProc.command = ["sh", "-c", 'head -c "$2" -- "$1" 2>/dev/null; true', "sh", fileOf(job.path), String(root.maxNoteBytes + 1)]
+    readProc.command = ["python3", root.readScript, fileOf(job.path), String(root.maxNoteBytes + 1)]
     readProc.running = true
   }
   Process {
@@ -295,38 +303,12 @@ Item {
     }
   }
 
-  // Lists notebooks (folders) and their notes, oldest-first by birth time:
-  //   D<TAB>key / O<TAB>key<TAB>name / B<TAB>key / N<TAB>key<TAB>path<TAB>title<TAB>preview
+  // Lists notebooks (folders) and their notes, oldest-first by birth time —
+  // see list.py for the D/O/B/N line format and the read policy (every file
+  // through readfile.py; symlinked notes and notebooks are not listed).
   Process {
     id: listProc
-    command: ["sh", "-c", '
-      mkdir -p "$1" && cd "$1" || exit 0
-      emit() {
-        dir="$1"; key="$2"
-        printf "D\\t%s\\n" "$key"
-        [ -f "$dir/.order" ] && while IFS= read -r n; do [ -n "$n" ] && printf "O\\t%s\\t%s\\n" "$key" "$n"; done < "$dir/.order"
-        for f in "$dir"/*.md; do
-          [ -e "$f" ] || continue
-          printf "%s\\t%s\\t%s\\t%s\\n" "$(stat -c %W -- "$f")" "$(stat -c %s -- "$f")" "$(stat -c %Y -- "$f")" "$f"
-        done | sort -n | cut -f2- | while IFS="$(printf "\\t")" read -r size mtime f; do
-          head -c 4096 -- "$f" | awk -v key="$key" -v p="$f" -v size="$size" -v mtime="$mtime" \'
-            NR==1 && $0=="---" { fm=1; next }
-            fm && $0=="---"    { fm=0; next }
-            fm && /^title:/    { t=substr($0,7); next }
-            !fm && !pv && NF   { pv=substr($0,1,200); sub(/^[#>*\\- \\t]+/, "", pv); gsub(/[*_`]/, "", pv) }
-            END { gsub(/\\t/," ",t); gsub(/\\t/," ",pv); sub(/^ +/,"",t); printf "N\\t%s\\t%s\\t%s\\t%s\\t%s\\t%s\\n", key, p, t, pv, size, mtime }
-          \'
-        done
-      }
-      [ -f .notebooks ] && while IFS= read -r n; do [ -n "$n" ] && printf "B\\t%s\\n" "$n"; done < .notebooks
-      emit "$PWD" ""
-      for d in */; do
-        [ -d "$d" ] || continue
-        d=${d%/}
-        case "$d" in .*) continue;; esac
-        emit "$PWD/$d" "$d"
-      done
-    ' + " | head -c " + root.maxListBytes, "sh", root.notesDir]
+    command: ["python3", root.listScript, root.notesDir, String(root.maxListBytes)]
     stdout: StdioCollector { onStreamFinished: root.loadList(this.text) }
   }
 }

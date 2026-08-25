@@ -7,7 +7,7 @@
 | Host | `omarchy-shell` — one long-running [Quickshell](https://quickshell.org) (Qt 6 / QML) process; the plugin is loaded into it |
 | Language | QML + JavaScript (ES5-era engine, see [engine-notes](engine-notes.md)), plus Python 3 for backends |
 | Dependencies | **standard library only**; no `pip`, no system packages. Markdown parsing uses a *vendored* mistune (BSD-3, `services/markdown/mistune/`) |
-| External binaries | `python3`, `sh`, `head`, `stat`, `awk`, `sort`, `rm`, `mkdir`, `inotifywait`, `wl-copy`, `wl-paste`, `xdg-open`; ImageMagick optional |
+| External binaries | `python3`, `sh`, `rm`, `mkdir`, `inotifywait`, `wl-copy`, `wl-paste`, `xdg-open`; ImageMagick optional |
 | Privileges | none — no sudo, no pkexec, no services, no config files of other apps |
 | Sandbox | none: an Omarchy plugin runs unsandboxed inside the shell. Behave accordingly |
 | Reloading | QML changes need `omarchy-restart-shell`; Python changes take effect on the next call |

@@ -138,10 +138,11 @@ provider means unbounded shell memory. Each built-in declares its limits at
 the top of its files (`maxNoteBytes` in `providers/local/Provider.qml`,
 `MAX_*` in `sticky.py` / `onenote.py`); a note that is too large should be
 listed but returned as `editable: false` with an explanatory body rather
-than loaded. Read a file once with a hard ceiling (e.g. `head -c cap+1`) and
-use those bytes — a size check followed by a separate open is not a bound,
-because the file can change in between. The host guards only its own state
-file, the same way.
+than loaded. Read a file once with a hard ceiling and use those bytes — a
+size check followed by a separate open is not a bound, because the file can
+change in between. For local files use `lib/readfile.py` (one descriptor,
+no symlink following, regular files only, capped, with a deadline), as the
+local provider and the host's own state file do.
 
 ## Services
 

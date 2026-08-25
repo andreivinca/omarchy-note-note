@@ -19,10 +19,10 @@ file can change in between (the reviewer's exact words: *"A same-user writer
 can replace or grow either file between the check and load"*).
 
 - Read `cap + 1` bytes once, and use *those bytes*. Over the cap → reject.
-- Applies to files (`head -c "$cap" -- "$file"`), HTTP bodies
-  (`read(max + 1)`), and process output.
+- Applies to files (`lib/readfile.py`, which also enforces rule 9), HTTP
+  bodies (`read(max + 1)`), and process output.
 - `FileView` in QML has no bounded read: it is **write-only** in this project.
-  Local notes and the state file are read through a bounded `head -c`.
+  Local notes and the state file are read through `lib/readfile.py`.
 - Bound collections too, not only bytes: number of notes, sections, pages,
   blocks, images.
 
@@ -103,9 +103,25 @@ to a sane maximum before it is used.
 
 ### 8. Shell commands take arguments, never interpolation
 
-`["sh", "-c", 'head -c "$2" -- "$1"', "sh", path, String(cap)]` — the path is
-an argument, never spliced into the script text. `--` ends option parsing so a
-file named `-rf` is a file.
+`["sh", "-c", '… "$1" …', "sh", path]` — the path is an argument, never
+spliced into the script text. `--` ends option parsing so a file named `-rf`
+is a file.
+
+### 9. A path is not a file: open without following, check the type, race a deadline
+
+`head`/`open()` on a user-writable path follows symlinks (a link in ~/Notes
+would read out any file the user can) and blocks on a FIFO (the reader hangs
+until a writer appears). The safe shape is `lib/readfile.py`, used for every
+local-file read:
+
+- one `os.open()` with `O_NOFOLLOW` (the kernel refuses a symlink) and
+  `O_NONBLOCK` (a FIFO's open returns instead of waiting);
+- `fstat` **the descriptor** and refuse anything that is not a regular file;
+- read at most cap+1 bytes from that same descriptor (rule 1) against a
+  `time.monotonic()` deadline, so nothing here can hang the caller.
+
+The listing applies the same policy to what it shows at all: a symlinked note
+or notebook is not listed (`providers/local/list.py`).
 
 ---
 
@@ -122,6 +138,7 @@ against an exact commit; each fix shipped as a release.
 | 4 | Sticky Notes started the process and wrote *before* enabling stdin — the reverse of the bounded sequence | v2.3.1 (`7074390`) | 3 |
 | 5 | OneNote `<img src>` passed straight to `urllib` **with the bearer token**, no scheme/host/redirect validation (SSRF); image and remote width handed to ImageMagick with no pixel/memory ceiling or timeout | v2.3.2 (`a2b0712`) | 4, 6 |
 | 6 | `open(..., timeout=60)` has no wall-clock deadline (drip-feed keeps a fetch alive); image cache had only a per-file cap, no item or total-byte ceiling | v2.5.0 | 5 |
+| 7 | Note/state readers ran `head` on mutable paths: a symlink discloses another user-readable file, a FIFO blocks the reader forever | v2.9.0 | 9 |
 
 Pattern worth noticing: **three of the six were the same mistake in a new
 place.** After fixing one, grep for the shape of it everywhere else before
@@ -131,8 +148,8 @@ replying to the reviewer.
 
 ## Pre-release checklist
 
-- [ ] Every new file read goes through a bounded single read (no `stat` + open,
-      no `FileView` read).
+- [ ] Every new file read goes through `lib/readfile.py` (no `stat` + open, no
+      `FileView` read, no `head` on a mutable path).
 - [ ] Every new HTTP call has a byte ceiling *and* a deadline; every loop over
       pages has a collection cap.
 - [ ] Every new file write uses `mkstemp` + `replace`, 0600, in a 0700 dir.

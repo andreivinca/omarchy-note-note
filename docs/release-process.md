@@ -75,3 +75,4 @@ Template:
 | 2.6.0 | create OneNote sections from the sidebar |
 | 2.7.0 | rich-text editor with Markdown at both ends; OneNote pages with images |
 | 2.8.0 | **notebooks and sources as binder tabs**, one open at a time; its own search panel; sections carry a colour and providers a logo |
+| 2.9.0 | the 2.8 seams closed (actions, counts, first-open, ctrl+n per tab; search sees folded pages); local reads through one no-follow descriptor with a deadline (`lib/readfile.py`) |
