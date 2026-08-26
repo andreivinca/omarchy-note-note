@@ -65,6 +65,13 @@ Item {
   property color foreground: Color.menu.text
   property color borderColor: Color.menu.border
   property var borderSpec: Border.surfaceSpec("menu", "border", borderColor, Math.max(1, Style.space(2)))
+
+  // The frame hugs the notes: the app keeps a hair of padding inside its
+  // border, so the notebook rail, the list and the note itself run out to
+  // the edge. Only the header is held back — it takes the inset the whole
+  // app used to have, minus the hair, and so looks exactly as it did.
+  readonly property real appPadding: Math.max(1, Style.space(2))
+  readonly property real headerPadding: Math.max(0, Style.spacing.panelPadding - appPadding)
   property color scrim: Color.menu.scrim
   property color accent: Color.accent
   property color selectedBackground: Color.menu.selectedBackground
@@ -745,227 +752,244 @@ Item {
       // ---- header
       Item {
         width: parent.width
-        height: Math.max(searchField.height, titleText.implicitHeight)
+        height: headerInner.height + root.headerPadding
 
-        // The masthead is the open tab said large: the provider's mark, its
-        // name, in the tab's own ink — so the header always answers "whose
-        // notes am I looking at". Same reserved width whatever the name, so
-        // the search field does not slide when tabs change.
-        Row {
-          id: titleRow
+        // The app pads itself by a hair, so the header carries what is
+        // left of the old inset on its own: the masthead, the search
+        // field and the hints keep their distance from the frame, while
+        // the list and the note below run out to the edge. Vertically the
+        // inset is split around the content — the same air above it as
+        // below, counting the column gap — so the band reads centered.
+        Item {
+          id: headerInner
           anchors.left: parent.left
-          anchors.verticalCenter: parent.verticalCenter
-          width: Style.space(150)
-          spacing: Style.spacing.sm
+          anchors.right: parent.right
+          anchors.top: parent.top
+          anchors.topMargin: Math.max(0, (root.headerPadding + Style.spacing.md - root.appPadding) / 2)
+          anchors.leftMargin: root.headerPadding
+          anchors.rightMargin: root.headerPadding
+          height: Math.max(searchField.height, titleText.implicitHeight)
 
-          Image {
-            id: titleLogo
-            visible: status === Image.Ready
-            source: root.headerLogo
+          // The masthead is the open tab said large: the provider's mark, its
+          // name, in the tab's own ink — so the header always answers "whose
+          // notes am I looking at". Same reserved width whatever the name, so
+          // the search field does not slide when tabs change.
+          Row {
+            id: titleRow
+            anchors.left: parent.left
             anchors.verticalCenter: parent.verticalCenter
-            width: Style.font.title
-            height: Style.font.title
-            sourceSize.width: Style.font.title * 2
-            sourceSize.height: Style.font.title * 2
-            fillMode: Image.PreserveAspectFit
-            smooth: true
-          }
+            width: Style.space(150)
+            spacing: Style.spacing.sm
 
-          Text {
-            id: titleText
-            textFormat: Text.PlainText
-            anchors.verticalCenter: parent.verticalCenter
-            width: titleRow.width - (titleLogo.visible ? titleLogo.width + titleRow.spacing : 0)
-            text: root.headerName
-            color: root.headerInk
-            Behavior on color { ColorAnimation { duration: 150 } }
-            font.family: Style.font.menuFamily
-            font.pixelSize: Style.font.title
-            font.bold: true
-            elide: Text.ElideRight
-          }
-        }
-
-        // The search sits in the middle of the band, the way a command bar
-        // does — pushed right only when a narrow window would run it into
-        // the masthead. It names its own shortcut: a keycap in the field
-        // where the clear button will stand once there is something to
-        // clear, so the right edge always says the one thing you can do.
-        TextField {
-          id: searchField
-          x: Math.max(titleRow.width + Style.spacing.lg, (parent.width - width) / 2)
-          anchors.verticalCenter: parent.verticalCenter
-          width: Style.space(340)
-          placeholderText: "Search notes…"
-          foreground: root.foreground
-          accent: root.accent
-          font.family: Style.font.menuFamily
-          verticalPadding: Style.spacing.xs
-          onTextEdited: root.setFilter(text)
-          rightPadding: root.filterText.length > 0
-            ? clearSearchButton.width + Style.spacing.xs
-            : searchKeycap.width + Style.spacing.sm + Style.spacing.xs
-          leftPadding: searchGlyph.width + Style.spacing.sm + Style.spacing.xs
-
-          Rectangle {
-            id: searchKeycap
-            visible: root.filterText.length === 0
-            anchors.right: parent.right
-            anchors.rightMargin: Style.spacing.sm
-            anchors.verticalCenter: parent.verticalCenter
-            width: searchKeycapText.width + Style.spacing.sm * 2
-            height: searchKeycapText.height + Style.spacing.xxs * 2
-            // A square theme keeps its corners; a round one is capped where
-            // a keycap stops looking like a key.
-            radius: Math.min(Style.cornerRadius, height / 3)
-            color: Util.alpha(root.foreground, 0.06)
-            border.width: 1
-            border.color: Util.alpha(root.foreground, 0.22)
+            Image {
+              id: titleLogo
+              visible: status === Image.Ready
+              source: root.headerLogo
+              anchors.verticalCenter: parent.verticalCenter
+              width: Style.font.title
+              height: Style.font.title
+              sourceSize.width: Style.font.title * 2
+              sourceSize.height: Style.font.title * 2
+              fillMode: Image.PreserveAspectFit
+              smooth: true
+            }
 
             Text {
-              id: searchKeycapText
+              id: titleText
               textFormat: Text.PlainText
-              anchors.centerIn: parent
-              text: "ctrl+k"
-              color: Util.alpha(root.foreground, 0.6)
+              anchors.verticalCenter: parent.verticalCenter
+              width: titleRow.width - (titleLogo.visible ? titleLogo.width + titleRow.spacing : 0)
+              text: root.headerName
+              color: root.headerInk
+              Behavior on color { ColorAnimation { duration: 150 } }
               font.family: Style.font.menuFamily
-              font.pixelSize: Style.font.caption
+              font.pixelSize: Style.font.title
+              font.bold: true
+              elide: Text.ElideRight
             }
           }
 
-          // The magnifier says what the field is for, and stays while you
-          // type — dimmed the standard way, a fade toward any background.
-          Text {
-            id: searchGlyph
-            textFormat: Text.PlainText
-            anchors.left: parent.left
-            anchors.leftMargin: Style.spacing.sm
+          // The search sits in the middle of the band, the way a command bar
+          // does — pushed right only when a narrow window would run it into
+          // the masthead. It names its own shortcut: a keycap in the field
+          // where the clear button will stand once there is something to
+          // clear, so the right edge always says the one thing you can do.
+          TextField {
+            id: searchField
+            x: Math.max(titleRow.width + Style.spacing.lg, (parent.width - width) / 2)
             anchors.verticalCenter: parent.verticalCenter
-            text: "󰍉"
-            color: Util.alpha(root.foreground, 0.55)
-            font.family: Style.fontFamily
-            font.pixelSize: Style.font.iconSmall
+            width: Style.space(340)
+            placeholderText: "Search notes…"
+            foreground: root.foreground
+            accent: root.accent
+            font.family: Style.font.menuFamily
+            verticalPadding: Style.spacing.xs
+            onTextEdited: root.setFilter(text)
+            rightPadding: root.filterText.length > 0
+              ? clearSearchButton.width + Style.spacing.xs
+              : searchKeycap.width + Style.spacing.sm + Style.spacing.xs
+            leftPadding: searchGlyph.width + Style.spacing.sm + Style.spacing.xs
+
+            Rectangle {
+              id: searchKeycap
+              visible: root.filterText.length === 0
+              anchors.right: parent.right
+              anchors.rightMargin: Style.spacing.sm
+              anchors.verticalCenter: parent.verticalCenter
+              width: searchKeycapText.width + Style.spacing.sm * 2
+              height: searchKeycapText.height + Style.spacing.xxs * 2
+              // A square theme keeps its corners; a round one is capped where
+              // a keycap stops looking like a key.
+              radius: Math.min(Style.cornerRadius, height / 3)
+              color: Util.alpha(root.foreground, 0.06)
+              border.width: 1
+              border.color: Util.alpha(root.foreground, 0.22)
+
+              Text {
+                id: searchKeycapText
+                textFormat: Text.PlainText
+                anchors.centerIn: parent
+                text: "ctrl+k"
+                color: Util.alpha(root.foreground, 0.6)
+                font.family: Style.font.menuFamily
+                font.pixelSize: Style.font.caption
+              }
+            }
+
+            // The magnifier says what the field is for, and stays while you
+            // type — dimmed the standard way, a fade toward any background.
+            Text {
+              id: searchGlyph
+              textFormat: Text.PlainText
+              anchors.left: parent.left
+              anchors.leftMargin: Style.spacing.sm
+              anchors.verticalCenter: parent.verticalCenter
+              text: "󰍉"
+              color: Util.alpha(root.foreground, 0.55)
+              font.family: Style.fontFamily
+              font.pixelSize: Style.font.iconSmall
+            }
+
+            Button {
+              id: clearSearchButton
+              visible: root.filterText.length > 0
+              anchors.right: parent.right
+              anchors.rightMargin: Style.spacing.xxs
+              anchors.verticalCenter: parent.verticalCenter
+              iconText: "󰅖"
+              tooltipText: "Clear the search (esc)"
+              foreground: root.foreground
+              accent: root.accent
+              iconSize: Style.font.iconSmall
+              horizontalPadding: Style.spacing.xs
+              verticalPadding: Style.spacing.xxs
+              onClicked: root.clearSearch()
+            }
+
+            Keys.priority: Keys.BeforeItem
+            Keys.onPressed: function(event) {
+              if (event.key === Qt.Key_Down) { root.moveSelection(1); event.accepted = true }
+              else if (event.key === Qt.Key_Up) { root.moveSelection(-1); event.accepted = true }
+              else if (event.key === Qt.Key_Return || event.key === Qt.Key_Enter
+                       || (event.key === Qt.Key_Tab && !(event.modifiers & Qt.ControlModifier))) { editor.focusEditor(); event.accepted = true }
+              else if (root.handleShortcut(event)) event.accepted = true
+            }
           }
 
           Button {
-            id: clearSearchButton
-            visible: root.filterText.length > 0
+            id: shapeButton
             anchors.right: parent.right
-            anchors.rightMargin: Style.spacing.xxs
             anchors.verticalCenter: parent.verticalCenter
-            iconText: "󰅖"
-            tooltipText: "Clear the search (esc)"
+            text: root.detached ? "Overlay" : "Detach"
+            iconText: root.detached ? "󰨟" : "󰏌"
+            tooltipText: root.detached ? "Back to the overlay: summoned over your work, gone on Escape"
+                                       : "Detach into an ordinary window you can keep open beside your work"
+            bordered: true
+            selected: root.detached
             foreground: root.foreground
             accent: root.accent
             iconSize: Style.font.iconSmall
-            horizontalPadding: Style.spacing.xs
+            horizontalPadding: Style.spacing.sm
             verticalPadding: Style.spacing.xxs
-            onClicked: root.clearSearch()
+            onClicked: root.setDetached(!root.detached)
           }
 
-          Keys.priority: Keys.BeforeItem
-          Keys.onPressed: function(event) {
-            if (event.key === Qt.Key_Down) { root.moveSelection(1); event.accepted = true }
-            else if (event.key === Qt.Key_Up) { root.moveSelection(-1); event.accepted = true }
-            else if (event.key === Qt.Key_Return || event.key === Qt.Key_Enter
-                     || (event.key === Qt.Key_Tab && !(event.modifiers & Qt.ControlModifier))) { editor.focusEditor(); event.accepted = true }
-            else if (root.handleShortcut(event)) event.accepted = true
-          }
-        }
+          // The rest of the shortcuts, worn as keycaps rather than recited as a
+          // sentence — search is not among them, because the field carries its
+          // own. A status message borrows the whole slot while it shows, and a
+          // window too narrow for every chip clips them from the left: the
+          // rightmost ones survive, and they are the ones nearest the button
+          // they explain.
+          Item {
+            anchors.left: searchField.right
+            anchors.leftMargin: Style.spacing.lg
+            anchors.right: shapeButton.left
+            anchors.rightMargin: Style.spacing.md
+            height: parent.height
+            clip: true
 
-        Button {
-          id: shapeButton
-          anchors.right: parent.right
-          anchors.verticalCenter: parent.verticalCenter
-          text: root.detached ? "Overlay" : "Detach"
-          iconText: root.detached ? "󰨟" : "󰏌"
-          tooltipText: root.detached ? "Back to the overlay: summoned over your work, gone on Escape"
-                                     : "Detach into an ordinary window you can keep open beside your work"
-          bordered: true
-          selected: root.detached
-          foreground: root.foreground
-          accent: root.accent
-          iconSize: Style.font.iconSmall
-          horizontalPadding: Style.spacing.sm
-          verticalPadding: Style.spacing.xxs
-          onClicked: root.setDetached(!root.detached)
-        }
+            Row {
+              visible: root.statusText.length === 0
+              anchors.right: parent.right
+              anchors.verticalCenter: parent.verticalCenter
+              spacing: Style.spacing.lg
 
-        // The rest of the shortcuts, worn as keycaps rather than recited as a
-        // sentence — search is not among them, because the field carries its
-        // own. A status message borrows the whole slot while it shows, and a
-        // window too narrow for every chip clips them from the left: the
-        // rightmost ones survive, and they are the ones nearest the button
-        // they explain.
-        Item {
-          anchors.left: searchField.right
-          anchors.leftMargin: Style.spacing.lg
-          anchors.right: shapeButton.left
-          anchors.rightMargin: Style.spacing.md
-          height: parent.height
-          clip: true
+              Repeater {
+                model: [{ keys: "ctrl+↑↓", what: "note" },
+                        { keys: "ctrl+tab", what: "notebook" },
+                        { keys: "ctrl+n", what: "new" },
+                        { keys: "esc", what: "back" }]
 
-          Row {
-            visible: root.statusText.length === 0
-            anchors.right: parent.right
-            anchors.verticalCenter: parent.verticalCenter
-            spacing: Style.spacing.lg
+                delegate: Row {
+                  id: hintChip
+                  required property var modelData
+                  spacing: Style.spacing.xs
 
-            Repeater {
-              model: [{ keys: "ctrl+↑↓", what: "note" },
-                      { keys: "ctrl+tab", what: "notebook" },
-                      { keys: "ctrl+n", what: "new" },
-                      { keys: "esc", what: "back" }]
+                  Rectangle {
+                    anchors.verticalCenter: parent.verticalCenter
+                    width: chipKeys.width + Style.spacing.sm * 2
+                    height: chipKeys.height + Style.spacing.xxs * 2
+                    radius: Math.min(Style.cornerRadius, height / 3)
+                    color: Util.alpha(root.foreground, 0.06)
+                    border.width: 1
+                    border.color: Util.alpha(root.foreground, 0.22)
 
-              delegate: Row {
-                id: hintChip
-                required property var modelData
-                spacing: Style.spacing.xs
-
-                Rectangle {
-                  anchors.verticalCenter: parent.verticalCenter
-                  width: chipKeys.width + Style.spacing.sm * 2
-                  height: chipKeys.height + Style.spacing.xxs * 2
-                  radius: Math.min(Style.cornerRadius, height / 3)
-                  color: Util.alpha(root.foreground, 0.06)
-                  border.width: 1
-                  border.color: Util.alpha(root.foreground, 0.22)
+                    Text {
+                      id: chipKeys
+                      textFormat: Text.PlainText
+                      anchors.centerIn: parent
+                      text: hintChip.modelData.keys
+                      color: Util.alpha(root.foreground, 0.6)
+                      font.family: Style.font.menuFamily
+                      font.pixelSize: Style.font.caption
+                    }
+                  }
 
                   Text {
-                    id: chipKeys
                     textFormat: Text.PlainText
-                    anchors.centerIn: parent
-                    text: hintChip.modelData.keys
+                    anchors.verticalCenter: parent.verticalCenter
+                    text: hintChip.modelData.what
                     color: Util.alpha(root.foreground, 0.6)
                     font.family: Style.font.menuFamily
                     font.pixelSize: Style.font.caption
                   }
                 }
-
-                Text {
-                  textFormat: Text.PlainText
-                  anchors.verticalCenter: parent.verticalCenter
-                  text: hintChip.modelData.what
-                  color: Util.alpha(root.foreground, 0.6)
-                  font.family: Style.font.menuFamily
-                  font.pixelSize: Style.font.caption
-                }
               }
             }
-          }
 
-          Text {
-            textFormat: Text.PlainText
-            visible: root.statusText.length > 0
-            anchors.left: parent.left
-            anchors.right: parent.right
-            anchors.verticalCenter: parent.verticalCenter
-            text: root.statusText
-            color: Qt.tint(root.foreground, Util.alpha(root.accent, 0.6))
-            font.family: Style.font.menuFamily
-            font.pixelSize: Style.font.caption
-            elide: Text.ElideRight
-            horizontalAlignment: Text.AlignRight
+            Text {
+              textFormat: Text.PlainText
+              visible: root.statusText.length > 0
+              anchors.left: parent.left
+              anchors.right: parent.right
+              anchors.verticalCenter: parent.verticalCenter
+              text: root.statusText
+              color: Qt.tint(root.foreground, Util.alpha(root.accent, 0.6))
+              font.family: Style.font.menuFamily
+              font.pixelSize: Style.font.caption
+              elide: Text.ElideRight
+              horizontalAlignment: Text.AlignRight
+            }
           }
         }
       }
@@ -1130,7 +1154,7 @@ Item {
       radius: Style.cornerRadius
       color: root.background
       borderSpec: root.borderSpec
-      padding: Style.spacing.panelPadding
+      padding: root.appPadding
 
       MouseArea { anchors.fill: parent; onClicked: {} }
 
@@ -1162,7 +1186,7 @@ Item {
       Item {
         id: floatingHost
         anchors.fill: parent
-        anchors.margins: Style.spacing.panelPadding
+        anchors.margins: root.appPadding
       }
     }
   }
