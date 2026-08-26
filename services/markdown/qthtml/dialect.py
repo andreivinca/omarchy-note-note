@@ -55,8 +55,16 @@ DEFAULT_HIGHLIGHT = "#f9e2af"
 DEFAULT_HIGHLIGHT_INK = "#1e1e2e"
 
 # Qt paints links itself and writes the painting back as a span inside the
-# anchor; that span is decoration, never underline the user asked for.
-LINK_COLOUR = "#0000ff"
+# anchor; that span is decoration, never underline the user asked for
+# (`reader.anchor`, which is why colour is never read back at all).
+#
+# Left to itself Qt paints them #0000ff, which is unreadable on a dark theme
+# and shouts on a light one, so `writer` states the colour on every anchor.
+# This is the fallback for a caller that names none; the app passes a colour
+# leaned toward the theme's own text (see Notes.qml, linkColour) — the same
+# hue on any theme, the contrast the foreground already had. Like the
+# highlight, it never reaches the note: it lives in the document only.
+DEFAULT_LINK = "#4282d7"
 
 
 # Qt's writer brackets its output with these; on the way back *in* they make

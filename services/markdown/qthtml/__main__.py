@@ -1,6 +1,7 @@
 """Command line for the QML side: one conversion per run, payload on stdin.
 
     python3 -m qthtml to-html      [--highlight '#f9e2af'] [--highlight-ink '#1e1e2e']
+                                   [--link '#4282d7']
     python3 -m qthtml to-markdown  [--with-map]
 
 `--with-map` answers with JSON — the Markdown, the document block each line
@@ -24,11 +25,12 @@ else:
 # One note; far above any note the editor will open, and bounded on purpose.
 MAX_BYTES = 8 * 1024 * 1024
 
-FLAGS = {"--highlight": "highlight", "--highlight-ink": "ink"}
+FLAGS = {"--highlight": "highlight", "--highlight-ink": "ink", "--link": "link"}
 
 
 def parse_args(argv):
-    options = {"highlight": dialect.DEFAULT_HIGHLIGHT, "ink": dialect.DEFAULT_HIGHLIGHT_INK, "map": False}
+    options = {"highlight": dialect.DEFAULT_HIGHLIGHT, "ink": dialect.DEFAULT_HIGHLIGHT_INK,
+               "link": dialect.DEFAULT_LINK, "map": False}
     if not argv or argv[0] not in ("to-html", "to-markdown"):
         raise SystemExit(__doc__)
     direction, rest = argv[0], argv[1:]
@@ -53,7 +55,7 @@ def main(argv=None):
     text = payload.decode("utf-8", "replace")
 
     if direction == "to-html":
-        sys.stdout.write(to_html(text, options["highlight"], options["ink"]))
+        sys.stdout.write(to_html(text, options["highlight"], options["ink"], options["link"]))
     elif options["map"]:
         json.dump(convert(text), sys.stdout)
     else:

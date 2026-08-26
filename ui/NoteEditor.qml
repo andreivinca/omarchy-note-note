@@ -37,6 +37,7 @@ Item {
   property bool canImages: false
   readonly property string highlightColour: root.markdown ? root.markdown.highlight : "#f9e2af"
   readonly property string highlightInk: root.markdown ? root.markdown.highlightInk : "#1e1e2e"
+  readonly property string linkColour: root.markdown ? root.markdown.link : "#4282d7"
 
   readonly property alias title: titleField.text
   readonly property bool bodyFocused: area.activeFocus
@@ -466,7 +467,10 @@ Item {
     if (!url) { focusEditor(); return }
     var s = area.selectionStart, e = area.selectionEnd
     if (s !== e) area.remove(Math.min(s, e), Math.max(s, e))
-    area.insert(Math.min(s, e), '<a href="' + url.replace(/"/g, "%22") + '">' + text.replace(/</g, "&lt;") + "</a>")
+    // Same colour the converter gives a link, so one typed here and one that
+    // came from the note look alike before any reload.
+    area.insert(Math.min(s, e), '<a href="' + url.replace(/"/g, "%22") + '" style="color:'
+                + root.linkColour + ';">' + text.replace(/</g, "&lt;") + "</a>")
     focusEditor()
     root.edited()
   }

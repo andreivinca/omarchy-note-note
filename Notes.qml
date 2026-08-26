@@ -140,9 +140,18 @@ Item {
   }
   Component { id: accountComponent; Microsoft.Account {} }
 
+  // A link is blue, the one colour convention every reader already knows —
+  // but no single blue is readable on both a light and a dark theme: the
+  // best one manages 3.7:1 against white and black alike, short of the 4.5
+  // body text wants. So the hue is fixed and the lightness is not. The
+  // theme's own text colour, leaned four-fifths of the way to blue, reads as
+  // blue on any theme and brings the foreground's contrast with it — the
+  // same rule as a tab's ink, and no question asked about which theme is on.
+  readonly property string linkColour: Qt.tint(root.foreground, Util.alpha("#4282d7", 0.8)).toString()
+
   // Markdown on disk, rich text in the editor: everything the note pane shows
   // or saves passes through here (services/markdown/Markdown.qml).
-  Markdown.Markdown { id: markdownService }
+  Markdown.Markdown { id: markdownService; link: root.linkColour }
 
   // Pasting a picture into a note; only providers that can store one take it.
   Clipboard.Clipboard { id: clipboardService }

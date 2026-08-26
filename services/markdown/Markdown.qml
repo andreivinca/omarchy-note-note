@@ -22,10 +22,17 @@ Item {
   property string highlight: "#f9e2af"
   property string highlightInk: "#1e1e2e"
 
+  // The colour of a link. Set by the host from the theme (Notes.qml,
+  // linkColour); this default is only what a caller that names none gets.
+  // It does not reach disk either — Markdown has no colour, and `reader`
+  // never looks at one.
+  property string link: "#4282d7"
+
   // Markdown -> HTML for `TextEdit.text`.  callback(html)
   function toHtml(markdown, callback) {
     if (!markdown) { callback(""); return }
-    run(["to-html", "--highlight", root.highlight, "--highlight-ink", root.highlightInk],
+    run(["to-html", "--highlight", root.highlight, "--highlight-ink", root.highlightInk,
+         "--link", root.link],
         markdown, function(text) { callback(text) })
   }
 

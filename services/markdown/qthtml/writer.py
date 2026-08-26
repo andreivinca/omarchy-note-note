@@ -42,15 +42,17 @@ INLINE_SPAN = {
 }
 
 
-def to_html(markdown, highlight=dialect.DEFAULT_HIGHLIGHT, ink=dialect.DEFAULT_HIGHLIGHT_INK):
+def to_html(markdown, highlight=dialect.DEFAULT_HIGHLIGHT, ink=dialect.DEFAULT_HIGHLIGHT_INK,
+            link=dialect.DEFAULT_LINK):
     """Markdown text -> HTML for a RichText `TextEdit`."""
-    return _Renderer(highlight, ink).document(parse(markdown or ""))
+    return _Renderer(highlight, ink, link).document(parse(markdown or ""))
 
 
 class _Renderer:
-    def __init__(self, highlight, ink):
+    def __init__(self, highlight, ink, link):
         self.highlight = highlight
         self.ink = ink
+        self.link = link
 
     # ---- documents and blocks ------------------------------------------
 
@@ -177,8 +179,11 @@ class _Renderer:
                                      self.inline(token.get("children"), heavy)))
             elif kind == "link":
                 url = token.get("attrs", {}).get("url", "")
-                out.append('<a href="%s">%s</a>' % (_html.escape(url, quote=True),
-                                                    self.inline(token.get("children"), heavy)))
+                # The colour is stated here rather than left to Qt: an anchor
+                # with no colour of its own is painted Qt's #0000ff.
+                out.append('<a href="%s" style="color:%s;">%s</a>'
+                           % (_html.escape(url, quote=True), self.link,
+                              self.inline(token.get("children"), heavy)))
             elif kind == "image":
                 # mistune keeps an image's alt text in its children, the way a
                 # link keeps its label — not in attrs.
