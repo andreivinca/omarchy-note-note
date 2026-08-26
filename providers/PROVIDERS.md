@@ -76,6 +76,10 @@ is open (and it has no unsaved edits), the host reloads it.
   and the host makes that note when you give one. Have the section listed before
   you call back, or the tab it opens will be empty.
 - `action(id)`, `toggleTree(id)`
+- `revealPath(path)` (optional) — unfold whatever tree state hides this
+  note's row, and rebuild, so the row exists on screen. The host calls it
+  when a search ends on a note, then scrolls to the row; a provider whose
+  rows never fold simply leaves it out.
 - `setOrder(sectionKey, paths)`
 - `crumb(path)` → string for the editor's description line
 - `createTargetFor(path)` → target for Ctrl+N while `path` is open, or ""

@@ -122,6 +122,21 @@ Item {
     root.persistRequested()
   }
 
+  // A page in a folded section has no row. Revealing one opens its section
+  // and its notebook, so the row exists when the host scrolls to it — asked
+  // for when a search ends on a page the tree was hiding.
+  function revealPath(path) {
+    var pg = pageAt(path)
+    if (!pg) return
+    var sec = sectionAt(pg.sectionId), next = root.expanded.slice()
+    if (sec && next.indexOf(sec.notebookId) < 0) next.push(sec.notebookId)
+    if (next.indexOf(pg.sectionId) < 0) next.push(pg.sectionId)
+    if (next.length === root.expanded.length) return
+    root.expanded = next
+    rebuild()
+    root.persistRequested()
+  }
+
   function action(id) {
     if (!ms) return
     if (id === "login") ms.login()

@@ -425,6 +425,7 @@ Item {
     searchField.forceActiveFocus()
   }
   function setFilter(text) {
+    var searchEnded = root.filterText.length > 0 && text.length === 0
     root.filterText = text
     rebuildRows()
     // Searching still spans every tab. When the open one has nothing, move to
@@ -435,6 +436,23 @@ Item {
         if ((root.tabMatches[root.tabs[t].key] || 0) > 0) { setActiveSection(root.tabs[t].key, false); break }
     if (root.filterText && rowIndexOf(root.currentPath) < 0)
       for (var i = 0; i < root.rows.length; i++) if (root.rows[i].kind === "note") { selectPath(root.rows[i].path); break }
+    // However the search ended — esc, the clear button, the text backspaced
+    // away — the note it landed on should be in sight on the list that returns.
+    if (searchEnded) revealCurrent()
+  }
+  // Puts the open note's row on screen. A provider whose tree can fold rows
+  // away (OneNote) is first asked to unfold whatever hides it — revealPath is
+  // optional in the provider contract — and its rebuild has already gone
+  // through rebuildRows by the time it returns. The scroll waits a beat so the
+  // list is laid out with the rows the reveal just added.
+  function revealCurrent() {
+    var p = providerOf(root.currentPath)
+    if (!p) return
+    if (typeof p.revealPath === "function") p.revealPath(root.currentPath)
+    Qt.callLater(function() {
+      var i = rowIndexOf(root.currentPath)
+      if (i >= 0) list.positionViewAtIndex(i, ListView.Contain)
+    })
   }
   function crumbOf(path) { var p = providerOf(path); return p ? p.crumb(path) : "" }
 
