@@ -43,6 +43,14 @@ Item {
   }
   property color foreground: Color.menu.text
   property color accent: Color.accent
+  // The accent written as ink: the theme's text pulled toward the accent, the
+  // same trick as a tab's label (see TabColors.inkAlpha). The accent itself is
+  // the theme's to choose and may sit anywhere; starting from the foreground
+  // is what guarantees it reads on that theme's background — a dark theme's
+  // white becomes a pale cast of it, a light theme's black a deep one. Never
+  // Qt.lighter/Qt.darker, which pick a direction and are wrong on the theme
+  // that runs the other way.
+  readonly property color accentInk: Qt.tint(foreground, Util.alpha(accent, 0.6))
   property color selectedBackground: Color.menu.selectedBackground
   property color selectedText: Color.menu.selectedText
   property string fontFamily: Style.font.menuFamily
@@ -221,7 +229,9 @@ Item {
               }
               // Action rows ("New note…", sign in/out, settings) are dimmed so
               // notes stand out from the things you can do; hover lifts them.
-              opacity: dragArea.drag.active ? 0.85 : ((slot.isNew || slot.isAction) && !rowHover.hovered ? 0.38 : 1)
+              // Dimmed, not faint: opacity fades toward whichever background
+              // the theme has, so this number means the same on all of them.
+              opacity: dragArea.drag.active ? 0.85 : ((slot.isNew || slot.isAction) && !rowHover.hovered ? 0.65 : 1)
 
               HoverHandler { id: rowHover }
 
@@ -240,8 +250,8 @@ Item {
                   // Every note carries the same glyph, so it says nothing a
                   // title does not — kept for the column it holds, dimmed so
                   // the eye goes to the words.
-                  color: slot.isNew || slot.isAction ? root.accent
-                    : (slot.isTree ? Qt.lighter(root.accent, 1.4)
+                  color: slot.isNew || slot.isAction ? root.accentInk
+                    : (slot.isTree ? root.accentInk
                     : (row.current ? root.selectedText : Util.alpha(root.foreground, 0.4)))
                   font.family: Style.fontFamily
                   font.pixelSize: (slot.isNew || slot.isAction) ? Style.font.iconSmall : Style.font.icon
@@ -255,7 +265,7 @@ Item {
                     - (closeButton.visible ? closeButton.width + Style.spacing.xs : 0)
                   text: slot.isNew ? "New note…"
                     : (slot.isAction || slot.isTree ? slot.modelData.title : root.titleFor(slot.modelData.title, slot.modelData.preview))
-                  color: row.current ? root.selectedText : (slot.isTree ? Qt.lighter(root.accent, 1.4) : root.foreground)
+                  color: row.current ? root.selectedText : (slot.isTree ? root.accentInk : root.foreground)
                   font.bold: slot.isTree && (slot.modelData.level || 0) === 0
                   font.family: root.fontFamily
                   // Actions ("New note…", sign in/out, settings) read as chrome,
@@ -374,7 +384,7 @@ Item {
           anchors.centerIn: parent
           visible: listView.count === 0
           text: root.filtering ? "No note matches" : "No notebooks yet"
-          color: Qt.darker(root.foreground, 1.4)
+          color: Util.alpha(root.foreground, 0.65)
           font.family: root.fontFamily
           font.pixelSize: Style.font.body
         }
@@ -404,7 +414,7 @@ Item {
             anchors.verticalCenter: parent.verticalCenter
             width: Style.font.icon + Style.space(2)
             text: newNotebookRow.editing ? "󰉋" : "+"
-            color: root.accent
+            color: root.accentInk
             font.family: Style.fontFamily
             font.pixelSize: Style.font.iconSmall
             horizontalAlignment: Text.AlignHCenter

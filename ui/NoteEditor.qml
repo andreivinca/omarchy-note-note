@@ -598,7 +598,7 @@ Item {
           visible: !root.showingNotice && !root.hasNote
           width: parent.width
           text: "Pick a note on the left, or press ctrl+n for a new one."
-          color: Qt.darker(root.foreground, 1.45)
+          color: Util.alpha(root.foreground, 0.65)
           font.family: root.fontFamily
           font.pixelSize: Style.font.bodySmall
           elide: Text.ElideRight
@@ -732,7 +732,9 @@ Item {
           textFormat: Text.PlainText
           visible: root.noticeCode.length > 0
           text: root.noticeCode
-          color: root.accent
+          // Accent as ink — anchored to the foreground so it reads on the
+          // theme's background either way round (see NoteList.accentInk).
+          color: Qt.tint(root.foreground, Util.alpha(root.accent, 0.6))
           font.family: root.fontFamily
           font.pixelSize: Style.font.displayLarge
           font.letterSpacing: 4

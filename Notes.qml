@@ -786,7 +786,10 @@ Item {
           anchors.rightMargin: Style.spacing.md
           anchors.verticalCenter: parent.verticalCenter
           text: root.statusText.length > 0 ? root.statusText : "ctrl+k search · ctrl+↑↓ note · ctrl+tab notebook · ctrl+n new · esc back"
-          color: root.statusText.length > 0 ? root.accent : Qt.darker(root.foreground, 1.55)
+          // Muting is fading toward the background — alpha does that on any
+          // theme, where Qt.darker only mutes the themes whose text is light.
+          color: root.statusText.length > 0 ? Qt.tint(root.foreground, Util.alpha(root.accent, 0.6))
+                                            : Util.alpha(root.foreground, 0.6)
           font.family: Style.font.menuFamily
           font.pixelSize: Style.font.caption
           elide: Text.ElideRight
