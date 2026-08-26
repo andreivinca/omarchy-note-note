@@ -33,6 +33,9 @@ Item {
 
   property bool opened: false
   property bool detached: false
+  // The sidebar width the user dragged the splitter to, in pixels, kept
+  // across runs. 0 means they never did, and the default width stands.
+  property real listWidth: 0
   property bool deleteConfirmOpen: false
   property string filterText: ""
   property string statusText: ""
@@ -685,13 +688,18 @@ Item {
     for (var i = 0; i < root.providers.length; i++) ps[root.providers[i].id] = root.providers[i].saveState()
     // version 3: the open tab, where 2 kept two lists of folded sections. An
     // older file simply has no `active`, and the first local notebook opens.
-    stateFile.setText(JSON.stringify({ version: 3, detached: root.detached, active: root.activeSection, providers: ps }, null, 2) + "\n")
+    var st = { version: 3, detached: root.detached, active: root.activeSection, providers: ps }
+    if (root.listWidth > 0) st.listWidth = Math.round(root.listWidth)
+    stateFile.setText(JSON.stringify(st, null, 2) + "\n")
   }
   function loadState(raw) {
     try {
       var s = JSON.parse(raw || "{}")
       if (s.detached === true) root.detached = true
       if (typeof s.active === "string") root.activeSection = s.active
+      // The stored width is trusted only as a number; the list's own binding
+      // clamps it against whatever window it wakes up in.
+      if (typeof s.listWidth === "number" && isFinite(s.listWidth) && s.listWidth > 0) root.listWidth = s.listWidth
       if (s.providers) root.providerState = s.providers
     } catch (e) { /* a corrupt state file costs nothing */ }
     scanProviders.running = true
@@ -964,13 +972,20 @@ Item {
 
       // ---- body
       Row {
+        id: body
         width: parent.width
         height: parent.height - y
-        spacing: Style.spacing.lg
+        spacing: 0
 
         NoteList {
           id: list
-          width: Style.space(215) + list.railWidth
+          // The user's width when they have dragged the handle, the default
+          // otherwise — clamped either way, so neither the list nor the note
+          // can be squeezed out of use by a drag or a narrow window.
+          width: {
+            var w = root.listWidth > 0 ? root.listWidth : Style.space(215) + list.railWidth
+            return Math.max(list.railWidth + Style.space(140), Math.min(w, body.width - Style.space(320)))
+          }
           height: parent.height
           model: root.rows
           currentPath: root.currentPath
@@ -1009,9 +1024,44 @@ Item {
           }
         }
 
+        // The gap between list and note is also the handle that resizes them:
+        // drag it, and the sidebar follows the mouse; double-click, and the
+        // default width is back. The bar only shows itself under the cursor —
+        // the cursor's own change of shape is the invitation.
+        Item {
+          id: splitter
+          width: Style.spacing.lg
+          height: parent.height
+
+          Rectangle {
+            anchors.centerIn: parent
+            width: Style.space(3)
+            height: parent.height
+            radius: width / 2
+            color: Util.alpha(root.foreground, splitterArea.pressed ? 0.35 : 0.18)
+            visible: splitterArea.containsMouse || splitterArea.pressed
+          }
+
+          MouseArea {
+            id: splitterArea
+            anchors.fill: parent
+            hoverEnabled: true
+            cursorShape: Qt.SplitHCursor
+            acceptedButtons: Qt.LeftButton
+            // The area moves with the list edge it is dragging, so the mouse
+            // is mapped into the body each time rather than trusted locally.
+            onPositionChanged: function(mouse) {
+              if (!pressed) return
+              root.listWidth = splitterArea.mapToItem(body, mouse.x, 0).x - splitter.width / 2
+            }
+            onReleased: root.saveState()
+            onDoubleClicked: { root.listWidth = 0; root.saveState() }
+          }
+        }
+
         NoteEditor {
           id: editor
-          width: parent.width - list.width - Style.spacing.lg
+          width: parent.width - list.width - splitter.width
           height: parent.height
           markdown: markdownService
           clipboard: clipboardService

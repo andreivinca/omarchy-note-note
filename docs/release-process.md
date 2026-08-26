@@ -79,3 +79,4 @@ Template:
 | 2.9.1 | tab colour polish (richer pastels, deeper wash, labels in the tab's ink); preview refreshed with the email address blurred |
 | 2.9.2 | readable on a light theme: tab colours are mid-tones under a heavier wash, and every muted or accented word is derived from the theme's own text colour instead of being lightened or darkened one way |
 | 2.10.0 | the header names the open tab — a provider's `name` and `logo` stand where "Note Note" always sat, in the tab's own ink; the command bar wears its shortcuts as keycaps and search moved to the centre with its own `ctrl+k` keycap |
+| 2.11.0 | the sidebar is yours to size: the gap before the note is a drag handle, double-click resets, the width is kept across runs; links wear the theme's own blue; OneNote pages sit in the order their owner arranged them |
