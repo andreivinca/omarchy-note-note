@@ -98,13 +98,23 @@ def cmd_onenote_list(cached, max_age=0):
     # Pages are listed per section: the account-wide /me/onenote/pages call
     # refuses accounts with many sections. Each call takes a couple of
     # seconds, so sections are fetched in parallel.
+    #
+    # `$orderby=order` is the page order the OneNote app shows — the one the
+    # user set by dragging page tabs — and the sidebar's job is to show a
+    # section the way its owner arranged it, not the way it was last touched.
+    # Graph sorts by `order` but does not return it: it is absent from the
+    # page resource in v1.0 and in beta, and asking for it in `$select` gives
+    # null. So the sequence Graph answers in *is* the order, and it is kept
+    # from here to the sidebar — `pages` stays a list, never a set, and the
+    # provider walks it as given (Provider.qml, rebuild). Nothing here can
+    # re-sort it, because there is no key left to sort by.
     from concurrent.futures import ThreadPoolExecutor
 
     token = access_token()  # refresh once, not from eight threads at a time
 
     def section_pages(sct):
         found = []
-        url = ("/me/onenote/sections/%s/pages?$select=id,title,lastModifiedDateTime&$orderby=lastModifiedDateTime%%20desc&$top=100"
+        url = ("/me/onenote/sections/%s/pages?$select=id,title,lastModifiedDateTime&$orderby=order&$top=100"
                % urllib.parse.quote(sct["id"], safe=""))
         while url and len(found) < MAX_PAGES:
             status, res = http("GET", url if url.startswith("http") else GRAPH + url, headers={
@@ -327,7 +337,7 @@ def cmd_onenote_pages(section_ids):
     """Pages of a few sections (one request each) — for cheap refreshes."""
     found = []
     for sid in section_ids[:10]:
-        url = ("/me/onenote/sections/%s/pages?$select=id,title,lastModifiedDateTime&$orderby=lastModifiedDateTime%%20desc&$top=100"
+        url = ("/me/onenote/sections/%s/pages?$select=id,title,lastModifiedDateTime&$orderby=order&$top=100"
                % urllib.parse.quote(sid, safe=""))
         while url and len(found) < MAX_PAGES:
             status, res = graph("GET", url, max_bytes=MAX_LIST_BODY)
@@ -672,7 +682,14 @@ def cmd_onenote_create(section_id, path):
     page = {"id": pg["id"], "title": pg.get("title", "") or "", "sectionId": section_id,
             "modified": pg.get("lastModifiedDateTime", "")}
     c = load_json(ONENOTE_CACHE, {"sections": [], "pages": []})
-    c["pages"] = [page] + [p for p in c.get("pages", []) if p["id"] != page["id"]]
+    # A new page goes to the end of its section, which is where OneNote itself
+    # puts one and so where the next listing will show it. (It used to go to
+    # the front, which was right while the list was newest-first.)
+    kept = [p for p in c.get("pages", []) if p["id"] != page["id"]]
+    last = max([i for i, p in enumerate(kept) if p.get("sectionId") == section_id],
+               default=len(kept) - 1)
+    kept.insert(last + 1, page)
+    c["pages"] = kept
     save_private(ONENOTE_CACHE, c)
     out({"ok": True, "page": page})
 
