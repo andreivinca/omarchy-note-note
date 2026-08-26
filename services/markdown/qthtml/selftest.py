@@ -54,6 +54,7 @@ CASES = {
     "link in a list": "- see [docs](https://example.com)\n- plain\n",
     "formatting in a cell": "| a | b |\n|---|---|\n| **bold** | ==hi== |\n",
     "formatting in an item": "- **bold** item\n- [x] ==done== well\n",
+    "highlight in an unchecked item": "- [ ] Build an ==Omarchy== plugin\n- [ ] Ship it\n",
     "nested emphasis": "**bold with *italic* inside**\n",
     "two indents": "plain\n\n\u00a0\u00a0\u00a0\u00a0one\n\n\u00a0\u00a0\u00a0\u00a0\u00a0\u00a0\u00a0\u00a0two\n",
     "arithmetic": "2 * 3 = 6 and 4 _ 5\n",

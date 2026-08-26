@@ -140,25 +140,45 @@ Item {
     if (from === to) return
     var fragment = inlineFragment(area.getFormattedText(from, to))
     var lit = fragment.indexOf("background-color") >= 0
+    // The restyled copy goes in after the selection and the original comes
+    // out second: inserted at a block's start instead, Qt hands the block
+    // the fragment's own paragraph format, and a list item stops being one.
+    area.insert(to, lit ? unhighlight(fragment)
+                        : '<span style="background-color:' + root.highlightColour
+                          + "; color:" + root.highlightInk + ';">' + fragment + "</span>")
     area.remove(from, to)
-    area.insert(from, lit ? unhighlight(fragment)
-                          : '<span style="background-color:' + root.highlightColour
-                            + "; color:" + root.highlightInk + ';">' + fragment + "</span>")
-    area.select(from, area.cursorPosition)
+    area.select(from, to)
     root.edited()
   }
 
-  // Qt serialises any range as a whole document whose body holds one
-  // paragraph — the block the selection sits in. Inside that paragraph is the
-  // inline HTML we actually selected.
+  // Qt serialises any range as a whole document whose body holds the block
+  // the selection sits in — a paragraph, a heading, a list wrapping its item,
+  // a table wrapping its cell. Peel every wrapper that encloses the whole
+  // fragment, down to the inline HTML actually selected: a block tag put back
+  // mid-line starts a new block, which is how a highlight used to split a
+  // checkbox line. A wrapper whose closing tag appears again inside is a
+  // selection spanning blocks, and stays.
   function inlineFragment(html) {
-    var body = (html.split("<body>")[1] || "").split("</body>")[0]
-    return body.replace(/<!--(Start|End)Fragment-->/g, "").trim()
-               .replace(/^<p[^>]*>/, "").replace(/<\/p>\s*$/, "")
+    var f = ((html.split("<body>")[1] || "").split("</body>")[0])
+              .replace(/<!--(Start|End)Fragment-->/g, "").trim()
+    // A fragment that starts with a list gets a phantom empty paragraph in
+    // front from Qt's serialiser; it is not part of the selection.
+    f = f.replace(/^<p[^>]*-qt-paragraph-type:empty[^>]*>\s*<br\s*\/?>\s*<\/p>\s*(?=<[uo]l\b)/, "")
+    var wrap = /^<(p|li|ul|ol|h[1-6]|blockquote|pre|table|tbody|tr|td|th)(\s[^>]*)?>([\s\S]*)<\/\1>$/
+    for (var m = wrap.exec(f); m; m = wrap.exec(f)) {
+      if (m[3].indexOf("</" + m[1] + ">") >= 0) break
+      f = m[3].trim()
+    }
+    return f
   }
 
+  // The marker colour goes, and so does the ink that came with it — left
+  // behind, it kept reading as near-black text on a dark theme. Only the
+  // highlight's own ink is taken: a link keeps its blue.
   function unhighlight(fragment) {
+    var ink = String(root.highlightInk).replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
     return fragment.replace(/background-color\s*:[^;"]*;?/g, "")
+                   .replace(new RegExp("color\\s*:\\s*" + ink + "\\s*;?", "gi"), "")
   }
   function focusEditor() { area.forceActiveFocus() }
 
