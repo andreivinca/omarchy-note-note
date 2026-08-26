@@ -10,7 +10,9 @@ Item {
   id: root
 
   readonly property string id: "local"
-  readonly property string name: "Notes"
+  // The header titles whichever provider's tab is open; the local notebooks
+  // are the app's own, so they go by the app's name.
+  readonly property string name: "Note Note"
   readonly property bool markdown: true
   readonly property bool hasTitle: true
   readonly property bool canCreate: true

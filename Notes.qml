@@ -37,6 +37,17 @@ Item {
   property string filterText: ""
   property string statusText: ""
 
+  // The header titles the provider whose tab is open — the provider's own
+  // `name`, its logo when it ships one, in the open tab's ink. Set in
+  // rebuildRows beside the tabs themselves, so the header and the rail
+  // cannot disagree about which tab that is. Before any provider has
+  // listed, the app's own name stands in.
+  property string headerName: "Note Note"
+  property url headerLogo: ""
+  property color headerBase: "transparent"
+  readonly property color headerInk: headerBase.a > 0
+    ? Qt.tint(foreground, Util.alpha(headerBase, TabColors.inkAlpha())) : foreground
+
   // Current note. `loadingNote` guards against editor change signals firing
   // a save while a note is being swapped in.
   property string currentPath: ""
@@ -323,6 +334,17 @@ Item {
     if (JSON.stringify(newTabs) !== JSON.stringify(root.tabs)) root.tabs = newTabs
     root.tabMatches = hits
     root.rows = out
+    // The header follows the open tab: its provider's name and logo, and the
+    // tab's own colour — read from newTabs, where decollide has just settled
+    // the colours the rail will wear.
+    var provId = active.split("/")[0], headerProv = null, headerTab = null
+    for (var pi = 0; pi < root.providers.length; pi++)
+      if (root.providers[pi].id === provId) { headerProv = root.providers[pi]; break }
+    for (var ti = 0; ti < newTabs.length; ti++)
+      if (newTabs[ti].key === active) { headerTab = newTabs[ti]; break }
+    root.headerName = headerProv ? headerProv.name : "Note Note"
+    root.headerLogo = headerProv ? (headerProv.logo || "") : ""
+    root.headerBase = headerTab ? TabColors.baseFor(headerTab.color || "", headerTab.name || "") : "transparent"
     if (keep > 0) Qt.callLater(function() { list.setScrollOffset(keep) })
     // First open: land on the most recent note of the tab that opened —
     // whichever provider's tab that is. A tab whose notes have not listed yet
@@ -708,31 +730,105 @@ Item {
         width: parent.width
         height: Math.max(searchField.height, titleText.implicitHeight)
 
-        Text {
-          id: titleText
-          textFormat: Text.PlainText
+        // The masthead is the open tab said large: the provider's mark, its
+        // name, in the tab's own ink — so the header always answers "whose
+        // notes am I looking at". Same reserved width whatever the name, so
+        // the search field does not slide when tabs change.
+        Row {
+          id: titleRow
           anchors.left: parent.left
           anchors.verticalCenter: parent.verticalCenter
           width: Style.space(150)
-          text: "Note Note"
-          color: root.foreground
-          font.family: Style.font.menuFamily
-          font.pixelSize: Style.font.title
+          spacing: Style.spacing.sm
+
+          Image {
+            id: titleLogo
+            visible: status === Image.Ready
+            source: root.headerLogo
+            anchors.verticalCenter: parent.verticalCenter
+            width: Style.font.title
+            height: Style.font.title
+            sourceSize.width: Style.font.title * 2
+            sourceSize.height: Style.font.title * 2
+            fillMode: Image.PreserveAspectFit
+            smooth: true
+          }
+
+          Text {
+            id: titleText
+            textFormat: Text.PlainText
+            anchors.verticalCenter: parent.verticalCenter
+            width: titleRow.width - (titleLogo.visible ? titleLogo.width + titleRow.spacing : 0)
+            text: root.headerName
+            color: root.headerInk
+            Behavior on color { ColorAnimation { duration: 150 } }
+            font.family: Style.font.menuFamily
+            font.pixelSize: Style.font.title
+            font.bold: true
+            elide: Text.ElideRight
+          }
         }
 
+        // The search sits in the middle of the band, the way a command bar
+        // does — pushed right only when a narrow window would run it into
+        // the masthead. It names its own shortcut: a keycap in the field
+        // where the clear button will stand once there is something to
+        // clear, so the right edge always says the one thing you can do.
         TextField {
           id: searchField
-          anchors.left: titleText.right
-          anchors.leftMargin: Style.spacing.md
-          width: Style.space(280)
+          x: Math.max(titleRow.width + Style.spacing.lg, (parent.width - width) / 2)
+          anchors.verticalCenter: parent.verticalCenter
+          width: Style.space(340)
           placeholderText: "Search notes…"
           foreground: root.foreground
           accent: root.accent
           font.family: Style.font.menuFamily
-          verticalPadding: Style.spacing.xxs
+          verticalPadding: Style.spacing.xs
           onTextEdited: root.setFilter(text)
           rightPadding: root.filterText.length > 0
-            ? clearSearchButton.width + Style.spacing.xs : horizontalPadding
+            ? clearSearchButton.width + Style.spacing.xs
+            : searchKeycap.width + Style.spacing.sm + Style.spacing.xs
+          leftPadding: searchGlyph.width + Style.spacing.sm + Style.spacing.xs
+
+          Rectangle {
+            id: searchKeycap
+            visible: root.filterText.length === 0
+            anchors.right: parent.right
+            anchors.rightMargin: Style.spacing.sm
+            anchors.verticalCenter: parent.verticalCenter
+            width: searchKeycapText.width + Style.spacing.sm * 2
+            height: searchKeycapText.height + Style.spacing.xxs * 2
+            // A square theme keeps its corners; a round one is capped where
+            // a keycap stops looking like a key.
+            radius: Math.min(Style.cornerRadius, height / 3)
+            color: Util.alpha(root.foreground, 0.06)
+            border.width: 1
+            border.color: Util.alpha(root.foreground, 0.22)
+
+            Text {
+              id: searchKeycapText
+              textFormat: Text.PlainText
+              anchors.centerIn: parent
+              text: "ctrl+k"
+              color: Util.alpha(root.foreground, 0.6)
+              font.family: Style.font.menuFamily
+              font.pixelSize: Style.font.caption
+            }
+          }
+
+          // The magnifier says what the field is for, and stays while you
+          // type — dimmed the standard way, a fade toward any background.
+          Text {
+            id: searchGlyph
+            textFormat: Text.PlainText
+            anchors.left: parent.left
+            anchors.leftMargin: Style.spacing.sm
+            anchors.verticalCenter: parent.verticalCenter
+            text: "󰍉"
+            color: Util.alpha(root.foreground, 0.55)
+            font.family: Style.fontFamily
+            font.pixelSize: Style.font.iconSmall
+          }
 
           Button {
             id: clearSearchButton
@@ -778,22 +874,82 @@ Item {
           onClicked: root.setDetached(!root.detached)
         }
 
-        Text {
-          textFormat: Text.PlainText
+        // The rest of the shortcuts, worn as keycaps rather than recited as a
+        // sentence — search is not among them, because the field carries its
+        // own. A status message borrows the whole slot while it shows, and a
+        // window too narrow for every chip clips them from the left: the
+        // rightmost ones survive, and they are the ones nearest the button
+        // they explain.
+        Item {
           anchors.left: searchField.right
           anchors.leftMargin: Style.spacing.lg
           anchors.right: shapeButton.left
           anchors.rightMargin: Style.spacing.md
-          anchors.verticalCenter: parent.verticalCenter
-          text: root.statusText.length > 0 ? root.statusText : "ctrl+k search · ctrl+↑↓ note · ctrl+tab notebook · ctrl+n new · esc back"
-          // Muting is fading toward the background — alpha does that on any
-          // theme, where Qt.darker only mutes the themes whose text is light.
-          color: root.statusText.length > 0 ? Qt.tint(root.foreground, Util.alpha(root.accent, 0.6))
-                                            : Util.alpha(root.foreground, 0.6)
-          font.family: Style.font.menuFamily
-          font.pixelSize: Style.font.caption
-          elide: Text.ElideRight
-          horizontalAlignment: Text.AlignRight
+          height: parent.height
+          clip: true
+
+          Row {
+            visible: root.statusText.length === 0
+            anchors.right: parent.right
+            anchors.verticalCenter: parent.verticalCenter
+            spacing: Style.spacing.lg
+
+            Repeater {
+              model: [{ keys: "ctrl+↑↓", what: "note" },
+                      { keys: "ctrl+tab", what: "notebook" },
+                      { keys: "ctrl+n", what: "new" },
+                      { keys: "esc", what: "back" }]
+
+              delegate: Row {
+                id: hintChip
+                required property var modelData
+                spacing: Style.spacing.xs
+
+                Rectangle {
+                  anchors.verticalCenter: parent.verticalCenter
+                  width: chipKeys.width + Style.spacing.sm * 2
+                  height: chipKeys.height + Style.spacing.xxs * 2
+                  radius: Math.min(Style.cornerRadius, height / 3)
+                  color: Util.alpha(root.foreground, 0.06)
+                  border.width: 1
+                  border.color: Util.alpha(root.foreground, 0.22)
+
+                  Text {
+                    id: chipKeys
+                    textFormat: Text.PlainText
+                    anchors.centerIn: parent
+                    text: hintChip.modelData.keys
+                    color: Util.alpha(root.foreground, 0.6)
+                    font.family: Style.font.menuFamily
+                    font.pixelSize: Style.font.caption
+                  }
+                }
+
+                Text {
+                  textFormat: Text.PlainText
+                  anchors.verticalCenter: parent.verticalCenter
+                  text: hintChip.modelData.what
+                  color: Util.alpha(root.foreground, 0.6)
+                  font.family: Style.font.menuFamily
+                  font.pixelSize: Style.font.caption
+                }
+              }
+            }
+          }
+
+          Text {
+            textFormat: Text.PlainText
+            visible: root.statusText.length > 0
+            anchors.left: parent.left
+            anchors.right: parent.right
+            anchors.verticalCenter: parent.verticalCenter
+            text: root.statusText
+            color: Qt.tint(root.foreground, Util.alpha(root.accent, 0.6))
+            font.family: Style.font.menuFamily
+            font.pixelSize: Style.font.caption
+            elide: Text.ElideRight
+            horizontalAlignment: Text.AlignRight
+          }
         }
       }
 

@@ -11,7 +11,7 @@ is enough). The host instantiates each with `host` and `services` set.
 | property            | type   | meaning |
 |---------------------|--------|---------|
 | `id`                | string | unique, lowercase; every note path starts with `id + ":"` |
-| `name`              | string | label used in status messages |
+| `name`              | string | the provider's display name: the header titles it (with `logo`) while one of its tabs is open, and status messages start with it |
 | `markdown`          | bool   | bodies are Markdown (rendered); false = plain text |
 | `hasTitle`          | bool   | notes have a separate editable title |
 | `canCreate`         | bool   | `create()` is supported |
@@ -21,7 +21,7 @@ is enough). The host instantiates each with `host` and `services` set.
 | `canImages`         | bool   | a pasted picture can be stored: the editor writes it into the note as `![](file:///…)` and `save()` must upload it. False (the default) makes ctrl+v say so rather than swallow the paste |
 | `tools`             | list   | optional: formatting-toolbar tool ids the backend can store — `bold italic underline strikeout highlight code h1 h2 h3 p ul ol todo indent outdent quote codeblock table rule link`; omitted = all (when `markdown`), `[]` = no toolbar |
 | `microsoftScopes`   | list   | Graph scopes the provider asks for when it creates its own Microsoft account |
-| `logo`              | url    | optional: a mark shown at the head of every one of this provider's tabs |
+| `logo`              | url    | optional: a mark shown at the head of every one of this provider's tabs, and beside the header title while one of them is open |
 | `sections`          | list   | `[{ key, name, rows, color?, count?, notes? }]` — one binder tab each; `count` overrides the tab's note count. `notes` (`[{ path, title, preview }]`) is every note the section holds, for search: give it when `rows` can hide notes (a folded tree); left out, the note rows are taken to be all of them |
 
 `name` is the tab's label, turned a quarter turn and elided if it is long, so
