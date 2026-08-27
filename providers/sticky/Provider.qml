@@ -55,8 +55,8 @@ Item {
   function rebuild() {
     var rows = []
     if (!ms || !ms.configured) rows.push({ kind: "action", path: "unavailable", title: "Not available in this build", icon: "󰒓" })
-    else if (!ms.signedIn) rows.push({ kind: "action", path: "login", title: ms.loggingIn ? "Signing in…" : "Sign in to Microsoft…", icon: "󰊻" })
-    else if (!ms.hasScope("Mail.ReadWrite")) rows.push({ kind: "action", path: "relogin", title: ms.loggingIn ? "Signing in…" : "Sign in again to enable Sticky Notes…", icon: "󰊻" })
+    else if (!ms.signedIn) rows.push({ kind: "action", path: "login", title: ms.loggingIn ? "Cancel signing in…" : "Sign in to Microsoft…", icon: ms.loggingIn ? "󰅖" : "󰊻" })
+    else if (!ms.hasScope("Mail.ReadWrite")) rows.push({ kind: "action", path: "relogin", title: ms.loggingIn ? "Cancel signing in…" : "Sign in again to enable Sticky Notes…", icon: ms.loggingIn ? "󰅖" : "󰊻" })
     else {
       for (var i = 0; i < root.notes.length; i++)
         rows.push({ kind: "note", path: pathOf(root.notes[i].id), title: "", preview: previewOf(root.notes[i].body), fixed: true, version: root.notes[i].modified || "" })
@@ -77,8 +77,8 @@ Item {
 
   function action(id) {
     if (!ms) return
-    if (id === "login") ms.login()
-    else if (id === "relogin") ms.relogin()
+    if (id === "login") { if (ms.loggingIn) { ms.cancelLogin(); root.noticeCleared() } else ms.login() }
+    else if (id === "relogin") { if (ms.loggingIn) { ms.cancelLogin(); root.noticeCleared() } else ms.relogin() }
     else if (id === "logout") root.noticeRequested("Sign out of Sticky Notes?",
       "You'll need to sign in again" + (ms.account ? " as " + ms.account : "") + " to keep using Sticky Notes.", "",
       [{ label: "Sign out", action: function() { root.noticeCleared(); ms.logout() } },

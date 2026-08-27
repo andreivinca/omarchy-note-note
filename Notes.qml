@@ -88,7 +88,10 @@ Item {
     root.opened = true
     root.deleteConfirmOpen = false
     root.settingsOpen = false
-    editor.clearNotice()
+    // Not while a sign-in is under way: entering its device code means
+    // switching to a browser, which can hide and reopen this overlay — that
+    // must not wipe the very code the user is about to type in.
+    if (!root.accounts.some(function(a) { return a.loggingIn })) editor.clearNotice()
     for (var a = 0; a < root.accounts.length; a++) root.accounts[a].refresh()
     for (var i = 0; i < root.providers.length; i++) { root.providers[i].refresh(); if (typeof root.providers[i].watch === "function") root.providers[i].watch(true) }
     Qt.callLater(function() { editor.focusEditor() })

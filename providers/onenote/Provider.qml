@@ -70,8 +70,8 @@ Item {
   function rebuild() {
     var rows = []
     if (!ms || !ms.configured) rows.push({ kind: "action", path: "unavailable", title: "Not available in this build", icon: "󰒓" })
-    else if (!ms.signedIn) rows.push({ kind: "action", path: "login", title: ms.loggingIn ? "Signing in…" : "Sign in to Microsoft…", icon: "󰊻" })
-    else if (!ms.hasScope("Notes.ReadWrite")) rows.push({ kind: "action", path: "relogin", title: ms.loggingIn ? "Signing in…" : "Sign in again to enable OneNote…", icon: "󰊻" })
+    else if (!ms.signedIn) rows.push({ kind: "action", path: "login", title: ms.loggingIn ? "Cancel signing in…" : "Sign in to Microsoft…", icon: ms.loggingIn ? "󰅖" : "󰊻" })
+    else if (!ms.hasScope("Notes.ReadWrite")) rows.push({ kind: "action", path: "relogin", title: ms.loggingIn ? "Cancel signing in…" : "Sign in again to enable OneNote…", icon: ms.loggingIn ? "󰅖" : "󰊻" })
     else {
       var books = [], seen = {}
       for (var i = 0; i < root.onSections.length; i++) {
@@ -98,7 +98,9 @@ Item {
           rows.push({ kind: "new", path: "section:" + sec.id, level: 2 })
         }
       }
-      if (books.length === 0) rows.push({ kind: "action", path: "refresh", title: "No notebooks found — refresh", icon: "󰑐" })
+      if (books.length === 0) rows.push(listProc.running
+        ? { kind: "action", path: "refresh", title: "Loading notebooks…", icon: "󰑐" }
+        : { kind: "action", path: "refresh", title: "No notebooks found — refresh", icon: "󰑐" })
       rows.push({ kind: "action", path: "logout", title: "Sign out" + (ms.account ? " (" + ms.account + ")" : ""), icon: "󰍃" })
     }
     // `notes` is every page, fold state ignored: rows only carry the pages of
@@ -139,8 +141,8 @@ Item {
 
   function action(id) {
     if (!ms) return
-    if (id === "login") ms.login()
-    else if (id === "relogin") ms.relogin()
+    if (id === "login") { if (ms.loggingIn) { ms.cancelLogin(); root.noticeCleared() } else ms.login() }
+    else if (id === "relogin") { if (ms.loggingIn) { ms.cancelLogin(); root.noticeCleared() } else ms.relogin() }
     else if (id === "logout") root.noticeRequested("Sign out of OneNote?",
       "You'll need to sign in again" + (ms.account ? " as " + ms.account : "") + " to keep using OneNote.", "",
       [{ label: "Sign out", action: function() { root.noticeCleared(); ms.logout() } },
@@ -220,7 +222,6 @@ Item {
           spacing: Style.spacing.sm
           Button {
             text: root.newSectionBusy ? "Creating…" : "Create"
-            iconText: "+"
             bordered: true
             enabled: !root.newSectionBusy
             foreground: Color.menu.text

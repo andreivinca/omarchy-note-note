@@ -93,6 +93,7 @@ Item {
   function clearView() { customView = null; customViewProps = ({}) }
   readonly property bool viewHasFocus: customLoader.item ? customLoader.item.activeFocus : false
   function showNotice(title, text, code, actions) {
+    clearView()
     noticeTitle = title; noticeText = text; noticeCode = code || ""; noticeActions = actions || []
   }
   function clearNotice() { noticeTitle = ""; noticeText = ""; noticeCode = ""; noticeActions = []; clearView() }

@@ -42,6 +42,15 @@ Item {
     loginProc.running = true
   }
 
+  // Abandon an in-progress sign-in — the device code was lost (switching to
+  // the browser to enter it can hide and reopen this app, which clears the
+  // notice that showed it) or the user simply changed their mind.
+  function cancelLogin() {
+    if (!root.loggingIn) return
+    root.reloginPending = false
+    loginProc.running = false
+  }
+
   // Sign out, then sign in again — for a token that predates a provider's scope.
   property bool reloginPending: false
   function relogin() { root.reloginPending = true; logout() }
