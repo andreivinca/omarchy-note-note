@@ -97,8 +97,7 @@ Item {
   // note's whole body (a sticky note is small), so nothing is fetched. The
   // host matches the first line itself (the row's preview); this adds the
   // lines below it.
-  function search(query, content, cb) {
-    if (!content) { cb({ paths: [] }); return }
+  function search(query, cb) {
     var q = query.toLowerCase(), paths = []
     for (var i = 0; i < root.notes.length; i++)
       if ((root.notes[i].body || "").toLowerCase().indexOf(q) >= 0) paths.push(pathOf(root.notes[i].id))

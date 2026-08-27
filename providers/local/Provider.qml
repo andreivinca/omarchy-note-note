@@ -119,11 +119,11 @@ Item {
   // arrives while one runs kills it, and the exit starts the newer one.
   property var searchCb: null
   property string searchPending: ""
-  function search(query, content, cb) {
-    // `content` is the host's say on whether bodies are searched at all;
-    // everything this function adds over the host's own title matching is
-    // body matching, so "no" is an empty answer.
-    if (!content) { cb({ paths: [] }); return }
+  function search(query, cb) {
+    // A newer ask supersedes the one still in flight, but its callback
+    // still gets an answer — empty, which best-effort allows — so "call cb
+    // exactly once" holds no matter what the host does between asks.
+    if (root.searchCb) root.searchCb({ paths: [] })
     root.searchCb = cb
     root.searchPending = query
     if (searchProc.running) { searchProc.running = false; return }

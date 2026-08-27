@@ -142,13 +142,14 @@ Item {
   // Providers get their own Microsoft sign-in (own token, own scopes) from
   // the shared service code: services.microsoft.create(providerId, scopes).
   property var accounts: []
+  function copyText(s) { Quickshell.execDetached(["sh", "-c", 'printf %s "$1" | wl-copy', "sh", s]) }
   function createMicrosoftAccount(owner, scopes) {
     var acc = accountComponent.createObject(root, { owner: owner, scopes: ["offline_access", "User.Read"].concat(scopes || []).join(" ") })
     acc.codeReceived.connect(function(code, uri) {
       editor.showNotice("Sign in to Microsoft for " + owner,
         "Open " + uri + " in a browser, enter this code, and sign in with your Microsoft account. This screen updates by itself once you are done.", code,
-        [{ label: "Copy code", icon: "󰆏", action: function() { Quickshell.execDetached(["sh", "-c", 'printf %s "$1" | wl-copy', "sh", code]) } },
-         { label: "Copy link", icon: "󰌹", action: function() { Quickshell.execDetached(["sh", "-c", 'printf %s "$1" | wl-copy', "sh", uri]) } },
+        [{ label: "Copy code", icon: "󰆏", action: function() { root.copyText(code) } },
+         { label: "Copy link", icon: "󰌹", action: function() { root.copyText(uri) } },
          { label: "Open sign-in page", icon: "󰖟", action: function() { Quickshell.execDetached(["xdg-open", uri]) } }])
     })
     acc.loginSucceeded.connect(function() { editor.showNotice("Signed in", "Fetching your notes…", "", []) })
@@ -540,8 +541,9 @@ Item {
   // searchBusy recompute.
   property var searchWaiting: ({})
   property int searchSeq: 0
-  // Whether providers should search note bodies at all. Every call passes it
-  // down, so the decision sits in one place; true until a setting owns it.
+  // Whether note bodies are searched at all. When false the providers are
+  // simply never asked — the decision is the host's alone, made by calling
+  // or not calling. True until a setting owns it.
   readonly property bool searchContent: true
   // Is a content answer still owed? True from the keystroke on: the debounce
   // window counts — the ask is coming, just not sent yet — and then each
@@ -555,7 +557,7 @@ Item {
     // One character is not a content query: title matching already answers
     // it, and a body holding some letter is every body there is.
     var q = root.filterText
-    if (q.length < 2) return
+    if (q.length < 2 || !root.searchContent) return
     root.searchSeq++
     // Everyone about to be asked is owed from before the first ask goes out:
     // a provider that answers within its own call (sticky) then clears its
@@ -568,7 +570,7 @@ Item {
   }
   function askProvider(p, q, seq) {
     if (typeof p.search !== "function") return
-    p.search(q, root.searchContent, function(r) {
+    p.search(q, function(r) {
       if (seq !== root.searchSeq || !root.filterText) return
       var waiting = {}
       for (var w in root.searchWaiting) if (w !== p.id) waiting[w] = root.searchWaiting[w]

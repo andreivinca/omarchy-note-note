@@ -21,6 +21,7 @@ import sys
 import time
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "lib"))
+from notewalk import notebook_keys  # noqa: E402
 from readfile import read_capped  # noqa: E402
 
 HEAD_BYTES = 4096          # of a note: the front matter and the first content line
@@ -72,15 +73,7 @@ def main():
     for name in lines_of(os.path.join(root, ".notebooks")):
         emit("B", name)
 
-    keys = [""]
-    try:
-        with os.scandir(root) as it:
-            keys += sorted(e.name for e in it
-                           if not e.name.startswith(".") and e.is_dir(follow_symlinks=False))
-    except OSError:
-        return
-
-    for key in keys:
+    for key in notebook_keys(root):
         d = os.path.join(root, key) if key else root
         emit("D", key)
         for name in lines_of(os.path.join(d, ".order")):

@@ -325,6 +325,9 @@ Item {
             accent: Color.accent
             onClicked: root.viewCleared()
           }
+          // Confirmed inline, unlike the sign-out confirms elsewhere: this
+          // button lives inside the setup view, and a notice would replace
+          // the view — half-pasted token and all.
           Button {
             visible: root.configured && !view.confirmingRemove
             text: "Remove integration"
