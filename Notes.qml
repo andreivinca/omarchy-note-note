@@ -30,6 +30,11 @@ Item {
   readonly property string pluginId: (root.manifest && root.manifest.id) || "io.github.andreivinca.note-note"
   readonly property string externalProvidersDir: Quickshell.env("HOME") + "/.config/omarchy/note-note/providers"
   readonly property string statePath: Quickshell.env("HOME") + "/.local/state/omarchy/note-note.json"
+  // Note-note's own settings — deliberately its own directory, not the
+  // omarchy/note-note.json above (that one stays the Microsoft clientId
+  // override). A raw JSON file the settings page reads and writes verbatim.
+  readonly property string configDir: Quickshell.env("HOME") + "/.config/notenote"
+  readonly property string configPath: root.configDir + "/config.json"
 
   property bool opened: false
   property bool detached: false
@@ -37,6 +42,7 @@ Item {
   // across runs. 0 means they never did, and the default width stands.
   property real listWidth: 0
   property bool deleteConfirmOpen: false
+  property bool settingsOpen: false
   property string filterText: ""
   property string statusText: ""
 
@@ -81,6 +87,7 @@ Item {
   function open(payloadJson) {
     root.opened = true
     root.deleteConfirmOpen = false
+    root.settingsOpen = false
     editor.clearNotice()
     for (var a = 0; a < root.accounts.length; a++) root.accounts[a].refresh()
     for (var i = 0; i < root.providers.length; i++) { root.providers[i].refresh(); if (typeof root.providers[i].watch === "function") root.providers[i].watch(true) }
@@ -171,6 +178,10 @@ Item {
   property var providers: []
   property var providerState: ({})
   property bool providersLoaded: false
+  // id -> Provider.qml url, built-ins and externals alike, populated once by
+  // loadProviders() regardless of enabled state — so re-enabling a provider
+  // later never needs a re-scan.
+  property var providerUrls: ({})
 
   function providerOf(path) {
     if (!path) return null
@@ -193,10 +204,12 @@ Item {
   }
   function canCreateNotebook() { return notebookMaker() !== null }
 
-  function addProvider(url) {
+  function addProvider(url, extraProps) {
     var comp = Qt.createComponent(url)
     if (comp.status === Component.Error) { console.warn("note-note: provider failed:", url, comp.errorString()); return null }
-    var p = comp.createObject(root, { host: root, services: root.services })
+    var props = { host: root, services: root.services }
+    if (extraProps) for (var k in extraProps) props[k] = extraProps[k]
+    var p = comp.createObject(root, props)
     if (!p || !p.id) { console.warn("note-note: provider has no id:", url); return null }
     p.updated.connect(function() { root.rebuildRows() })
     p.statusRequested.connect(function(t) { root.showStatus(t) })
@@ -213,13 +226,45 @@ Item {
     return p
   }
 
+  readonly property var builtinProviders: [
+    { id: "local", url: Qt.resolvedUrl("providers/local/Provider.qml") },
+    { id: "sticky", url: Qt.resolvedUrl("providers/sticky/Provider.qml") },
+    { id: "onenote", url: Qt.resolvedUrl("providers/onenote/Provider.qml") },
+    { id: "notion", url: Qt.resolvedUrl("providers/notion/Provider.qml") }
+  ]
+
+  // Every provider's id equals its directory's basename (built-in or
+  // external alike), so which ids exist — and their urls — is known before
+  // any of them is instantiated. A disabled provider is simply never
+  // created, not created-then-destroyed.
+  // Tabs follow root.providers' order (eachSection walks it start to end).
+  // An id named in config.providers keeps that key's position — JSON.parse
+  // preserves the order string keys were written in — so reordering the
+  // config reorders the tabs; an id absent from config.providers (enabled by
+  // default, order never asked for) just keeps its natural discovery order,
+  // appended after every id the user did name.
+  function orderProviderIds(ids, cfg) {
+    var known = (cfg && cfg.providers) || {}, order = Object.keys(known), rank = {}
+    for (var i = 0; i < order.length; i++) rank[order[i]] = i
+    var ranked = [], rest = []
+    for (var j = 0; j < ids.length; j++) (rank.hasOwnProperty(ids[j]) ? ranked : rest).push(ids[j])
+    ranked.sort(function(a, b) { return rank[a] - rank[b] })
+    return ranked.concat(rest)
+  }
+
   function loadProviders(externalDirs) {
-    var urls = [Qt.resolvedUrl("providers/local/Provider.qml"),
-                Qt.resolvedUrl("providers/sticky/Provider.qml"),
-                Qt.resolvedUrl("providers/onenote/Provider.qml"),
-                Qt.resolvedUrl("providers/notion/Provider.qml")]
-    for (var i = 0; i < externalDirs.length; i++) urls.push("file://" + externalDirs[i] + "/Provider.qml")
-    for (var u = 0; u < urls.length; u++) addProvider(urls[u])
+    var entries = root.builtinProviders.slice()
+    for (var i = 0; i < externalDirs.length; i++) {
+      var dir = externalDirs[i]
+      entries.push({ id: dir.substring(dir.lastIndexOf("/") + 1), url: "file://" + dir + "/Provider.qml" })
+    }
+    var urls = {}
+    for (var e = 0; e < entries.length; e++) urls[entries[e].id] = entries[e].url
+    root.providerUrls = urls
+    var ids = root.orderProviderIds(entries.map(function(x) { return x.id }), root.config)
+    for (var u = 0; u < ids.length; u++)
+      if (root.providerEnabledIn(root.config, ids[u]))
+        root.addProvider(root.providerUrls[ids[u]], ids[u] === "local" ? { notesDir: root.localNotesDir() } : null)
     root.providersLoaded = true
     if (root.opened) root.open("{}")
   }
@@ -227,7 +272,178 @@ Item {
   Process {
     id: scanProviders
     command: ["sh", "-c", 'for d in "$1"/*/; do [ -f "$d/Provider.qml" ] && printf "%s\\n" "${d%/}"; done; true', "sh", root.externalProvidersDir]
-    stdout: StdioCollector { onStreamFinished: root.loadProviders(this.text.split("\n").filter(function(l) { return l.length > 0 })) }
+    stdout: StdioCollector {
+      onStreamFinished: {
+        root.pendingExternalDirs = this.text.split("\n").filter(function(l) { return l.length > 0 })
+        root.maybeLoadProviders()
+      }
+    }
+  }
+
+  // ── settings (~/.config/notenote/config.json) ────────────────────────
+  // Runs alongside the state read, not chained after it — a different
+  // concern, a different directory. loadProviders() must not run until both
+  // this and the external-provider scan have landed, or a disabled provider
+  // would flash on screen for a moment before disappearing.
+  property var config: root.defaultConfig()
+  property bool configReady: false
+  property var pendingExternalDirs: null   // null = scan not finished yet
+
+  function maybeLoadProviders() {
+    if (root.pendingExternalDirs === null || !root.configReady) return
+    root.loadProviders(root.pendingExternalDirs)
+  }
+
+  function defaultConfig() {
+    return {
+      providers: {
+        local: { enabled: true, notesDir: Quickshell.env("NOTE_NOTE_DIR") || (Quickshell.env("HOME") + "/Notes") },
+        sticky: { enabled: true },
+        onenote: { enabled: true },
+        notion: { enabled: true }
+      }
+    }
+  }
+  // Fills in anything the default config has that this one doesn't — a whole
+  // provider missing (older file, or one a user trimmed by hand) or just one
+  // key within it (an old file with `enabled` but no `notesDir` yet, say) —
+  // so nothing here ever needs a migration; unknown keys, top-level or
+  // per-provider, pass through untouched.
+  function mergeConfigDefaults(parsed) {
+    var d = root.defaultConfig(), out = {}
+    for (var k in parsed) out[k] = parsed[k]
+    var mergedProviders = {}
+    var src = (parsed && typeof parsed.providers === "object" && parsed.providers) || {}
+    for (var id in src) mergedProviders[id] = src[id]
+    for (var did in d.providers) {
+      var entry = mergedProviders[did] || {}, filled = {}
+      for (var ek in entry) filled[ek] = entry[ek]
+      for (var dk in d.providers[did]) if (!(dk in filled)) filled[dk] = d.providers[did][dk]
+      mergedProviders[did] = filled
+    }
+    out.providers = mergedProviders
+    return out
+  }
+  // "~" and "~/…" expand against $HOME — this value reaches processes as a
+  // literal argv entry, never through a shell, so nothing else would expand it.
+  function expandHome(p) { return (p && p.charAt(0) === "~") ? Quickshell.env("HOME") + p.substring(1) : p }
+  function localNotesDir() {
+    var p = root.config.providers && root.config.providers.local
+    return root.expandHome(p && p.notesDir) || (Quickshell.env("NOTE_NOTE_DIR") || (Quickshell.env("HOME") + "/Notes"))
+  }
+  function providerEnabledIn(cfg, id) {
+    var p = cfg && cfg.providers, e = p && p[id]
+    return !(e && e.enabled === false)   // absent or malformed => enabled
+  }
+  function loadConfig(raw) {
+    var trimmed = (raw || "").replace(/^\s+|\s+$/g, "")
+    if (trimmed.length === 0) {
+      // readfile.py prints "" for both "missing" and "genuinely empty" —
+      // both mean first run: write the defaults now, so the file is
+      // self-documenting (every known setting, with its default) from the
+      // moment it exists.
+      root.config = root.defaultConfig()
+      root.writeConfig(root.config)
+    } else {
+      try {
+        root.config = root.mergeConfigDefaults(JSON.parse(trimmed))
+      } catch (e) {
+        // Corrupt, not missing — maybe mid hand-edit elsewhere. Run this
+        // session on defaults, but never overwrite what's on disk except
+        // through an explicit Save: healing on read would be a surprise
+        // write the user never asked for, and could clobber real work.
+        console.warn("note-note: config file is invalid JSON, using defaults for this session:", e.message)
+        root.config = root.defaultConfig()
+      }
+    }
+    root.configReady = true
+    root.maybeLoadProviders()
+  }
+  // ~/.config/notenote/ is this plugin's own, brand-new directory — unlike
+  // ~/.local/state/omarchy/ it won't exist on a fresh install, and FileView
+  // does not create parents — so every write mkdir -p's first, the same
+  // shape as providers/local/Provider.qml's mkdirProc before a new notebook.
+  property string pendingConfigWrite: ""
+  function writeConfig(cfg) {
+    root.pendingConfigWrite = JSON.stringify(cfg, null, 2) + "\n"
+    configDirProc.command = ["mkdir", "-p", "--", root.configDir]
+    configDirProc.running = true
+  }
+  Process {
+    id: configDirProc
+    onExited: { configFile.setText(root.pendingConfigWrite); root.pendingConfigWrite = "" }
+  }
+  FileView { id: configFile; path: root.configPath; atomicWrites: true; printErrors: false }
+
+  readonly property int maxConfigBytes: 1024 * 1024
+  Process {
+    id: configRead
+    command: ["python3", root.readScript, root.configPath, String(root.maxConfigBytes + 1)]
+    stdout: StdioCollector {
+      onStreamFinished: {
+        if (this.text.length > root.maxConfigBytes) { console.warn("note-note: config file too large, using defaults"); root.loadConfig(""); return }
+        root.loadConfig(this.text)
+      }
+    }
+  }
+
+  // The settings dialog's one entry point: validate, write exactly what was
+  // typed (so what's on disk is honestly what was saved — no silent key
+  // revival), then bring live providers in line with the new enabled set.
+  function applySettingsJson(text) {
+    var parsed
+    try { parsed = JSON.parse(text) } catch (e) { return { ok: false, error: "Invalid JSON: " + e.message } }
+    if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed))
+      return { ok: false, error: "Invalid JSON: the top level must be an object" }
+    var oldConfig = root.config
+    var merged = root.mergeConfigDefaults(parsed)
+    root.config = merged
+    root.writeConfig(parsed)
+    root.applyProviderDiff(oldConfig, merged)
+    return { ok: true }
+  }
+  function applyProviderDiff(oldConfig, newConfig) {
+    for (var id in root.providerUrls) {
+      var was = root.providerEnabledIn(oldConfig, id)
+      var now = root.providerEnabledIn(newConfig, id)
+      // A provider that stayed enabled but whose own settings changed (a new
+      // notesDir, say) is recreated too — nothing here hot-patches a live
+      // provider's directory, watcher and already-loaded notebooks, so a
+      // fresh instance is the simplest correct way to make that take.
+      var settingsChanged = was && now &&
+        JSON.stringify((oldConfig.providers || {})[id]) !== JSON.stringify((newConfig.providers || {})[id])
+      if (was === now && !settingsChanged) continue
+      if (was && root.providerById(id)) root.disableProviderInstance(id)
+      if (now) {
+        // addProvider() alone leaves a provider empty: at startup, listing
+        // is what open()'s own loop over root.providers triggers, but the
+        // overlay is already open by the time Settings can be reached, so
+        // that loop has already run and won't run again on its own.
+        var extra = id === "local" ? { notesDir: root.localNotesDir() } : null
+        var p = root.addProvider(root.providerUrls[id], extra)
+        if (p) { p.refresh(); if (typeof p.watch === "function") p.watch(true) }
+      }
+    }
+    // Reorders the tabs of providers that were already loaded too, not only
+    // ones just added/removed — moving a name in the config moves its tab.
+    var byId = {}
+    for (var i = 0; i < root.providers.length; i++) byId[root.providers[i].id] = root.providers[i]
+    var ids = root.orderProviderIds(root.providers.map(function(x) { return x.id }), newConfig)
+    root.providers = ids.map(function(pid) { return byId[pid] })
+    root.rebuildRows()
+    root.saveState()
+  }
+  function disableProviderInstance(id) {
+    var kept = [], target = null
+    for (var i = 0; i < root.providers.length; i++) {
+      if (root.providers[i].id === id) target = root.providers[i]
+      else kept.push(root.providers[i])
+    }
+    if (!target) return
+    var cur = root.providerOf(root.currentPath)
+    if (cur && cur.id === id) root.selectPath("")
+    root.providers = kept
+    target.destroy()
   }
 
   // ── sidebar rows ────────────────────────────────────────────────────
@@ -709,6 +925,7 @@ Item {
   // ── keys ────────────────────────────────────────────────────────────
   function handleShortcut(event) {
     if (root.deleteConfirmOpen) return deleteConfirm.handleKey(event)
+    if (root.settingsOpen) return settingsDialog.handleKey(event)
     var ctrl = event.modifiers & Qt.ControlModifier
     if (event.key === Qt.Key_Escape) { root.goBack(); return true }
     if (ctrl && (event.key === Qt.Key_K || event.key === Qt.Key_L)) { searchField.forceActiveFocus(); searchField.selectAll(); return true }
@@ -823,7 +1040,7 @@ Item {
       }
     }
   }
-  Component.onCompleted: stateRead.running = true
+  Component.onCompleted: { stateRead.running = true; configRead.running = true }
   FileView {
     id: stateFile
     path: root.statePath
@@ -1009,6 +1226,23 @@ Item {
             onClicked: root.setDetached(!root.detached)
           }
 
+          Button {
+            id: settingsButton
+            anchors.right: shapeButton.left
+            anchors.rightMargin: Style.spacing.sm
+            anchors.verticalCenter: parent.verticalCenter
+            iconText: "󰒓"
+            tooltipText: "Settings — edit note-note's config as JSON (for now: which providers show up)"
+            bordered: true
+            selected: root.settingsOpen
+            foreground: root.foreground
+            accent: root.accent
+            iconSize: Style.font.iconSmall
+            horizontalPadding: Style.spacing.sm
+            verticalPadding: Style.spacing.xxs
+            onClicked: root.settingsOpen = true
+          }
+
           // The rest of the shortcuts, worn as keycaps rather than recited as a
           // sentence — search is not among them, because the field carries its
           // own. A status message borrows the whole slot while it shows, and a
@@ -1018,7 +1252,7 @@ Item {
           Item {
             anchors.left: searchField.right
             anchors.leftMargin: Style.spacing.lg
-            anchors.right: shapeButton.left
+            anchors.right: settingsButton.left
             anchors.rightMargin: Style.spacing.md
             height: parent.height
             clip: true
@@ -1225,6 +1459,25 @@ Item {
       cornerRadius: Style.cornerRadius
       onCanceled: root.cancelDelete()
       onConfirmed: root.confirmDelete()
+    }
+
+    SettingsDialog {
+      id: settingsDialog
+      anchors.fill: parent
+      opened: root.settingsOpen
+      z: 10
+      initialText: JSON.stringify(root.config, null, 2)
+      background: root.background
+      foreground: root.foreground
+      scrim: root.scrim
+      accent: root.accent
+      cornerRadius: Style.cornerRadius
+      onCanceled: { root.settingsOpen = false; editor.focusEditor() }
+      onSaveRequested: function(text) {
+        var result = root.applySettingsJson(text)
+        if (result.ok) { root.settingsOpen = false; editor.focusEditor() }
+        else settingsDialog.showError(result.error)
+      }
     }
   }
 

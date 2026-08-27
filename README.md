@@ -8,7 +8,8 @@ all live in the same list.
 ![Note Note showing a OneNote checklist, with local notebooks, Sticky Notes and the OneNote tree down the left](preview.png)
 
 **[Docs](docs/README.md)** ·
-**[Install](#install)** · **[Removal](#removal)** · **[Notebooks](#notebooks)** ·
+**[Install](#install)** · **[Removal](#removal)** · **[Settings](#settings)** ·
+**[Notebooks](#notebooks)** ·
 **[Microsoft Sticky Notes](#microsoft-sticky-notes)** · **[OneNote](#onenote)** ·
 **[Keys](#keys)**
 
@@ -44,9 +45,27 @@ they are yours rather than the plugin's: `~/.local/state/omarchy/note-note.json`
 `~/.cache/omarchy/note-note-*`. Sign out from the sidebar first to drop the
 token, or delete those files by hand.
 
+## Settings
+
+Click the gear left of **Detach** to open Settings — note-note's own config,
+shown and edited as JSON, saved with the **Save** button or `Ctrl+S`. It lives
+at `~/.config/notenote/config.json`, written with every known setting already
+in it the first time you open it, so the file explains its own shape without
+a separate page for each one.
+
+Currently:
+- `providers.<id>.enabled` — hide a source (`local`, `sticky`, `onenote`,
+  `notion`, or an external provider's own id) from the sidebar, without
+  uninstalling it. Reordering the `providers` object reorders the sidebar's
+  tabs to match; a source you never mention stays enabled and keeps its
+  place after the ones you did name.
+- `providers.local.notesDir` — where your local notebooks live, overriding
+  `~/Notes/` or `NOTE_NOTE_DIR`. Accepts `~` for your home directory.
+
 ## Notebooks
 
-Notebooks are folders under `~/Notes/` (override with `NOTE_NOTE_DIR`); notes
+Notebooks are folders under `~/Notes/` (override with `NOTE_NOTE_DIR`, or the
+`providers.local.notesDir` setting — see [Settings](#settings)); notes
 are Markdown files inside them. Notes sitting directly in `~/Notes/` show up as
 a "Notes" notebook. The filename is just an id — the title is kept in a small
 front-matter block at the top of the file:

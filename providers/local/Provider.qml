@@ -24,7 +24,10 @@ Item {
   property var host: null
   property var services: null
 
-  readonly property string notesDir: Quickshell.env("NOTE_NOTE_DIR") || (Quickshell.env("HOME") + "/Notes")
+  // The host passes this in from config.providers.local.notesDir when it
+  // creates this provider (~/.config/notenote/config.json); this initial
+  // value is only a fallback for the rare case it never arrives.
+  property string notesDir: Quickshell.env("NOTE_NOTE_DIR") || (Quickshell.env("HOME") + "/Notes")
   readonly property string dir: Qt.resolvedUrl(".").toString().replace(/^file:\/\//, "").replace(/\/$/, "")
   // Both readers refuse symlinks and special files and race a deadline
   // (docs/security.md, rule 9): a path under ~/Notes is user-writable and
