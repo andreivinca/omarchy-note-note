@@ -99,7 +99,11 @@ horizontal rule and link (a small text + URL bar). Block styles apply to
 the paragraph(s) under the cursor or selection. Images are not inserted from
 here — they need an upload, which only the OneNote and Notion apps do.
 
-The search field filters notes by title and body. **Detach** turns the overlay
+The search field filters notes by title on every keystroke, and by body a
+beat after the typing pauses, where the backend allows it: local notes are
+read from disk, and Sticky Notes are matched from what the listing already
+holds. OneNote and Notion are matched by title alone — neither's API exposes
+a way to search page content. **Detach** turns the overlay
 into an ordinary window you can keep open beside your work; **Overlay** brings
 it back. Collapsed notebooks and the detached choice are remembered in
 `~/.local/state/omarchy/note-note.json`.

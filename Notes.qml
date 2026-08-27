@@ -138,6 +138,7 @@ Item {
       editor.showNotice("Sign in to Microsoft for " + owner,
         "Open " + uri + " in a browser, enter this code, and sign in with your Microsoft account. This screen updates by itself once you are done.", code,
         [{ label: "Copy code", icon: "󰆏", action: function() { Quickshell.execDetached(["sh", "-c", 'printf %s "$1" | wl-copy', "sh", code]) } },
+         { label: "Copy link", icon: "󰌹", action: function() { Quickshell.execDetached(["sh", "-c", 'printf %s "$1" | wl-copy', "sh", uri]) } },
          { label: "Open sign-in page", icon: "󰖟", action: function() { Quickshell.execDetached(["xdg-open", uri]) } }])
     })
     acc.loginSucceeded.connect(function() { editor.showNotice("Signed in", "Fetching your notes…", "", []) })
@@ -304,6 +305,65 @@ Item {
   function matchesQuery(r, q) {
     return (r.title || "").toLowerCase().indexOf(q) >= 0 || (r.preview || "").toLowerCase().indexOf(q) >= 0
   }
+  // ── content search ────────────────────────────────────────────────────
+  // Titles and previews are matched right here, on every keystroke — that is
+  // matchesQuery, and it is instant because the rows are already in memory.
+  // Note *bodies* are not: they live with the providers, so once the typing
+  // pauses, every provider that offers the optional `search(query, cb)` is
+  // asked, and the paths it answers with join the same match set the moment
+  // they arrive. Hits are kept per provider — a slow OneNote answer must not
+  // wipe the local hits already showing — and every answer names the query
+  // generation it was asked for, so a reply to text no longer in the field
+  // changes nothing.
+  property var contentHits: ({})    // provider id -> { path: true }
+  // Providers asked and not yet answered, provider id -> true. Replaced
+  // wholesale, never mutated, like contentHits — reassignment is what lets
+  // searchBusy recompute.
+  property var searchWaiting: ({})
+  property int searchSeq: 0
+  // Whether providers should search note bodies at all. Every call passes it
+  // down, so the decision sits in one place; true until a setting owns it.
+  readonly property bool searchContent: true
+  // Is a content answer still owed? True from the keystroke on: the debounce
+  // window counts — the ask is coming, just not sent yet — and then each
+  // provider's searchWaiting entry until its reply lands. Derived, never set:
+  // the search panel reads it to say "searching…" instead of a premature
+  // "No match".
+  readonly property bool searchBusy: root.filterText.length >= 2 && root.searchContent
+    && (contentSearchTimer.running || Object.keys(root.searchWaiting).length > 0)
+  Timer { id: contentSearchTimer; interval: 350; onTriggered: root.runContentSearch() }
+  function runContentSearch() {
+    // One character is not a content query: title matching already answers
+    // it, and a body holding some letter is every body there is.
+    var q = root.filterText
+    if (q.length < 2) return
+    root.searchSeq++
+    // Everyone about to be asked is owed from before the first ask goes out:
+    // a provider that answers within its own call (sticky) then clears its
+    // entry mid-loop, which is just an answer arriving early.
+    var waiting = {}
+    for (var i = 0; i < root.providers.length; i++)
+      if (typeof root.providers[i].search === "function") waiting[root.providers[i].id] = true
+    root.searchWaiting = waiting
+    for (var j = 0; j < root.providers.length; j++) askProvider(root.providers[j], q, root.searchSeq)
+  }
+  function askProvider(p, q, seq) {
+    if (typeof p.search !== "function") return
+    p.search(q, root.searchContent, function(r) {
+      if (seq !== root.searchSeq || !root.filterText) return
+      var waiting = {}
+      for (var w in root.searchWaiting) if (w !== p.id) waiting[w] = root.searchWaiting[w]
+      root.searchWaiting = waiting
+      var set = {}, paths = (r && r.paths) || []
+      for (var j = 0; j < paths.length; j++) set[paths[j]] = true
+      var hits = {}
+      for (var k in root.contentHits) hits[k] = root.contentHits[k]
+      hits[p.id] = set
+      root.contentHits = hits
+      rebuildRows()
+      searchLanding()
+    })
+  }
   function displayTitle(title, preview) {
     if (title) return title
     if (!preview) return "Untitled"
@@ -327,6 +387,9 @@ Item {
     var keep = root.switchingTab ? 0 : list.scrollOffset(), out = [], tabs = [], hits = {}, active = activeKey()
     var q = root.filterText.toLowerCase()
     root.switchingTab = false
+    // The providers' content answers, flattened once for the whole pass.
+    var contentSet = {}
+    for (var ph in root.contentHits) { var pm = root.contentHits[ph]; for (var cp in pm) contentSet[cp] = true }
     eachSection(function(prov, s, key) {
       var all = s.rows || []
       // Every tab counts its own hits, the closed ones included — that is what
@@ -335,7 +398,7 @@ Item {
       // a provider whose rows fold away (OneNote) lists them all in s.notes,
       // for the rest the note rows already are all of them.
       var notes = q ? s.notes || all.filter(function(r) { return r.kind === "note" }) : all
-      var found = q ? notes.filter(function(r) { return matchesQuery(r, q) }) : []
+      var found = q ? notes.filter(function(r) { return matchesQuery(r, q) || contentSet[r.path] === true }) : []
       tabs.push({ key: key, name: s.name, color: s.color || "", logo: prov.logo || "",
                   count: s.count !== undefined ? s.count : all.filter(function(r) { return r.kind === "note" }).length })
       hits[key] = found.length
@@ -427,18 +490,32 @@ Item {
   function setFilter(text) {
     var searchEnded = root.filterText.length > 0 && text.length === 0
     root.filterText = text
+    // Content answers belong to the text they were asked for: a keystroke
+    // makes them stale, so they go, and any reply still in flight with them
+    // (searchSeq). The pause that follows the typing asks again.
+    root.searchSeq++
+    root.contentHits = ({})
+    root.searchWaiting = ({})
+    if (text.length > 0) contentSearchTimer.restart()
+    else contentSearchTimer.stop()
     rebuildRows()
-    // Searching still spans every tab. When the open one has nothing, move to
-    // the first that does, so a first keystroke always lands on something —
-    // without persisting the hop as the user's chosen tab.
-    if (root.filterText && root.rows.length === 0)
-      for (var t = 0; t < root.tabs.length; t++)
-        if ((root.tabMatches[root.tabs[t].key] || 0) > 0) { setActiveSection(root.tabs[t].key, false); break }
-    if (root.filterText && rowIndexOf(root.currentPath) < 0)
-      for (var i = 0; i < root.rows.length; i++) if (root.rows[i].kind === "note") { selectPath(root.rows[i].path); break }
+    searchLanding()
     // However the search ended — esc, the clear button, the text backspaced
     // away — the note it landed on should be in sight on the list that returns.
     if (searchEnded) revealCurrent()
+  }
+  // Where a search puts you, applied when the matches change — a keystroke,
+  // or a provider's content answer arriving. Searching still spans every
+  // tab: when the open one has nothing, move to the first that does, so a
+  // keystroke always lands on something — without persisting the hop as the
+  // user's chosen tab.
+  function searchLanding() {
+    if (!root.filterText) return
+    if (root.rows.length === 0)
+      for (var t = 0; t < root.tabs.length; t++)
+        if ((root.tabMatches[root.tabs[t].key] || 0) > 0) { setActiveSection(root.tabs[t].key, false); break }
+    if (rowIndexOf(root.currentPath) < 0)
+      for (var i = 0; i < root.rows.length; i++) if (root.rows[i].kind === "note") { selectPath(root.rows[i].path); break }
   }
   // Puts the open note's row on screen. A provider whose tree can fold rows
   // away (OneNote) is first asked to unfold whatever hides it — revealPath is
@@ -1032,6 +1109,7 @@ Item {
           model: root.rows
           currentPath: root.currentPath
           filtering: root.filterText.length > 0
+          searchBusy: root.searchBusy
           sections: root.tabs
           matchCounts: root.tabMatches
           activeKey: root.revision < 0 ? "" : root.activeKey()

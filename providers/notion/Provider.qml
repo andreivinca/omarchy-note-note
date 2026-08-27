@@ -70,6 +70,11 @@ Item {
     root.updated()
   }
 
+  // No `search()` here, deliberately: the public API's search endpoint
+  // matches page *titles* only (developers.notion.com/reference/post-search —
+  // the page is titled "Search by title"), so the only way to search content
+  // would be fetching every page's blocks on every query. The titles are
+  // already in the listing, where the host matches them itself.
   function crumb(path) { return root.workspace ? "Notion › " + root.workspace : "Notion" }
   // New pages go under the page you are on; otherwise under the first page
   // (the API cannot create top-level pages).
@@ -258,6 +263,8 @@ Item {
   Component {
     id: setupView
     FocusScope {
+      id: view
+      property bool confirmingRemove: false
       width: parent ? parent.width : Style.space(600)
       height: column.implicitHeight
 
@@ -319,13 +326,29 @@ Item {
             onClicked: root.viewCleared()
           }
           Button {
-            visible: root.configured
+            visible: root.configured && !view.confirmingRemove
             text: "Remove integration"
             iconText: "󰍃"
             bordered: true
             foreground: Color.menu.text
             accent: Color.accent
+            onClicked: view.confirmingRemove = true
+          }
+          Button {
+            visible: root.configured && view.confirmingRemove
+            text: "Really remove it?"
+            bordered: true
+            foreground: Color.urgent
+            accent: Color.accent
             onClicked: { root.viewCleared(); logoutProc.running = true }
+          }
+          Button {
+            visible: root.configured && view.confirmingRemove
+            text: "Keep it"
+            bordered: true
+            foreground: Color.menu.text
+            accent: Color.accent
+            onClicked: view.confirmingRemove = false
           }
         }
       }

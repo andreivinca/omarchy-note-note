@@ -141,7 +141,10 @@ Item {
     if (!ms) return
     if (id === "login") ms.login()
     else if (id === "relogin") ms.relogin()
-    else if (id === "logout") ms.logout()
+    else if (id === "logout") root.noticeRequested("Sign out of OneNote?",
+      "You'll need to sign in again" + (ms.account ? " as " + ms.account : "") + " to keep using OneNote.", "",
+      [{ label: "Sign out", action: function() { root.noticeCleared(); ms.logout() } },
+       { label: "Cancel", action: function() { root.noticeCleared() } }])
     else if (id === "refresh") { listProc.cached = false; listProc.force = true; listProc.running = true }
     else if (id.indexOf("newsection:") === 0) {
       root.newSectionNotebook = id.substring(11)
@@ -264,6 +267,15 @@ Item {
     listProc.cached = true
     listProc.running = true
   }
+
+  // No `search()` here, deliberately: Microsoft Graph's OneNote pages
+  // endpoint has no content-search parameter at all — `search=` and
+  // `$search=` both come back 400 "unsupported OData query parameters" for
+  // every account type, verified against a live personal account (the one
+  // case older docs implied it might work for). The endpoint's own
+  // documented query options are filter/orderby/select/expand/top/skip/
+  // count/pagelevel, search among them nowhere. Titles are already in the
+  // listing, where the host matches them itself — the same shape as Notion.
 
   Connections {
     target: root.ms

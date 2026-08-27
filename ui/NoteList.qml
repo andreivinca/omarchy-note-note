@@ -28,6 +28,9 @@ Item {
   property var model: []
   property string currentPath: ""
   property bool filtering: false
+  // Providers are still answering the content search; the search panel says
+  // so instead of a premature "No match" (see the host's searchBusy).
+  property bool searchBusy: false
   // The rail's tabs, as the host builds them: { key, name, color, count }.
   property var sections: []
   // Search hits per tab key; kept beside `sections` so a keystroke moves the
@@ -153,6 +156,7 @@ Item {
       anchors.margins: root.pagePadding
       visible: root.filtering
       model: root.filtering ? root.model : []
+      loading: root.searchBusy
       currentPath: root.currentPath
       notebook: root.activeName
       foreground: root.foreground

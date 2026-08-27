@@ -79,7 +79,10 @@ Item {
     if (!ms) return
     if (id === "login") ms.login()
     else if (id === "relogin") ms.relogin()
-    else if (id === "logout") ms.logout()
+    else if (id === "logout") root.noticeRequested("Sign out of Sticky Notes?",
+      "You'll need to sign in again" + (ms.account ? " as " + ms.account : "") + " to keep using Sticky Notes.", "",
+      [{ label: "Sign out", action: function() { root.noticeCleared(); ms.logout() } },
+       { label: "Cancel", action: function() { root.noticeCleared() } }])
     else if (id === "unavailable") root.noticeRequested("Microsoft sign-in is not configured in this build",
       "This copy of Note Note has no Microsoft app registration built in (CLIENT_ID in services/microsoft/msgraph.py), so nobody can sign in yet.", "", [])
   }
@@ -88,6 +91,18 @@ Item {
     if (!root.ready) { root.notes = []; rebuild(); return }
     listProc.cached = true
     listProc.running = true
+  }
+
+  // Content search, answered from memory: the listing already carries every
+  // note's whole body (a sticky note is small), so nothing is fetched. The
+  // host matches the first line itself (the row's preview); this adds the
+  // lines below it.
+  function search(query, content, cb) {
+    if (!content) { cb({ paths: [] }); return }
+    var q = query.toLowerCase(), paths = []
+    for (var i = 0; i < root.notes.length; i++)
+      if ((root.notes[i].body || "").toLowerCase().indexOf(q) >= 0) paths.push(pathOf(root.notes[i].id))
+    cb({ paths: paths })
   }
 
   Connections {

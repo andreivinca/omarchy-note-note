@@ -80,6 +80,23 @@ is open (and it has no unsaved edits), the host reloads it.
   note's row, and rebuild, so the row exists on screen. The host calls it
   when a search ends on a note, then scrolls to the row; a provider whose
   rows never fold simply leaves it out.
+- `search(query, content, cb)` (optional) — content search: call back with
+  `{ paths: [...] }`, the paths of notes whose *body* contains `query`,
+  case-insensitively. The host matches titles and previews itself on every
+  keystroke; once the typing pauses it asks this for what only the backend
+  can see, and folds the answer into the same result set (rows, tab hit
+  counts). `content` (bool) is the host's say on whether bodies are to be
+  searched at all — currently always true, later the user's setting; when
+  false, answer `{ paths: [] }` without touching the backend. Call `cb`
+  exactly once per call, an empty list included: the host shows a
+  "searching…" state until every asked provider has answered. Best-effort by design: answer with what the backend can — an
+  empty list when it cannot — and the host says nothing either way, since
+  title matching has already answered something. Paths not in the current
+  `sections` are ignored, and a reply to text no longer in the field is
+  discarded, so a slow answer is always safe. Leave it out and the
+  provider's notes are searched by title and preview alone (Notion does:
+  its public API searches titles only, and fetching every page's blocks
+  per keystroke is not a search).
 - `setOrder(sectionKey, paths)`
 - `crumb(path)` → string for the editor's description line
 - `createTargetFor(path)` → target for Ctrl+N while `path` is open, or ""

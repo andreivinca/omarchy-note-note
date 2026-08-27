@@ -30,6 +30,7 @@ Item {
   // (docs/security.md, rule 9): a path under ~/Notes is user-writable and
   // cannot be trusted to be a plain file.
   readonly property string listScript: dir + "/list.py"
+  readonly property string searchScript: dir + "/search.py"
   readonly property string readScript: dir + "/../../lib/readfile.py"
   // This provider's limits: a note bigger than this is listed but not loaded
   // (it is almost certainly not a note), and the listing itself is capped.
@@ -107,6 +108,43 @@ Item {
   function toggleTree(id) {}
 
   function refresh() { listProc.running = true }
+
+  // ── content search ──────────────────────────────────────────────────
+  // The host matches titles and previews itself; this answers the rest —
+  // the paths of notes whose *body* holds the query (search.py, same walk
+  // and read policy as the listing). One process at a time: a query that
+  // arrives while one runs kills it, and the exit starts the newer one.
+  property var searchCb: null
+  property string searchPending: ""
+  function search(query, content, cb) {
+    // `content` is the host's say on whether bodies are searched at all;
+    // everything this function adds over the host's own title matching is
+    // body matching, so "no" is an empty answer.
+    if (!content) { cb({ paths: [] }); return }
+    root.searchCb = cb
+    root.searchPending = query
+    if (searchProc.running) { searchProc.running = false; return }
+    runSearch()
+  }
+  function runSearch() {
+    if (root.searchPending === "") return
+    searchProc.command = ["python3", root.searchScript, root.notesDir, root.searchPending, String(root.maxNoteBytes)]
+    root.searchPending = ""
+    searchProc.running = true
+  }
+  Process {
+    id: searchProc
+    stdout: StdioCollector {
+      onStreamFinished: {
+        if (root.searchPending !== "") return   // superseded; the newer query answers
+        var cb = root.searchCb
+        root.searchCb = null
+        if (!cb) return
+        cb({ paths: this.text.split("\n").filter(function(l) { return l.length > 0 }).map(root.pathOf) })
+      }
+    }
+    onExited: if (root.searchPending !== "") Qt.callLater(root.runSearch)
+  }
 
   // Saved order first, then anything unlisted in the given (birth-time) order.
   function applyOrder(entries, keyOf, savedNames) {

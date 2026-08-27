@@ -12,6 +12,9 @@ Item {
   id: root
 
   property var model: []
+  // Content answers are still on their way somewhere: the count line trails
+  // "searching…" so what is on show reads as so-far, not as the verdict.
+  property bool loading: false
   property string currentPath: ""
   property string notebook: ""
   property color foreground: Color.menu.text
@@ -42,8 +45,10 @@ Item {
       textFormat: Text.PlainText
       width: parent.width
       leftPadding: root.textInset
-      text: root.count === 0 ? "No match in " + root.notebook
+      text: root.count === 0
+        ? (root.loading ? "Searching…" : "No match in " + root.notebook)
         : root.count + (root.count === 1 ? " match in " : " matches in ") + root.notebook
+          + (root.loading ? " — searching…" : "")
       color: Util.alpha(root.foreground, 0.45)
       font.family: root.fontFamily
       font.pixelSize: Style.font.caption

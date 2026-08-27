@@ -246,6 +246,16 @@ class is set: extended property `String 0x001A` = `IPM.StickyNote`.
   empty separator line, so that test throws the blank line away.
 - OData query values must be URL-encoded: a raw space in
   `$orderby=lastModifiedDateTime desc` makes `urllib` raise `InvalidURL`.
+- **No content search exists.** `/me/onenote/pages?search=…` and `?$search=…`
+  both come back `400 "Your request contains unsupported OData query
+  parameters"` — measured against a live personal (`@outlook.com`) account,
+  the one case an older doc page implied might still work. The endpoint's own
+  documented query options are `filter/orderby/select/expand/top/skip/count/
+  pagelevel`; `search` is in none of them. `filter=contains(tolower(title),…)`
+  works but only reaches `title`, and the account-wide `/pages` call anyway
+  refuses accounts with many sections (see above) — so it cannot stand in.
+  The provider has no `search()`; the sidebar matches OneNote titles only,
+  the same as Notion.
 - Throttling (HTTP 429, often **without** a `Retry-After`) arrives quickly if
   you re-list repeatedly while testing. Back off, cache, and reduce
   parallelism.
@@ -300,6 +310,10 @@ the answer.
   id.
 - Rate limit ≈ 3 requests/second (we pace at 0.34 s) and children are appended
   in batches of 100 blocks.
+- `/v1/search` matches **page titles only** — the reference page is literally
+  titled "Search by title". There is no full-text search in the public API,
+  so the provider deliberately has no `search()`: content search would mean
+  fetching every page's blocks per query.
 - Highlights are `*_background` colours in the `annotations` object.
 
 ---
