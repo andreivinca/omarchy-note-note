@@ -1157,18 +1157,22 @@ Item {
             foreground: root.foreground
             accent: root.accent
             font.family: Style.font.menuFamily
-            verticalPadding: Style.spacing.xs
+            // Two steps up from the default: the field is the header's one
+            // control and reads better with more air.
+            verticalPadding: Style.spacing.md
             onTextEdited: root.setFilter(text)
             rightPadding: root.filterText.length > 0
               ? clearSearchButton.width + Style.spacing.xs
-              : searchKeycap.width + Style.spacing.sm + Style.spacing.xs
-            leftPadding: searchGlyph.width + Style.spacing.sm + Style.spacing.xs
+              : searchKeycap.width + (searchField.height - searchKeycap.height) / 2 + Style.spacing.xs
+            leftPadding: searchGlyph.width + Style.spacing.xxl + Style.spacing.xs
 
             Rectangle {
               id: searchKeycap
               visible: root.filterText.length === 0
               anchors.right: parent.right
-              anchors.rightMargin: Style.spacing.sm
+              // The same air to the right edge as above and below it, so the
+              // keycap sits centered in the field's corner.
+              anchors.rightMargin: (searchField.height - height) / 2
               anchors.verticalCenter: parent.verticalCenter
               width: searchKeycapText.width + Style.spacing.sm * 2
               height: searchKeycapText.height + Style.spacing.xxs * 2
@@ -1196,7 +1200,9 @@ Item {
               id: searchGlyph
               textFormat: Text.PlainText
               anchors.left: parent.left
-              anchors.leftMargin: Style.spacing.sm
+              // In step with the taller field: the magnifier keeps its
+              // distance from the rounded edge (leftPadding above follows).
+              anchors.leftMargin: Style.spacing.xxl
               anchors.verticalCenter: parent.verticalCenter
               text: "󰍉"
               color: Util.alpha(root.foreground, 0.55)
@@ -1243,7 +1249,9 @@ Item {
             foreground: root.foreground
             accent: root.accent
             iconSize: Style.font.iconSmall
-            horizontalPadding: Style.spacing.sm
+            // Wider than the default control padding: a labelled pill wants
+            // air around its word.
+            horizontalPadding: Style.spacing.lg
             verticalPadding: Style.spacing.xxs
             onClicked: root.setDetached(!root.detached)
           }
@@ -1253,24 +1261,50 @@ Item {
             anchors.right: shapeButton.left
             anchors.rightMargin: Style.spacing.sm
             anchors.verticalCenter: parent.verticalCenter
-            iconText: "󰒓"
             tooltipText: "Settings — edit note-note's config as JSON (for now: which providers show up)"
             bordered: true
             selected: root.settingsOpen
             foreground: root.foreground
             accent: root.accent
-            iconSize: Style.font.iconSmall
-            horizontalPadding: Style.spacing.sm
-            verticalPadding: Style.spacing.xxs
+            // A circle, as tall as the pill beside it. The gear is drawn as
+            // an OpticalGlyph rather than the button's own icon: an icon
+            // glyph's ink is not centered in its advance width, and inside a
+            // tight circle that reads as off-center.
+            width: shapeButton.height
+            height: shapeButton.height
+            radius: height / 2
             onClicked: root.settingsOpen = true
+
+            // Centered on the glyph's painted ink, both axes. The kit's
+            // OpticalGlyph corrects only horizontally — it keeps a shared
+            // baseline for rows of glyphs — but a lone glyph in a circle
+            // has no neighbours, and its line box's own centering reads as
+            // vertical drift.
+            TextMetrics {
+              id: gearMetrics
+              font.family: Style.fontFamily
+              font.pixelSize: Math.max(1, Math.round(Style.font.iconSmall))
+              text: gearGlyph.text
+            }
+            Text {
+              id: gearGlyph
+              anchors.centerIn: parent
+              anchors.horizontalCenterOffset: implicitWidth / 2
+                - (gearMetrics.tightBoundingRect.x + gearMetrics.tightBoundingRect.width / 2)
+              anchors.verticalCenterOffset: implicitHeight / 2
+                - (baselineOffset + gearMetrics.tightBoundingRect.y + gearMetrics.tightBoundingRect.height / 2)
+              text: "󰒓"
+              font.family: Style.fontFamily
+              font.pixelSize: gearMetrics.font.pixelSize
+              renderType: Text.NativeRendering
+              color: settingsButton.selected ? Style.selectedStateColor(root.foreground, root.accent) : root.foreground
+            }
           }
 
-          // The rest of the shortcuts, worn as keycaps rather than recited as a
-          // sentence — search is not among them, because the field carries its
-          // own. A status message borrows the whole slot while it shows, and a
-          // window too narrow for every chip clips them from the left: the
-          // rightmost ones survive, and they are the ones nearest the button
-          // they explain.
+          // The band between the search and the buttons belongs to status
+          // messages; it sits empty otherwise. (It used to wear the key
+          // shortcuts as hint chips — removed as noise: the shortcuts live
+          // in the README, and the search field names its own.)
           Item {
             anchors.left: searchField.right
             anchors.leftMargin: Style.spacing.lg
@@ -1278,55 +1312,6 @@ Item {
             anchors.rightMargin: Style.spacing.md
             height: parent.height
             clip: true
-
-            Row {
-              visible: root.statusText.length === 0
-              anchors.right: parent.right
-              anchors.verticalCenter: parent.verticalCenter
-              spacing: Style.spacing.lg
-
-              Repeater {
-                model: [{ keys: "ctrl+↑↓", what: "note" },
-                        { keys: "ctrl+tab", what: "notebook" },
-                        { keys: "ctrl+n", what: "new" },
-                        { keys: "esc", what: "back" }]
-
-                delegate: Row {
-                  id: hintChip
-                  required property var modelData
-                  spacing: Style.spacing.xs
-
-                  Rectangle {
-                    anchors.verticalCenter: parent.verticalCenter
-                    width: chipKeys.width + Style.spacing.sm * 2
-                    height: chipKeys.height + Style.spacing.xxs * 2
-                    radius: Math.min(Style.cornerRadius, height / 3)
-                    color: Util.alpha(root.foreground, 0.06)
-                    border.width: 1
-                    border.color: Util.alpha(root.foreground, 0.22)
-
-                    Text {
-                      id: chipKeys
-                      textFormat: Text.PlainText
-                      anchors.centerIn: parent
-                      text: hintChip.modelData.keys
-                      color: Util.alpha(root.foreground, 0.6)
-                      font.family: Style.font.menuFamily
-                      font.pixelSize: Style.font.caption
-                    }
-                  }
-
-                  Text {
-                    textFormat: Text.PlainText
-                    anchors.verticalCenter: parent.verticalCenter
-                    text: hintChip.modelData.what
-                    color: Util.alpha(root.foreground, 0.6)
-                    font.family: Style.font.menuFamily
-                    font.pixelSize: Style.font.caption
-                  }
-                }
-              }
-            }
 
             Text {
               textFormat: Text.PlainText
