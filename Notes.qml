@@ -695,6 +695,7 @@ Item {
       if (root.currentPath !== path) return
       if (r.error) { root.loadingNote = false; return }
       var pos = editor.cursorPosition()
+      editor.documentBase = r.base || ""
       editor.setNote(r.title || "", r.body || "")
       editor.setCursorPosition(pos)
       editor.readOnly = r.editable === false
@@ -827,6 +828,7 @@ Item {
     root.currentPath = path
     root.currentCrumb = crumbOf(path)
     editor.readOnly = false
+    editor.documentBase = ""
     if (!path) { editor.setNote("", ""); root.loadingNote = false; return }
     root.loadingPath = path
     editor.setNote("", "")
@@ -837,6 +839,7 @@ Item {
       root.loadingPath = ""
       if (r.error) { root.loadingNote = false; showStatus(p.name + ": " + r.error); return }
       root.loadedVersion = r.version || versionOf(path)
+      editor.documentBase = r.base || ""
       editor.setNote(r.title || "", r.body || "")
       editor.readOnly = r.editable === false
       root.loadingNote = false

@@ -2,8 +2,12 @@
 
     python3 -m qthtml to-html      [--highlight '#f9e2af'] [--highlight-ink '#1e1e2e']
                                    [--link '#4282d7'] [--quote-ink '#9399b2']
-                                   [--code-background '#313244']
-    python3 -m qthtml to-markdown  [--with-map]
+                                   [--code-background '#313244'] [--base /dir]
+    python3 -m qthtml to-markdown  [--with-map] [--base /dir]
+
+`--base` is the note's own directory, for both directions: it is how an image
+the note names by a relative path is found and measured (the display cap for
+large images, and telling that cap from a width the author chose).
 
 `--with-map` answers with JSON — the Markdown, the document block each line
 came from, and how many blocks there are — which is what lets the toolbar turn
@@ -27,13 +31,14 @@ else:
 MAX_BYTES = 8 * 1024 * 1024
 
 FLAGS = {"--highlight": "highlight", "--highlight-ink": "ink", "--link": "link",
-         "--quote-ink": "quote_ink", "--code-background": "code_background"}
+         "--quote-ink": "quote_ink", "--code-background": "code_background",
+         "--base": "base"}
 
 
 def parse_args(argv):
     options = {"highlight": dialect.DEFAULT_HIGHLIGHT, "ink": dialect.DEFAULT_HIGHLIGHT_INK,
                "link": dialect.DEFAULT_LINK, "quote_ink": dialect.DEFAULT_QUOTE_INK,
-               "code_background": dialect.DEFAULT_CODE_BACKGROUND, "map": False}
+               "code_background": dialect.DEFAULT_CODE_BACKGROUND, "base": "", "map": False}
     if not argv or argv[0] not in ("to-html", "to-markdown"):
         raise SystemExit(__doc__)
     direction, rest = argv[0], argv[1:]
@@ -59,11 +64,11 @@ def main(argv=None):
 
     if direction == "to-html":
         sys.stdout.write(to_html(text, options["highlight"], options["ink"], options["link"],
-                                 options["quote_ink"], options["code_background"]))
+                                 options["quote_ink"], options["code_background"], options["base"]))
     elif options["map"]:
-        json.dump(convert(text), sys.stdout)
+        json.dump(convert(text, options["base"]), sys.stdout)
     else:
-        sys.stdout.write(to_markdown(text))
+        sys.stdout.write(to_markdown(text, options["base"]))
     return 0
 
 

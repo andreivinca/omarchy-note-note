@@ -6,6 +6,7 @@ underline as _x_, italic as *x*). Backslash escapes come out resolved, soft wrap
 and "two spaces + newline" as `linebreak`. Renderers live with the providers.
 """
 import os
+import re
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -32,10 +33,35 @@ def _underline_plugin(md):
 
 _md = mistune.create_markdown(renderer=None, plugins=["task_lists", "strikethrough", "table", "mark", _underline_plugin])
 
+# A display width the author chose, written right after an image the way
+# pandoc writes attributes: `![alt](pic.png){width=320}`. mistune leaves it
+# as literal text after the image token; `parse` folds it into the token's
+# attrs, so every renderer sees a width and no reader ever sees the marker
+# as note text. Anything not exactly this shape stays what it is: text.
+IMAGE_WIDTH = re.compile(r"^\{width=(\d{1,5})\}")
+
+
+def _absorb_image_widths(tokens):
+    for index, token in enumerate(tokens[:-1]):
+        follower = tokens[index + 1]
+        if token.get("type") != "image" or follower.get("type") != "text":
+            continue
+        m = IMAGE_WIDTH.match(follower.get("raw", ""))
+        if not m:
+            continue
+        token.setdefault("attrs", {})["width"] = int(m.group(1))
+        follower["raw"] = follower["raw"][m.end():]
+    tokens[:] = [t for t in tokens if not (t.get("type") == "text" and t.get("raw") == "")]
+    for token in tokens:
+        if token.get("children"):
+            _absorb_image_widths(token["children"])
+
 
 def parse(markdown):
     """Markdown text -> list of mistune AST tokens."""
-    return _md(markdown.replace("\r", ""))
+    tokens = _md(markdown.replace("\r", ""))
+    _absorb_image_widths(tokens)
+    return tokens
 
 
 def walk_text(tokens):

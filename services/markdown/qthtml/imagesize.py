@@ -5,7 +5,21 @@ natural size and clips at the pane — so the writer caps the *display* width
 with a `width` attribute, and needs the natural width to know when. Reading
 the header is enough; anything unreadable simply reports 0 and gets no cap.
 """
+import os
 import struct
+import urllib.parse
+
+
+def local_path(url, base=""):
+    """The file an `<img src>` names: a file:// URL, or a relative src
+    resolved against the document's base directory (the note's own folder,
+    for local notebooks). Anything else — remote, data:, a bare absolute
+    path — is not a file this module can measure, and answers ""."""
+    if url.startswith("file://"):
+        return urllib.parse.unquote(url[len("file://"):])
+    if base and "://" not in url and not url.startswith(("/", "data:")):
+        return os.path.join(base, urllib.parse.unquote(url))
+    return ""
 
 
 def width_of(path):

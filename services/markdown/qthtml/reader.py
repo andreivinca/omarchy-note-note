@@ -17,6 +17,7 @@ someone's note, so it is the one failure that is checked for.
 from . import dialect
 from . import htmltree
 from ._vendor import parse, walk_text
+from .imagesize import local_path, width_of
 from .mdtext import escape_inline, escape_line_start
 
 # Four non-breaking spaces per level: Markdown has no paragraph indent, and
@@ -41,33 +42,35 @@ INLINE_MARKERS = (
 NO_BLOCK = -1
 
 
-def to_markdown(html):
+def to_markdown(html, base=""):
     """HTML from a RichText `TextEdit` -> Markdown text, as it belongs on
     disk: trailing blank lines are the editor's (the line the caret parks on
     after leaving a block), not the note's, so they are trimmed here — and
     only here. `convert` keeps them, because the toolbar's caret map must
     name every line the caret can be on; trimming there sent block tools to
     the line above whenever the caret sat on a trailing blank."""
-    markdown = convert(html)["markdown"]
+    markdown = convert(html, base)["markdown"]
     lines = markdown.rstrip("\n").split("\n") if markdown else []
     while lines and not lines[-1].strip():
         lines.pop()
     return "\n".join(lines) + "\n" if lines else ""
 
 
-def convert(html):
+def convert(html, base=""):
     """Markdown plus the line -> block map the editor needs for the caret.
 
         {"markdown": str, "blocks": [int], "count": int}
 
     `blocks[i]` is the index of the document paragraph line `i` came from,
     counted the way Qt counts them (docs/engine-notes.md): every paragraph,
-    list item, table cell and rule is one, in document order.
+    list item, table cell and rule is one, in document order. `base` is the
+    note's own directory — how a relative image is measured, the same way
+    `writer` measures it (see `_Reader.image_width`).
     """
     tree = htmltree.parse(dialect.strip_fragment_markers(html))
-    result = _Reader(strict=False).render(tree)
+    result = _Reader(strict=False, base=base).render(tree)
     if _loses_text(result["markdown"], tree):
-        result = _Reader(strict=True).render(tree)
+        result = _Reader(strict=True, base=base).render(tree)
     return result
 
 
@@ -87,8 +90,9 @@ class _Chunk:
 
 
 class _Reader:
-    def __init__(self, strict=False):
+    def __init__(self, strict=False, base=""):
         self.strict = strict
+        self.base = base
         self.next_block = 0
 
     def render(self, body):
@@ -268,7 +272,8 @@ class _Reader:
             elif node.tag == "a":
                 out.append(self.anchor(node, active))
             elif node.tag == "img":
-                out.append(_Run("![%s](%s)" % (node.attrs.get("alt", ""), node.attrs.get("src", "")), active))
+                out.append(_Run("![%s](%s)%s" % (node.attrs.get("alt", ""), node.attrs.get("src", ""),
+                                                 self.image_width(node)), active))
             elif node.tag == "span":
                 style = dialect.style_map(node.style)
                 if dialect.is_mono(style):
@@ -288,6 +293,21 @@ class _Reader:
         shared -= {"link"}
         text = _emit(inner, active | shared | {"link"}).strip()
         return _Run("[%s](%s)" % (text or href, href.replace(")", "%29")), active | shared)
+
+    def image_width(self, node):
+        """A width the author gave the image, as `{width=N}` after it — the
+        marker `parse` folds back into the token. The display cap the writer
+        puts on a large image that names no width is not the author's and
+        stays out of the note: a width equal to the cap, on an image the cap
+        would have applied to, is the cap (dialect.MAX_IMAGE_DISPLAY)."""
+        width = dialect.px(node.attrs.get("width"), 0)
+        if width <= 0:
+            return ""
+        if width == dialect.MAX_IMAGE_DISPLAY:
+            natural = width_of(local_path(node.attrs.get("src", ""), self.base))
+            if natural > dialect.MAX_IMAGE_DISPLAY:
+                return ""
+        return "{width=%d}" % width
 
     def styles_of(self, style, active):
         decoration = style.get("text-decoration", "")

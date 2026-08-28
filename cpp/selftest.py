@@ -1,4 +1,6 @@
-"""Agreement test for the two ways the editor finds quote blocks.
+"""Agreement test for the two ways the editor finds quote blocks — and the
+inspector's image side, which has no fallback to agree with and is asserted
+against the document directly.
 
 The native inspector (textblocks.h) reads block formats from the document;
 the fallback (ui/QuoteBars.js) scans the document's serialised HTML. Both
@@ -6,6 +8,11 @@ must place the same bars, or a machine without the built library sees
 different decorations than one with it. Every round-trip case from the
 converter's selftest runs through a real Qt document offscreen, and the two
 answers are compared — the exact JS shipped in ui/QuoteBars.js, not a copy.
+
+The image phase loads a real PNG into a document, asserts `images()` sees
+its natural size and the display cap the converter applied, resizes it with
+`setImageWidth()`, and closes the loop: the document's own HTML must read
+back as `![alt](src){width=N}`.
 
     sh cpp/build.sh
     python3 cpp/selftest.py [--verbose]
@@ -15,13 +22,15 @@ Skipped with a warning when the library is not built or `qml6` is missing.
 import argparse
 import json
 import os
+import struct
 import subprocess
 import sys
 import tempfile
+import zlib
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(ROOT, "services", "markdown"))
-from qthtml import to_html            # noqa: E402
+from qthtml import dialect, to_html, to_markdown  # noqa: E402
 from qthtml.selftest import CASES     # noqa: E402
 
 MODULE = os.path.join(ROOT, "cpp", "build", "NoteNoteText")
@@ -33,10 +42,11 @@ import "%(module)s"
 import "%(quotebars)s" as QuoteBars
 Window {
   visible: true
+  property var out: ({})
   TextEdit { id: e; textFormat: TextEdit.RichText; font.family: "sans-serif"; width: 600 }
   TextBlocks { id: tb; document: e.textDocument }
   Timer { interval: 60; running: true; onTriggered: {
-    var cases = %(cases)s, out = {}
+    var cases = %(cases)s
     for (var key in cases) {
       e.text = cases[key]
       out[key] = {
@@ -44,11 +54,35 @@ Window {
         scanned: QuoteBars.runs(e.getFormattedText(0, e.length), e.getText(0, e.length))
       }
     }
+    // The image phase reads on a second tick, giving the document's
+    // resource loading time to settle before natural sizes are asked for.
+    e.text = %(imagehtml)s
+  } }
+  Timer { interval: 400; running: true; onTriggered: {
+    var img = { before: tb.images() }
+    if (img.before.length === 1) {
+      img.applied = tb.setImageWidth(img.before[0].position, 300)
+      img.after = tb.images()
+      img.html = e.getFormattedText(0, e.length)
+    }
+    out.images = img
     console.error("<<<RESULT>>>" + JSON.stringify(out) + "<<<END>>>")
     Qt.exit(0)
   } }
 }
 """
+
+
+def make_png(path, width, height):
+    """A small but real PNG, so the document can load and measure it."""
+    def chunk(kind, data):
+        payload = kind + data
+        return struct.pack(">I", len(data)) + payload + struct.pack(">I", zlib.crc32(payload) & 0xFFFFFFFF)
+    header = struct.pack(">IIBBBBB", width, height, 8, 2, 0, 0, 0)
+    raw = b"".join(b"\x00" + b"\x80\x80\x80" * width for _ in range(height))
+    with open(path, "wb") as handle:
+        handle.write(b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", header)
+                     + chunk(b"IDAT", zlib.compress(raw)) + chunk(b"IEND", b""))
 
 
 def has_quote(markdown):
@@ -77,9 +111,14 @@ def main():
         return 0
 
     documents = {name: to_html(markdown) for name, markdown in CASES.items()}
+    png_dir = tempfile.mkdtemp(prefix="note-note-selftest-")
+    png = os.path.join(png_dir, "shot.png")
+    make_png(png, 800, 600)
+    image_markdown = "![shot](file://%s)\n" % png
     script = QML_TEMPLATE % {"module": "file://" + MODULE,
                              "quotebars": "file://" + QUOTEBARS,
-                             "cases": json.dumps(documents)}
+                             "cases": json.dumps(documents),
+                             "imagehtml": json.dumps(to_html(image_markdown))}
     with tempfile.NamedTemporaryFile("w", suffix=".qml", delete=False) as handle:
         handle.write(script)
         path = handle.name
@@ -91,6 +130,8 @@ def main():
         return 0
     finally:
         os.unlink(path)
+        os.unlink(png)
+        os.rmdir(png_dir)
     blob = proc.stderr.split("<<<RESULT>>>")
     if len(blob) < 2:
         print("FAILED to run qml6:\n" + proc.stderr[-2000:])
@@ -116,8 +157,45 @@ def main():
         elif args.verbose and (native["quote"] or native["code"]):
             print("  ok    %-24s %r" % (name, native))
     print("  %d/%d cases" % (len(CASES) - failures, len(CASES)))
+
+    print("images: natural size, the display cap, and the corner-handle resize")
+    image_failures = check_images(results.get("images") or {}, image_markdown, args.verbose)
+    failures += image_failures
+    print("  %s" % ("ok" if not image_failures else "%d failure(s)" % image_failures))
+
     print("\n%s" % ("all green" if not failures else "%d failure(s)" % failures))
     return 1 if failures else 0
+
+
+def check_images(result, image_markdown, verbose):
+    """One 800x600 PNG through the whole loop: `images()` must see the
+    natural size and the converter's display cap; `setImageWidth(300)` must
+    stick, scale the height by the aspect, and read back from the document's
+    own HTML as the note's `{width=300}`."""
+    checks = []
+    before, after = result.get("before") or [], result.get("after") or []
+    checks.append(("one image found", len(before) == 1, before))
+    if len(before) == 1:
+        img = before[0]
+        checks.append(("natural size", (img["naturalWidth"], img["naturalHeight"]) == (800, 600), img))
+        checks.append(("display cap applied", img["width"] == dialect.MAX_IMAGE_DISPLAY, img))
+        checks.append(("height follows the aspect", img["height"] == 480, img))
+        checks.append(("bottom on the baseline", img["ascent"] >= img["height"], img))
+        checks.append(("resize applied", result.get("applied") is True, result.get("applied")))
+    if len(after) == 1:
+        checks.append(("resized width", after[0]["width"] == 300, after[0]))
+        checks.append(("resized height by aspect", after[0]["height"] == 225, after[0]))
+        back = to_markdown(result.get("html") or "")
+        expected = image_markdown.replace(")\n", "){width=300}\n")
+        checks.append(("reads back as the note's width", back == expected, back))
+    failures = 0
+    for name, ok, actual in checks:
+        if not ok:
+            failures += 1
+            print("  FAIL  %-28s %r" % (name, actual))
+        elif verbose:
+            print("  ok    %-28s" % name)
+    return failures
 
 
 if __name__ == "__main__":

@@ -15,6 +15,10 @@ Item {
   readonly property string name: "Note Note"
   readonly property bool markdown: true
   readonly property bool hasTitle: true
+  // A pasted picture is copied into `.assets/` beside the note on save
+  // (images.py) and the note keeps a relative link, resolved through the
+  // `base` this provider returns from load().
+  readonly property bool canImages: true
   readonly property bool canCreate: true
   readonly property bool canDelete: true
   readonly property bool canReorder: true
@@ -34,6 +38,7 @@ Item {
   // cannot be trusted to be a plain file.
   readonly property string listScript: dir + "/list.py"
   readonly property string searchScript: dir + "/search.py"
+  readonly property string imagesScript: dir + "/images.py"
   readonly property string readScript: dir + "/../../lib/readfile.py"
   // This provider's limits: a note bigger than this is listed but not loaded
   // (it is almost certainly not a note), and the listing itself is capped.
@@ -215,7 +220,11 @@ Item {
           job.cb({ title: e ? e.title : "", body: "This file is larger than " + Math.round(root.maxNoteBytes / 1048576) + " MB — too large to open as a note. Edit it in an editor instead.", editable: false, version: ver })
         } else {
           var n = root.parseNote(this.text)
-          job.cb({ title: n.title, body: n.body, editable: true, version: ver })
+          // `base` is the note's own folder: how the editor and the
+          // converter resolve the relative image links this provider keeps.
+          var file = root.fileOf(job.path)
+          job.cb({ title: n.title, body: n.body, editable: true, version: ver,
+                   base: file.substring(0, file.lastIndexOf("/")) })
         }
       }
     }
@@ -225,6 +234,15 @@ Item {
   // Our own writes fire inotify too; ignore events that follow one closely.
   property double lastOwnWrite: 0
   function save(path, title, body, cb) {
+    // A pasted picture is still a link into the clipboard's staging dir;
+    // images.py copies it into `.assets/` beside the note and hands back the
+    // body with the link made relative. Bodies without file:// links — the
+    // ordinary case — skip the process entirely.
+    if (body.indexOf("](file://") >= 0) stageImages(path, title, body, cb)
+    else writeNote(path, title, body, cb, "")
+  }
+
+  function writeNote(path, title, body, cb, warning) {
     root.lastOwnWrite = Date.now()
     writeFile.path = fileOf(path)
     writeFile.setText(serializeNote(title, body))
@@ -233,7 +251,47 @@ Item {
       arr[i] = { key: arr[i].key, file: arr[i].file, path: path, title: title.trim(), preview: previewOf(body), size: body.length, version: "" }
     root.notes = arr
     rebuild()
-    if (cb) cb({})
+    if (cb) cb(warning ? { warning: warning } : {})
+  }
+
+  // The note is written no matter what: a failed copy only leaves the link
+  // pointing at the staged file (still shown, pruned eventually) and says so.
+  function stageImages(path, title, body, cb) {
+    root.lastOwnWrite = Date.now()
+    var proc = imageStager.createObject(root, {
+      command: ["python3", root.imagesScript, root.notesDir, fileOf(path)],
+      callback: function(result) {
+        var ok = result && result.body !== undefined
+        writeNote(path, title, ok ? result.body : body, cb,
+                  (result && (result.warning || result.error)) || (ok ? "" : "pasted images were not copied into the notebook"))
+      }
+    })
+    proc.stdinEnabled = true                 // stdin must be open before it starts
+    proc.running = true
+    proc.write(body)
+    proc.stdinEnabled = false                // close stdin: the script reads to EOF
+  }
+
+  Component {
+    id: imageStager
+    Process {
+      id: proc
+      // The note goes over stdin, never argv (docs/security.md rule 2).
+      property var callback: null
+      stdout: StdioCollector {
+        onStreamFinished: {
+          var done = proc.callback
+          proc.callback = null
+          var result = null
+          try { result = JSON.parse(this.text) } catch (error) { result = null }
+          if (done) done(result)
+          Qt.callLater(function() { proc.destroy() })
+        }
+      }
+      onExited: function(code) {
+        if (proc.callback) { var done = proc.callback; proc.callback = null; done(null) }
+      }
+    }
   }
 
   function create(target, cb) {

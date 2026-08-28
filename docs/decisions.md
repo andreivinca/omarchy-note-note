@@ -191,10 +191,57 @@ is lifted out to a paragraph of its own before the page is rendered
 surgical save can only leave alone what is a top-level run. The list is split
 around the image; the halves stay lists.
 
-*Not done:* images in local Markdown notebooks and in Notion. The editor asks
-the provider (`canImages`) and says so when the answer is no, rather than
-swallowing the paste. Local notes need a story for where the file lives next to
-the note; Notion needs its own upload endpoint.
+*Not done:* images in Notion, which needs its own upload endpoint. The editor
+asks the provider (`canImages`) and says so when the answer is no, rather
+than swallowing the paste.
+
+### Resizing an image is a corner handle, and the width is the note's
+
+Hovering an image shows one marker on its bottom-right corner; dragging it
+resizes the image (aspect kept, an outline while dragging, one undo step),
+and the width lands in the note as `![alt](src){width=320}` — pandoc's
+attribute form, which other Markdown tools at worst show as a stray brace.
+mistune leaves the marker as literal text after the image token and
+`services/markdown/parse.py` folds it into the token's attrs, so every
+renderer sees a width and no reader ever meets the marker as note text.
+
+A width in the document already had a meaning: the editor caps the *display*
+of a large image at 640px (`dialect.MAX_IMAGE_DISPLAY`) without touching the
+note. Both ride the same `width` attribute — Qt has only the one — so the
+two are told apart by the number: the writer caps only an image that names
+no width, and the reader drops a width equal to the cap on an image the cap
+would have applied to. The one ambiguity, dragging a large image to exactly
+640, reads as the cap: the note stays clean and displays identically either
+way. A fresh paste wider than the cap is fitted to it on the spot, joined to
+the paste's own undo step — which also ended screenshots arriving at natural
+size and clipping at the pane until the next load.
+
+The handle needs the native inspector (cpp/): QML can neither read an
+image's drawn geometry nor set a `QTextImageFormat` width without rewriting
+HTML around the caret. `images()` reports position, drawn size, natural size
+and baseline; `setImageWidth()` is a format-only write. Without the built
+library images simply have no handle — the same graceful absence as the
+decorations. OneNote already kept a per-image width in its cache index so an
+outside width survived our saves; the width now travels through the Markdown
+too, shown and editable, and the note's width wins over the index's.
+
+### Local notebooks keep images in `.assets`, notes keep relative links
+
+*Considered:* leaving pasted images as `file://` links into the clipboard's
+staging directory. *Rejected:* the staging directory prunes itself — notes
+would quietly lose their pictures. *Chosen:* on save, any image link into
+the staging directory is copied to `.assets/` beside the note and the link
+becomes `![](.assets/name.png)` (`providers/local/images.py`: body over
+stdin, staged files read symlink-free and bounded, written with `O_EXCL` —
+the same bytes reuse a name, different bytes take the next — so the
+autosave that runs every few hundred milliseconds is idempotent). A `file://`
+link pointing anywhere else is the author's own and is left exactly as
+written, and the note is written even when a copy fails, with a warning and
+the staged link still standing. The editor resolves the relative links
+through `TextEdit.baseUrl`, set from the `base` that `load()` now returns,
+so nothing rewrites the body on the way in — and it keeps showing the staged
+file until the note is next opened, the same bargain the OneNote provider
+makes with its uploads.
 
 ### Indent on plain text is non-breaking spaces
 

@@ -131,9 +131,14 @@ class Converter:
                 local = self.image_path_for(src, width)
                 if local:
                     # The page can be written back: the save hands this same
-                    # resource to OneNote again, by the src it came from.
+                    # resource to OneNote again, by the src it came from. The
+                    # page's own display width rides along as the `{width=N}`
+                    # marker (services/markdown/parse.py), so the editor shows
+                    # it, the corner handle can change it, and a save writes
+                    # back what the note says.
                     self.images.append({"src": src, "alt": alt, "width": width, "local": local})
-                    out.append("![%s](%s)" % (alt, local))
+                    size = "{width=%d}" % width if width > 0 else ""
+                    out.append("![%s](%s)%s" % (alt, local, size))
                 else:
                     # Not shown means not held: editing could only lose it.
                     self.editable = False
@@ -463,7 +468,10 @@ def _img_html(token, image_ref):
     """An image token -> the <img> OneNote accepts, through the caller's
     resolver: an existing page resource keeps its own src, a local file is
     uploaded as a part of the request, and anything the resolver refuses is
-    written as its alt text rather than silently dropped."""
+    written as its alt text rather than silently dropped. A width the note
+    states (`{width=N}`, folded into attrs by the parser) is the author's —
+    the editor's resize handle — and wins over the width the image index
+    remembered from the page."""
     attrs = token.get("attrs", {})
     url, alt = attrs.get("url", ""), _alt_of(token)
     width = 0
@@ -472,6 +480,7 @@ def _img_html(token, image_ref):
         src, width = image_ref(url, alt)
     if not src:
         return _html.escape("[image: %s]" % (alt or "not shown"), quote=False)
+    width = attrs.get("width", 0) or width
     size = ' width="%d"' % width if width else ""
     return '<img src="%s" alt="%s"%s/>' % (_html.escape(src, quote=True), _html.escape(alt, quote=True), size)
 

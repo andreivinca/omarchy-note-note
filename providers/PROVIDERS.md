@@ -18,7 +18,7 @@ is enough). The host instantiates each with `host` and `services` set.
 | `canDelete`         | bool   | `remove()` is supported |
 | `canReorder`        | bool   | rows may be dragged within a section; `setOrder()` persists |
 | `canCreateSection`  | bool   | `createSection()` is supported. The "New notebook…" row is shown only while a tab of yours is open, and makes the notebook in *your* provider |
-| `canImages`         | bool   | a pasted picture can be stored: the editor writes it into the note as `![](file:///…)` and `save()` must upload it. False (the default) makes ctrl+v say so rather than swallow the paste |
+| `canImages`         | bool   | a pasted picture can be stored: the editor writes it into the note as `![](file:///…)` and `save()` must carry it to the backend. False (the default) makes ctrl+v say so rather than swallow the paste. An image may carry a display width the author set with the editor's corner handle, written as `![alt](src){width=N}` — a provider stores it with the image if the backend can, and must at least round-trip the marker |
 | `tools`             | list   | optional: formatting-toolbar tool ids the backend can store — `bold italic underline strikeout highlight code h1 h2 h3 p ul ol todo indent outdent quote codeblock table rule link`; omitted = all (when `markdown`), `[]` = no toolbar |
 | `microsoftScopes`   | list   | Graph scopes the provider asks for when it creates its own Microsoft account |
 | `logo`              | url    | optional: a mark shown at the head of every one of this provider's tabs, and beside the header title while one of them is open |
@@ -59,7 +59,11 @@ is open (and it has no unsaved edits), the host reloads it.
 ## Functions
 
 - `refresh()` — (re)load; emit `changed` when `sections` are ready.
-- `load(path, cb)` → `cb({ title, body, editable, error })`
+- `load(path, cb)` → `cb({ title, body, editable, error, base })`
+  `base` (optional) is the note's own directory, for a provider whose notes
+  name their images by a relative path (the local provider's `.assets/`):
+  the editor resolves the links against it and the converter measures the
+  files through it. Leave it out when every image is an absolute file:// URL.
 - `save(path, title, body, cb)` → `cb({ error, warning })`
   A `body` from a provider with `canImages` may contain `![alt](file:///…)`
   pointing either at a file the provider itself cached on `load()` (the same
@@ -67,7 +71,9 @@ is open (and it has no unsaved edits), the host reloads it.
   `~/.cache/omarchy/note-note-paste/` (a picture to upload). Telling the two
   apart is the provider's job — see `providers/onenote/onenote.py`, which
   keeps an index of what it cached and hands unchanged pictures back to the
-  backend by reference rather than uploading them again.
+  backend by reference rather than uploading them again, and
+  `providers/local/images.py`, which copies staged pastes into `.assets/`
+  beside the note and makes the links relative.
 - `create(target, cb)` → `cb({ path, error })`
 - `remove(path, cb)` → `cb({ error })`
 - `createSection(name, cb)` → `cb({ key, target, error })`. `key` is the new

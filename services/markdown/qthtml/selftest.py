@@ -14,12 +14,13 @@ skipped with a warning when `qml6` is missing.
 import argparse
 import json
 import os
+import struct
 import subprocess
 import sys
 import tempfile
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from qthtml import convert, to_html, to_markdown  # noqa: E402
+from qthtml import convert, dialect, to_html, to_markdown  # noqa: E402
 
 # Each case is a note as it would sit on disk. The awkward ones are here
 # because Qt's *Markdown* writer used to corrupt them (docs/engine-notes.md);
@@ -72,6 +73,10 @@ CASES = {
     "hard break": "line one  \nline two\n",
     "image": "![a picture](file:///tmp/note-note-test.png)\n",
     "image between text": "before\n\n![](file:///tmp/note-note-test.png)\n\nafter\n",
+    "image with a width": "![a picture](file:///tmp/note-note-test.png){width=320}\n",
+    "sized image between text": "before\n\n![](file:///tmp/note-note-test.png){width=200}\n\nafter\n",
+    "sized image in a list": "- item\n- ![pic](file:///tmp/note-note-test.png){width=120} after\n- last\n",
+    "sized relative image": "![shot](.assets/paste-1.png){width=240}\n",
     "image with a remote url": "![shot](https://graph.microsoft.com/v1.0/me/onenote/resources/abc/$value)\n",
     "image opening a list item": "- item\n- ![pic](file:///tmp/note-note-test.png) after\n- last\n",
     "linked image opening a list item": "- item\n- [![pic](file:///tmp/note-note-test.png)](https://example.com) after\n- last\n",
@@ -133,6 +138,39 @@ def through_qt(documents):
     return json.loads(blob[1].split("<<<END>>>")[0])
 
 
+def check_display_cap(verbose):
+    """The display cap is display only (dialect.MAX_IMAGE_DISPLAY): a large
+    image with no stated width gets it on the way in and loses it on the way
+    out, while a width the author stated survives — even through a rename of
+    the same number onto a small image. Needs a real file, so it lives here
+    rather than in CASES (only the PNG header matters to width_of)."""
+    failures = 0
+    with tempfile.TemporaryDirectory() as directory:
+        big = os.path.join(directory, "big.png")
+        with open(big, "wb") as handle:
+            handle.write(b"\x89PNG\r\n\x1a\n" + b"\0" * 8 + struct.pack(">II", 800, 600))
+        cases = [
+            # (name, markdown, html must contain, must read back as)
+            ("cap applied", "![shot](file://%s)\n" % big,
+             ' width="%d"' % dialect.MAX_IMAGE_DISPLAY, "![shot](file://%s)\n" % big),
+            ("author width kept", "![shot](file://%s){width=300}\n" % big,
+             ' width="300"', "![shot](file://%s){width=300}\n" % big),
+            ("cap through a base", "![shot](big.png)\n",
+             ' width="%d"' % dialect.MAX_IMAGE_DISPLAY, "![shot](big.png)\n"),
+        ]
+        for name, markdown, contains, back in cases:
+            html = to_html(markdown, base=directory)
+            if contains not in html:
+                failures += 1
+                report(name, "cap html", contains, html, verbose)
+            elif to_markdown(html, base=directory) != back:
+                failures += 1
+                report(name, "cap markdown", back, to_markdown(html, base=directory), verbose)
+    print("display cap (large image, no stated width)")
+    print("  %d/3 cases" % (3 - failures))
+    return failures
+
+
 def report(name, stage, expected, actual, verbose):
     print("  FAIL  %-18s (%s)" % (name, stage))
     if verbose:
@@ -156,6 +194,8 @@ def main():
             failures += 1
             report(name, "pure", markdown, back, args.verbose)
     print("  %d/%d cases" % (len(CASES) - failures, len(CASES)))
+
+    failures += check_display_cap(args.verbose)
 
     print("through Qt (markdown -> html -> document -> html -> markdown)")
     try:

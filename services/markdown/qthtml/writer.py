@@ -7,11 +7,10 @@ that form on the way out.
 """
 import html as _html
 import re
-import urllib.parse
 
 from . import dialect
 from ._vendor import parse
-from .imagesize import width_of
+from .imagesize import local_path, width_of
 
 RULE = "<hr />"
 # An empty block, drawn one line high. It cannot be `<p></p>` (Qt drops a
@@ -21,11 +20,6 @@ RULE = "<hr />"
 # line, one character — the same length as the break, so the caret map is
 # unchanged — and `reader` reads it back as a blank line either way.
 BLANK = "<p>%s</p>" % dialect.BLANK_PARAGRAPH
-
-# Qt renders an image at natural size and clips at the pane, so anything wider
-# than this gets a display width. Display only: `reader` never writes a width
-# back into the note, so the note and the backends see the image untouched.
-MAX_IMAGE_DISPLAY = 640
 
 # An image opening a list item is mispainted whether or not a link wraps it
 # (measured on 6.11), so the guard below must see through the anchor.
@@ -44,19 +38,21 @@ INLINE_SPAN = {
 
 def to_html(markdown, highlight=dialect.DEFAULT_HIGHLIGHT, ink=dialect.DEFAULT_HIGHLIGHT_INK,
             link=dialect.DEFAULT_LINK, quote_ink=dialect.DEFAULT_QUOTE_INK,
-            code_background=dialect.DEFAULT_CODE_BACKGROUND):
-    """Markdown text -> HTML for a RichText `TextEdit`."""
-    return _Renderer(highlight, ink, link, quote_ink, code_background).document(parse(markdown or ""))
+            code_background=dialect.DEFAULT_CODE_BACKGROUND, base=""):
+    """Markdown text -> HTML for a RichText `TextEdit`. `base` is the note's
+    own directory, for measuring images the note names by a relative path."""
+    return _Renderer(highlight, ink, link, quote_ink, code_background, base).document(parse(markdown or ""))
 
 
 class _Renderer:
     def __init__(self, highlight, ink, link, quote_ink=dialect.DEFAULT_QUOTE_INK,
-                 code_background=dialect.DEFAULT_CODE_BACKGROUND):
+                 code_background=dialect.DEFAULT_CODE_BACKGROUND, base=""):
         self.highlight = highlight
         self.ink = ink
         self.link = link
         self.quote_ink = quote_ink
         self.code_background = code_background
+        self.base = base
 
     # ---- documents and blocks ------------------------------------------
 
@@ -217,12 +213,14 @@ class _Renderer:
                               self.inline(token.get("children"), heavy)))
             elif kind == "image":
                 # mistune keeps an image's alt text in its children, the way a
-                # link keeps its label — not in attrs.
-                url = token.get("attrs", {}).get("url", "")
+                # link keeps its label — not in attrs. The width is in attrs:
+                # `parse` folds a `{width=N}` marker into the token.
+                attrs = token.get("attrs", {})
+                url = attrs.get("url", "")
                 alt = "".join(c.get("raw", "") for c in token.get("children") or [] if c["type"] == "text")
                 out.append('<img src="%s" alt="%s"%s />' % (_html.escape(url, quote=True),
                                                             _html.escape(alt, quote=True),
-                                                            self.display_width(url)))
+                                                            self.image_width(url, attrs.get("width", 0))))
             elif kind == "linebreak":
                 out.append("<br />")
             elif kind == "softbreak":
@@ -235,11 +233,14 @@ class _Renderer:
                 out.append(_html.escape(token["raw"], quote=False))
         return "".join(out)
 
-    def display_width(self, url):
-        if not url.startswith("file://"):
-            return ""
-        natural = width_of(urllib.parse.unquote(url[len("file://"):]))
-        return ' width="%d"' % MAX_IMAGE_DISPLAY if natural > MAX_IMAGE_DISPLAY else ""
+    def image_width(self, url, width):
+        """A width the note states is the author's and is honoured as given;
+        without one, a local image wider than the pane gets the display cap
+        (dialect.MAX_IMAGE_DISPLAY — display only, `reader` drops it)."""
+        if width:
+            return ' width="%d"' % width
+        natural = width_of(local_path(url, self.base))
+        return ' width="%d"' % dialect.MAX_IMAGE_DISPLAY if natural > dialect.MAX_IMAGE_DISPLAY else ""
 
     def span(self, style, body):
         return '<span style="%s">%s</span>' % (style, body)

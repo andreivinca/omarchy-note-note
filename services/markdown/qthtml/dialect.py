@@ -55,6 +55,20 @@ BLANK_PARAGRAPH = "\u00a0"
 # front of it is invisible and enough; `reader` strips it again.
 IMAGE_LEAD = "\u00a0"
 
+# Qt renders an image at natural size and clips at the pane, so an image that
+# names no width of its own gets this display width when it is larger. The cap
+# is display only and must never reach the note: a width the *author* chose
+# (the corner handle, `![x](y){width=N}` in a note) rides the same `width`
+# attribute, so the two are told apart by this number \u2014 `writer` applies the
+# cap only to a large image with no stated width, and `reader` drops a width
+# that equals the cap on an image the cap would have applied to. The one
+# ambiguity \u2014 an author dragging a large image to exactly this width \u2014 reads
+# as the cap and stays out of the note, which displays identically here and
+# merely leaves the backend's own size unchanged.
+# Mirrored by `maxImageDisplay` in ui/NoteEditor.qml, which fits a fresh
+# paste to the same number.
+MAX_IMAGE_DISPLAY = 640
+
 DEFAULT_HIGHLIGHT = "#f9e2af"
 # A highlight is a light marker colour, so the text on it needs its own dark
 # ink — the editor's foreground is the theme's, and on a dark theme it would

@@ -36,11 +36,16 @@ Item {
   property string codeBackground: "transparent"
 
   // Markdown -> HTML for `TextEdit.text`.  callback(html)
-  function toHtml(markdown, callback) {
+  //
+  // `base` (optional) is the note's own directory, for notes that name their
+  // images by a relative path (local notebooks): it is how the converter
+  // finds and measures them. A directory path, never note content, so it may
+  // ride on argv.
+  function toHtml(markdown, callback, base) {
     if (!markdown) { callback(""); return }
     run(["to-html", "--highlight", root.highlight, "--highlight-ink", root.highlightInk,
          "--link", root.link, "--quote-ink", root.quoteInk,
-         "--code-background", root.codeBackground],
+         "--code-background", root.codeBackground].concat(base ? ["--base", base] : []),
         markdown, function(text) { callback(text) })
   }
 
@@ -52,9 +57,9 @@ Item {
   // only then — an empty answer is not a failure: a note holding one blank
   // line converts to no Markdown at all, and that is the truth about it. The
   // callback always runs: a failed conversion must never lose the note.
-  function toMarkdown(html, callback) {
+  function toMarkdown(html, callback, base) {
     if (!html) { callback("", { blocks: [], count: 0, ok: true }); return }
-    run(["to-markdown", "--with-map"], html, function(text) {
+    run(["to-markdown", "--with-map"].concat(base ? ["--base", base] : []), html, function(text) {
       var result = null
       try { result = JSON.parse(text) } catch (error) { result = null }
       if (!result) { console.warn("note-note: could not read the editor's document"); callback("", { blocks: [], count: 0, ok: false }); return }

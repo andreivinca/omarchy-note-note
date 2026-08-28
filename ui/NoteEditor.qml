@@ -36,6 +36,12 @@ Item {
   // picture. Only providers that can store one accept it.
   property var clipboard: null
   property bool canImages: false
+  // The note's own directory, for notes that name their images by a relative
+  // path (the local provider's `.assets/`): the document resolves the links
+  // against it, and the converter measures the files through it. Set by the
+  // host from load()'s `base`, before the body goes in; "" for backends
+  // whose images are absolute file:// URLs.
+  property string documentBase: ""
   readonly property string highlightColour: root.markdown ? root.markdown.highlight : "#f9e2af"
   readonly property string highlightInk: root.markdown ? root.markdown.highlightInk : "#1e1e2e"
   readonly property string linkColour: root.markdown ? root.markdown.link : "#4282d7"
@@ -59,7 +65,7 @@ Item {
   // The note as it belongs on disk.  callback(markdown)
   function requestMarkdown(callback) {
     if (root.plain || !root.markdown) { callback(plainText()); return }
-    root.markdown.toMarkdown(documentHtml(), function(md) { callback(md) })
+    root.markdown.toMarkdown(documentHtml(), function(md) { callback(md) }, root.documentBase)
   }
 
   // Notice mode: a message with optional buttons shown instead of the note
@@ -121,7 +127,7 @@ Item {
     titleField.cursorPosition = 0
     settingText = false
     if (root.plain || !root.markdown || !body) { showBody(body || "", token); return }
-    root.markdown.toHtml(body, function(html) { root.showBody(html, token) })
+    root.markdown.toHtml(body, function(html) { root.showBody(html, token) }, root.documentBase)
   }
 
   function showBody(document, token) {
@@ -213,6 +219,7 @@ Item {
     // it (providers/onenote/onenote_md.py).
     area.insert(at, '<p><img src="file://' + encodeURI(path).replace(/"/g, "%22") + '" alt="" /></p>')
     guardImageAt(at)
+    fitImageAt(at)
     root.edited()
     root.statusRequestedText = "Image pasted"
   }
@@ -273,7 +280,7 @@ Item {
     root.markdown.toMarkdown(documentHtml(), function(md, map) {
       if (!map.ok) return                         // a failed conversion changes nothing
       edit(md.replace(/\n+$/, "").split("\n"), map)
-    })
+    }, root.documentBase)
   }
 
   // The document block a position sits in. Qt separates blocks with U+2029
@@ -308,7 +315,7 @@ Item {
       root.edited()
       focusEditor()
       if (then) then()
-    })
+    }, root.documentBase)
   }
 
   function setBlockStyle(style) {
@@ -407,11 +414,12 @@ Item {
   }
 
   function updateDecorations() {
-    if (root.plain || area.length === 0) { root.quoteBars = []; root.codeSlabs = []; return }
+    if (root.plain || area.length === 0) { root.quoteBars = []; root.codeSlabs = []; root.imageBoxes = []; return }
     var runs
     if (nativeBlocks.item) {
       if (!nativeBlocks.item.document) nativeBlocks.item.document = area.textDocument
       runs = QuoteBars.runsFromBlocks(nativeBlocks.item.blocks())
+      root.imageBoxes = root.readOnly ? [] : root.imageGeometry()
     } else if (area.length <= 200000) {
       runs = QuoteBars.runs(area.getFormattedText(0, area.length), area.getText(0, area.length))
     } else { root.quoteBars = []; root.codeSlabs = []; return }
@@ -437,6 +445,61 @@ Item {
     var x = a.x - 14
     return { x: x, y: a.y - 8, width: Math.max(0, area.width - x - Style.spacing.xs),
              height: b.y + b.height - a.y + 16 }
+  }
+
+  // ── image resize: a marker on every image's bottom-right corner ─────
+  // Dragging it sets the image's display width (aspect kept), written into
+  // the document by the native inspector as one format-only edit — one undo
+  // step — and into the note as `![alt](src){width=N}` by the converter.
+  // Without the built inspector images simply have no handle: QML can
+  // neither read an image's drawn size nor set one without rewriting HTML.
+  //
+  // [{ position, x, y, width, height }] in the editor's own coordinates.
+  property var imageBoxes: []
+  // Mirrors dialect.MAX_IMAGE_DISPLAY in services/markdown/qthtml — the
+  // display cap the converter puts on a large image that names no width.
+  readonly property int maxImageDisplay: 640
+  readonly property int minImageWidth: 48
+  onReadOnlyChanged: scheduleDecorations()
+
+  function imageGeometry() {
+    var images = nativeBlocks.item.images(), out = []
+    for (var i = 0; i < images.length; i++) {
+      var img = images[i]
+      if (!(img.width > 0) || !(img.height > 0)) continue   // not loaded yet
+      // The caret rectangle before the image is its left edge and its
+      // line's top; the image's bottom sits on its own baseline (ascent).
+      var r = area.positionToRectangle(img.position)
+      out.push({ position: img.position, x: r.x, y: r.y + Math.max(0, img.ascent - img.height),
+                 width: img.width, height: img.height })
+    }
+    return out
+  }
+
+  function resizeImage(position, width) {
+    if (root.readOnly || root.plain || !nativeBlocks.item) return
+    if (!nativeBlocks.item.document) nativeBlocks.item.document = area.textDocument
+    if (!nativeBlocks.item.setImageWidth(position, width)) return
+    root.updateDecorations()
+    root.edited()
+  }
+
+  // A screenshot pastes far wider than the pane; give it the display cap the
+  // loader would apply (maxImageDisplay). The cap never reaches the note —
+  // the converter recognises it — so an untouched paste keeps the note
+  // clean, and the handle is how a width becomes the author's own.
+  function fitImageAt(pos) {
+    if (!nativeBlocks.item) return                // pasted large, capped on reload
+    if (!nativeBlocks.item.document) nativeBlocks.item.document = area.textDocument
+    var text = area.getText(pos, Math.min(pos + 4, area.length)), i = text.indexOf(root.objectChar)
+    if (i < 0) return
+    var images = nativeBlocks.item.images()
+    for (var k = 0; k < images.length; k++)
+      if (images[k].position === pos + i && images[k].naturalWidth > root.maxImageDisplay) {
+        // Joined to the paste's own edit, so one Ctrl+Z takes both.
+        nativeBlocks.item.setImageWidth(pos + i, root.maxImageDisplay, true)
+        return
+      }
   }
 
   function restyleLine(line, style) {
@@ -1076,6 +1139,11 @@ Item {
           // an empty paragraph or an indent, so the document keeps HTML and
           // services/markdown converts at both ends.
           textFormat: root.plain ? TextEdit.PlainText : TextEdit.RichText
+          // Relative image links (a local note's `.assets/…`) resolve
+          // against the note's own folder; without one, the default.
+          baseUrl: root.documentBase
+                   ? "file://" + encodeURI(root.documentBase).replace(/#/g, "%23").replace(/\?/g, "%3F") + "/"
+                   : Qt.resolvedUrl(".")
           font.family: root.bodyFontFamily
           font.pixelSize: Style.font.subtitle
           wrapMode: TextEdit.Wrap
@@ -1134,6 +1202,74 @@ Item {
               width: 4
               height: modelData.height
               color: root.quoteBarColour
+            }
+          }
+
+          // The image resize handles: hovering an image reveals a marker on
+          // its bottom-right corner; dragging it shows the target size as an
+          // outline and applies the width on release (resizeImage). Children
+          // of the editor for the same reason the bars are: they scroll with
+          // it. Hover passes clicks through, so the caret still lands.
+          Repeater {
+            model: root.imageBoxes
+            Item {
+              id: imageBox
+              required property var modelData
+              x: modelData.x
+              y: modelData.y
+              width: modelData.width
+              height: modelData.height
+              property real targetWidth: modelData.width
+              readonly property real targetHeight: imageBox.height * imageBox.targetWidth / Math.max(1, imageBox.width)
+
+              HoverHandler { id: overImage }
+
+              Rectangle {                        // the target size, while dragging
+                visible: grip.pressed
+                width: imageBox.targetWidth
+                height: imageBox.targetHeight
+                color: "transparent"
+                border.color: root.accent
+                border.width: 1
+                radius: 2
+              }
+
+              Rectangle {                        // the marker itself
+                x: (grip.pressed ? imageBox.targetWidth : imageBox.width) - width / 2
+                y: (grip.pressed ? imageBox.targetHeight : imageBox.height) - height / 2
+                width: 10
+                height: 10
+                radius: 2
+                visible: overImage.hovered || grip.containsMouse || grip.pressed
+                color: root.accent
+                border.color: Util.alpha(root.foreground, 0.6)
+                border.width: 1
+              }
+
+              MouseArea {
+                id: grip
+                // The grab area stays on the original corner for the whole
+                // drag — a mouse grab follows the cursor anywhere — so the
+                // mapping below never chases a moving target.
+                x: imageBox.width - 10
+                y: imageBox.height - 10
+                width: 20
+                height: 20
+                hoverEnabled: true
+                cursorShape: Qt.SizeFDiagCursor
+                preventStealing: true
+                onPositionChanged: function(mouse) {
+                  if (!grip.pressed) return
+                  var to = grip.mapToItem(imageBox, mouse.x, mouse.y).x
+                  imageBox.targetWidth = Math.max(root.minImageWidth,
+                    Math.min(to, area.width - imageBox.x - area.rightPadding))
+                }
+                onReleased: {
+                  var w = Math.round(imageBox.targetWidth)
+                  if (w !== Math.round(imageBox.width)) root.resizeImage(imageBox.modelData.position, w)
+                  else imageBox.targetWidth = imageBox.width
+                }
+              }
             }
           }
         }
