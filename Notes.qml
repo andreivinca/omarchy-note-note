@@ -171,9 +171,23 @@ Item {
   // same rule as a tab's ink, and no question asked about which theme is on.
   readonly property string linkColour: Qt.tint(root.foreground, Util.alpha("#4282d7", 0.8)).toString()
 
+  // A quote keeps the theme's own ink at reduced strength; the editor draws
+  // the classic bar beside it and the rounded slab behind a code block
+  // (NoteEditor, block decorations). The document's own code background is
+  // only the dialect's marker for "this block is code", so it is passed
+  // fully transparent — presence is all anything reads back, and Qt Quick
+  // paints even a faint one unevenly (first block only, measured on 6.11).
+  readonly property string quoteInkColour: Qt.tint(root.background, Util.alpha(root.foreground, 0.8)).toString()
+  readonly property string codeBackgroundColour: "transparent"
+
   // Markdown on disk, rich text in the editor: everything the note pane shows
   // or saves passes through here (services/markdown/Markdown.qml).
-  Markdown.Markdown { id: markdownService; link: root.linkColour }
+  Markdown.Markdown {
+    id: markdownService
+    link: root.linkColour
+    quoteInk: root.quoteInkColour
+    codeBackground: root.codeBackgroundColour
+  }
 
   // Pasting a picture into a note; only providers that can store one take it.
   Clipboard.Clipboard { id: clipboardService }

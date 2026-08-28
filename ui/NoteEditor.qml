@@ -1,6 +1,7 @@
 import QtQuick
 import qs.Commons
 import qs.Ui
+import "QuoteBars.js" as QuoteBars
 
 // The right-hand pane, in the shape of Toolroll's workspace: an editable
 // title with a description line beneath, header buttons on the title's line,
@@ -298,7 +299,7 @@ Item {
   // caret < 0 means "the end of the note". Block styles never change the
   // document's text — a heading is a font size, not a `#` — so the caret's
   // position survives the round trip unchanged.
-  function replaceDoc(md, caret) {
+  function replaceDoc(md, caret, then) {
     var pos = caret === undefined ? area.cursorPosition : (caret < 0 ? Number.MAX_VALUE : caret)
     root.markdown.toHtml(md, function(html) {
       area.remove(0, area.length)
@@ -306,6 +307,7 @@ Item {
       area.cursorPosition = Math.max(0, Math.min(pos, area.length))
       root.edited()
       focusEditor()
+      if (then) then()
     })
   }
 
@@ -358,6 +360,85 @@ Item {
     root.inTable = beforeChar === root.cellSep && (afterChar === root.cellSep || afterChar === root.tableEnd)
   }
 
+  // ── block decorations: quote bars and code slabs ────────────────────
+  // Qt rich text has no block borders, padding or rounded corners, so the
+  // classic bar beside a quote and the slab behind a code block cannot live
+  // in the document: the editor draws them — rectangles over each run of
+  // quote or code blocks (QuoteBars.js), placed with positionToRectangle.
+  // Decoration only: they never enter the document, the caret map or the
+  // note. The document's own code background is a near-invisible marker
+  // (the dialect's code signature), not the slab the eye sees.
+  //
+  // The blocks come from the native inspector (cpp/) when it is built, and
+  // from scanning the document's HTML when it is not: the Loader errors on
+  // the missing library and the fallback carries on.
+  property var quoteBars: []
+  property var codeSlabs: []
+  readonly property color quoteBarColour: Util.alpha("#2e75b5", 0.8)
+  readonly property color codeSlabColour: Util.alpha(root.foreground, 0.07)
+  Timer { id: decorTimer; interval: 120; onTriggered: root.updateDecorations() }
+  // With the native inspector the pass is cheap — real block formats, no
+  // serialisation — so it runs synchronously and the bars and slabs move in
+  // the same frame as the edit. The HTML-scan fallback serialises the whole
+  // document, so it keeps the debounce (and huge notes take it too).
+  function scheduleDecorations() {
+    if (nativeBlocks.item && area.length <= 200000) updateDecorations()
+    else decorTimer.restart()
+  }
+  Loader {
+    id: nativeBlocks
+    source: "NativeBlocks.qml"
+    onStatusChanged: if (status === Loader.Error)
+      console.log("note-note: native text inspector not built (sh cpp/build.sh); scanning HTML instead")
+  }
+
+  // Items typed into a list inherit the split item's margins; restore the
+  // canonical form a re-render would give. Called synchronously from the
+  // text change, before the frame paints — on the debounced decorations
+  // tick the wrong margins were visible for a blink first. The flag stops
+  // the format-only change from re-entering as an edit of its own.
+  property bool normalizing: false
+  function normalizeListsNow() {
+    if (root.normalizing || root.plain || root.readOnly || !nativeBlocks.item) return
+    if (!nativeBlocks.item.document) nativeBlocks.item.document = area.textDocument
+    root.normalizing = true
+    nativeBlocks.item.normalizeListMargins()
+    root.normalizing = false
+  }
+
+  function updateDecorations() {
+    if (root.plain || area.length === 0) { root.quoteBars = []; root.codeSlabs = []; return }
+    var runs
+    if (nativeBlocks.item) {
+      if (!nativeBlocks.item.document) nativeBlocks.item.document = area.textDocument
+      runs = QuoteBars.runsFromBlocks(nativeBlocks.item.blocks())
+    } else if (area.length <= 200000) {
+      runs = QuoteBars.runs(area.getFormattedText(0, area.length), area.getText(0, area.length))
+    } else { root.quoteBars = []; root.codeSlabs = []; return }
+    var bars = [], slabs = [], i
+    for (i = 0; i < runs.quote.length; i++) bars.push(root.barGeometry(runs.quote[i].from, runs.quote[i].to))
+    for (i = 0; i < runs.code.length; i++) slabs.push(root.slabGeometry(runs.code[i].from, runs.code[i].to))
+    root.quoteBars = bars
+    root.codeSlabs = slabs
+  }
+
+  function barGeometry(from, to) {
+    var a = area.positionToRectangle(from), b = area.positionToRectangle(to)
+    // The quote's text starts one quote margin in; the bar stands in that
+    // margin, a small gap ahead of the text.
+    return { x: a.x - 16, y: a.y, height: b.y + b.height - a.y }
+  }
+
+  function slabGeometry(from, to) {
+    var a = area.positionToRectangle(from), b = area.positionToRectangle(to)
+    // The code text is inset by the writer's padding margin (CODE_PAD_PX);
+    // the slab reaches back over it, and past the lines vertically, so the
+    // text sits padded inside it. Indented code carries its indent in `a.x`.
+    var x = a.x - 14
+    return { x: x, y: a.y - 8, width: Math.max(0, area.width - x - Style.spacing.xs),
+             height: b.y + b.height - a.y + 16 }
+  }
+
   function restyleLine(line, style) {
     var m = /^([ \t]*)((?:#{1,6}[ \t]+)|(?:[-*+][ \t]+(?:\[[ xX]\][ \t]+)?)|(?:\d+[.)][ \t]+)|(?:>[ \t]+))?([\s\S]*)$/.exec(line)
     var indent = m[1] || "", prefix = m[2] || "", content = m[3] || ""
@@ -405,6 +486,164 @@ Item {
       var out = lines.slice(0, at + 1).concat([""], md.split("\n"), [""])
       if (!atEnd) out = out.concat(rest)
       replaceDoc(out.join("\n"), atEnd ? -1 : area.cursorPosition)
+    })
+  }
+
+  // An empty code block, ready to type into. Its one empty line is held open
+  // by a filler character (services/markdown/qthtml/dialect.py,
+  // EMPTY_CODE_LINE); selecting the filler puts the caret in the block with
+  // the monospace format, and the first keystroke replaces it — the converter
+  // strips a leftover one anyway.
+  function insertCodeBlock() {
+    withMarkdown(function(lines, map) {
+      var at = blockEndLine(lines, Math.min(caretLine(map), lines.length - 1))
+      var rest = lines.slice(at + 1)
+      var atEnd = rest.join("").trim() === ""
+      var out = lines.slice(0, at + 1).concat(["", "```", "", "```", ""])
+      if (!atEnd) out = out.concat(rest)
+      // The new block lands right after the last document block at or before
+      // the insertion line; fence lines and blanks own no block (NO_BLOCK).
+      var block = -1
+      for (var i = 0; i <= at && i < (map.blocks || []).length; i++)
+        if (map.blocks[i] > block) block = map.blocks[i]
+      replaceDoc(out.join("\n"), area.cursorPosition, function() { selectBlock(block + 1) })
+    })
+  }
+
+  // Where a document block's content starts: blocks begin after each
+  // paragraph or cell separator (blockAt counts them the same way).
+  function blockStart(block) {
+    var t = area.getText(0, area.length), n = 0, start = 0
+    for (var i = 0; i < t.length && n < block; i++) {
+      var c = t.charCodeAt(i)
+      if (c === 0x2029 || c === 0xFDD0) { n++; start = i + 1 }
+    }
+    return start
+  }
+
+  // Select the (single-character) content of a document block.
+  function selectBlock(block) {
+    var start = blockStart(block)
+    area.select(start, Math.min(start + 1, area.length))
+  }
+
+  // ── leaving a block: the second Enter ───────────────────────────────
+  // Qt's own Enter continues a code block, quote or list with a fresh empty
+  // line; Enter again on that empty line leaves the block instead. The edit
+  // takes the same markdown trip as every block tool (docs/decisions.md):
+  // the empty line comes off the block, a blank paragraph lands after it,
+  // and its filler is selected so typing starts clean.
+
+  // The caret's block as the dialect sees it: its kind (code line, quote
+  // line, list item), whether it is empty, and whether it ends its run —
+  // from the native inspector when built, from the document's HTML when not.
+  function blockInfoAt(pos) {
+    // The full text once, indexed — never ranged getText, which answers
+    // with the whole table for any range touching one (see updateInTable).
+    var t = area.getText(0, area.length)
+    var kind = "", next = "", start = -1, end = -1
+    if (nativeBlocks.item) {
+      if (!nativeBlocks.item.document) nativeBlocks.item.document = area.textDocument
+      var bs = nativeBlocks.item.blocks()
+      for (var i = 0; i < bs.length; i++) {
+        if (pos < bs[i].position || pos > bs[i].end) continue
+        start = bs[i].position; end = bs[i].end
+        kind = bs[i].list ? "list" : QuoteBars.kindOfBlock(bs[i])
+        if (i + 1 < bs.length) next = bs[i + 1].list ? "list" : QuoteBars.kindOfBlock(bs[i + 1])
+        break
+      }
+    } else if (area.length <= 200000) {
+      var n = 0
+      start = 0; end = t.length
+      for (var j = 0; j < t.length; j++) {
+        var c = t.charCodeAt(j)
+        if (c !== 0x2029 && c !== 0xFDD0) continue
+        if (j < pos) { n++; start = j + 1 } else { end = j; break }
+      }
+      var ks = QuoteBars.kinds(area.getFormattedText(0, area.length))
+      kind = inListItem(pos) ? "list" : (ks[n] || "")
+      if (end < t.length) next = inListItem(end + 1) ? "list" : (ks[n + 1] || "")
+    }
+    if (start < 0) return null
+    var text = t.substring(start, end)
+    return { kind: kind, empty: text === "" || text === root.imageLead, last: next !== kind }
+  }
+
+  // Code and quotes leave only from their run's last line (an empty line
+  // higher up is content); an empty list item leaves from anywhere,
+  // splitting the list the way every editor does.
+  function returnLeavesBlock() {
+    if (root.readOnly || root.plain || area.selectionStart !== area.selectionEnd) return false
+    if (root.tableReturn()) return true
+    var b = blockInfoAt(area.cursorPosition)
+    if (!b || !b.empty || !b.kind) return false
+    if (b.kind !== "list" && !b.last) return false
+    root.leaveBlock(b.kind)
+    return true
+  }
+
+  // Enter in a table's last cell makes an extra line inside the cell (Qt's
+  // own behaviour); Enter again on that empty line takes it out and starts
+  // a new row, caret in its first cell. That empty line is the one block
+  // bounded by a paragraph separator and the table's end character.
+  function tableReturn() {
+    // The caret's block, bounded by a paragraph separator and the table's
+    // end, holding nothing or only a filler space (an empty cell's, pushed
+    // down by typing before it). Read the full text and index it: a ranged
+    // getText touching a table answers with the whole table (updateInTable).
+    var pos = area.cursorPosition
+    if (pos <= 0 || pos >= area.length) return false
+    var t = area.getText(0, area.length)
+    var sep = function(c) { return c === 0x2029 || c === 0xFDD0 || c === 0xFDD1 }
+    var start = pos, end = pos
+    while (start > 0 && !sep(t.charCodeAt(start - 1))) start--
+    while (end < t.length && !sep(t.charCodeAt(end))) end++
+    if (start === 0 || end === t.length) return false
+    if (t.charCodeAt(start - 1) !== 0x2029 || t.charCodeAt(end) !== 0xFDD1) return false
+    var body = t.substring(start, end)
+    if (body !== "" && body !== root.imageLead) return false
+    root.leaveTableRow()
+    return true
+  }
+
+  function leaveTableRow() {
+    withMarkdown(function(lines, map) {
+      var cellBlock = blockAt(area.cursorPosition) - 1   // the extra line adds one
+      var last = lineOfBlock(map, cellBlock)
+      if (!/^\s*\|/.test(lines[last] || "")) return
+      var first = last
+      while (first > 0 && /^\s*\|/.test(lines[first - 1])) first--
+      var cols = splitRow(lines[first]).length
+      var cells = []
+      for (var k = 0; k < cols; k++) cells.push("")
+      var out = lines.slice(0, last + 1).concat([joinRow(cells)], lines.slice(last + 1))
+      // a row's line carries its first cell's block; the new row's first
+      // cell comes one row of cells later
+      var target = map.blocks[last] + cols
+      replaceDoc(out.join("\n"), area.cursorPosition,
+                 function() { area.cursorPosition = root.blockStart(target) })
+    })
+  }
+
+  function leaveBlock(kind) {
+    withMarkdown(function(lines, map) {
+      var i = caretLine(map)
+      var target = map.blocks[i]
+      var out = lines.slice()
+      if (kind === "code") {
+        // the caret's line is the fence's empty last line; it comes out,
+        // and the blank goes in after the closing fence
+        if (out[i] !== "") return
+        out.splice(i, 1)
+        if (!/^\s*```/.test(out[i] || "")) return
+        out.splice(i + 1, 0, "", " ", "")
+      } else if (kind === "list") {
+        out.splice(i, 1, "", " ", "")
+      }
+      // a quote's empty line already reads back as a blank paragraph
+      // (kept in the map now, trimmed only on save): re-rendering the
+      // markdown is the whole edit
+      replaceDoc(out.join("\n"), area.cursorPosition, function() { selectBlock(target) })
     })
   }
 
@@ -506,7 +745,7 @@ Item {
       case "table": insertSnippet("| Column 1 | Column 2 |\n|---|---|\n|  |  |"); break
       case "addRow": case "addCol": case "delRow": case "delCol": tableOp(id); break
       case "rule": insertSnippet("---"); break
-      case "codeblock": insertSnippet("```\ncode\n```"); break
+      case "codeblock": insertCodeBlock(); break
       case "link": openLinkBar(); break
     }
   }
@@ -800,6 +1039,21 @@ Item {
           else if (contentY + height <= r.y + r.height) contentY = r.y + r.height - height
         }
 
+        // The code slabs, painted behind the editor so the text sits on
+        // them; the bars above it live at the bottom of the TextEdit.
+        Repeater {
+          model: root.codeSlabs
+          Rectangle {
+            required property var modelData
+            x: modelData.x
+            y: modelData.y
+            width: modelData.width
+            height: modelData.height
+            radius: 6
+            color: root.codeSlabColour
+          }
+        }
+
         TextEdit {
           id: area
           width: flick.width
@@ -808,6 +1062,12 @@ Item {
           height: Math.max(implicitHeight, flick.height)
           leftPadding: Style.spacing.xs
           rightPadding: Style.spacing.xs
+          // Room for the code slab's vertical overhang (slabGeometry): a
+          // block at either end of the note would otherwise push the slab's
+          // rounded corners past the content edge, where the Flickable's
+          // clip squares them off.
+          topPadding: 8
+          bottomPadding: 8
           readOnly: !root.hasNote || root.readOnly
           color: root.foreground
           selectionColor: Style.selectionFill
@@ -823,10 +1083,19 @@ Item {
           Keys.priority: Keys.BeforeItem
           Keys.onPressed: function(event) {
             root.shortcut(event)
-            if (!event.accepted && !root.plain && (event.key === Qt.Key_Return || event.key === Qt.Key_Enter)) root.beforeReturn()
+            if (event.accepted || root.plain) return
+            if (event.key !== Qt.Key_Return && event.key !== Qt.Key_Enter) return
+            if (!(event.modifiers & (Qt.ControlModifier | Qt.ShiftModifier | Qt.AltModifier))
+                && root.returnLeavesBlock()) { event.accepted = true; return }
+            root.beforeReturn()
           }
           onCursorRectangleChanged: flick.ensureVisible(cursorRectangle)
+          onWidthChanged: root.scheduleDecorations()
+          onImplicitHeightChanged: root.scheduleDecorations()
           onTextChanged: {
+            if (root.normalizing) return
+            root.normalizeListsNow()
+            root.scheduleDecorations()
             if (root.settingText) return
             root.applyPendingToInsertion()
             root.edited()
@@ -844,6 +1113,7 @@ Item {
           Text {
             anchors.fill: parent
             anchors.leftMargin: Style.spacing.xs
+            anchors.topMargin: area.topPadding
             visible: area.length === 0 && !!root.placeholder
             text: root.placeholder
             color: root.foreground
@@ -851,6 +1121,20 @@ Item {
             font.family: root.bodyFontFamily
             font.pixelSize: Style.font.subtitle
             wrapMode: Text.Wrap
+          }
+
+          // The quote bars, drawn in the quotes' left margin — children of
+          // the editor, so they scroll with it and share its coordinates.
+          Repeater {
+            model: root.quoteBars
+            Rectangle {
+              required property var modelData
+              x: modelData.x
+              y: modelData.y
+              width: 4
+              height: modelData.height
+              color: root.quoteBarColour
+            }
           }
         }
       }

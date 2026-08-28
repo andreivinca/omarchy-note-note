@@ -43,16 +43,20 @@ INLINE_SPAN = {
 
 
 def to_html(markdown, highlight=dialect.DEFAULT_HIGHLIGHT, ink=dialect.DEFAULT_HIGHLIGHT_INK,
-            link=dialect.DEFAULT_LINK):
+            link=dialect.DEFAULT_LINK, quote_ink=dialect.DEFAULT_QUOTE_INK,
+            code_background=dialect.DEFAULT_CODE_BACKGROUND):
     """Markdown text -> HTML for a RichText `TextEdit`."""
-    return _Renderer(highlight, ink, link).document(parse(markdown or ""))
+    return _Renderer(highlight, ink, link, quote_ink, code_background).document(parse(markdown or ""))
 
 
 class _Renderer:
-    def __init__(self, highlight, ink, link):
+    def __init__(self, highlight, ink, link, quote_ink=dialect.DEFAULT_QUOTE_INK,
+                 code_background=dialect.DEFAULT_CODE_BACKGROUND):
         self.highlight = highlight
         self.ink = ink
         self.link = link
+        self.quote_ink = quote_ink
+        self.code_background = code_background
 
     # ---- documents and blocks ------------------------------------------
 
@@ -105,19 +109,42 @@ class _Renderer:
         # A paragraph holding only the blank-line character *is* a blank line.
         if body.strip() in ("", dialect.BLANK_PARAGRAPH):
             return BLANK
+        if quote:
+            # The margins carry the meaning; the ink is what makes it read as
+            # a quote rather than an indent. `reader` never reads colour.
+            body = self.span("color:%s;" % self.quote_ink, body)
         return "<p%s>%s</p>" % (self.block_style(indent, quote), body)
 
     def code(self, token, indent):
-        """Qt has no <pre>: a code block is consecutive monospace paragraphs."""
-        style = self.block_style(indent, quote=False)
+        """Qt has no <pre>: a code block is consecutive monospace paragraphs
+        on the block background that marks them as one (dialect). The visible
+        slab is the editor's (NoteEditor, code slabs) — the background here
+        is the marker, passed in near-invisible by the app.
+
+        Vertical margins are zeroed or Qt's default 12px would split the
+        block between lines; the neighbours' own margins keep it clear of
+        them (Qt spaces blocks by the larger of the two facing margins). The
+        left margin is the text's padding inside the slab the editor draws
+        reaching CODE_PAD_PX back over it; `reader` ignores a code line's
+        margins, so it never reads back as an indent."""
+        margin = indent * dialect.INDENT_PX + dialect.CODE_PAD_PX
+        style = ' style="margin-top:0px; margin-bottom:0px; margin-left:%dpx; background-color:%s;"' % (
+            margin, self.code_background)
         lines = token.get("raw", "").rstrip("\n").split("\n")
         return ['<p%s><span style="font-family:\'%s\';">%s</span></p>'
-                % (style, dialect.MONO_FAMILY, _html.escape(line, quote=False) or "<br />")
+                % (style, dialect.MONO_FAMILY,
+                   _html.escape(line, quote=False) or dialect.EMPTY_CODE_LINE)
                 for line in lines]
 
     def block_style(self, indent, quote):
         if quote:
-            return ' style="margin-left:%dpx; margin-right:%dpx;"' % (dialect.QUOTE_PX, dialect.QUOTE_PX)
+            # Zeroed vertical margins so neighbouring quote paragraphs read
+            # as one quote — the bar the editor draws over them (NoteEditor,
+            # quote bars) spans the run without a gap; the neighbours' own
+            # margins keep the block clear of everything else.
+            return (' style="margin-top:0px; margin-bottom:0px;'
+                    ' margin-left:%dpx; margin-right:%dpx;"'
+                    % (dialect.QUOTE_PX, dialect.QUOTE_PX))
         if indent > 0:
             return ' style="margin-left:%dpx;"' % (indent * dialect.INDENT_PX)
         return ""
@@ -153,7 +180,11 @@ class _Renderer:
             elif part["type"] == "table_body":
                 rows.extend([self.inline(c.get("children")) for c in row.get("children") or []]
                             for row in part.get("children") or [])
-        cells = "".join("<tr>%s</tr>" % "".join("<td><p>%s</p></td>" % (c or "<br />") for c in row)
+        # An empty cell holds one non-breaking space, not a <br />: the break
+        # opens a second line inside the cell (same trap as BLANK), and the
+        # reader strips the space with the cell's edges either way.
+        cells = "".join("<tr>%s</tr>" % "".join("<td><p>%s</p></td>" % (c or dialect.BLANK_PARAGRAPH)
+                                                for c in row)
                         for row in rows)
         # cellspacing 0 or every cell's border sits beside the table's own and
         # the grid reads doubled; the padding is what keeps text off the rules.

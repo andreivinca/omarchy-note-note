@@ -6,7 +6,7 @@
 |---|---|
 | Host | `omarchy-shell` — one long-running [Quickshell](https://quickshell.org) (Qt 6 / QML) process; the plugin is loaded into it |
 | Language | QML + JavaScript (ES5-era engine, see [engine-notes](engine-notes.md)), plus Python 3 for backends |
-| Dependencies | **standard library only**; no `pip`, no system packages. Markdown parsing uses a *vendored* mistune (BSD-3, `services/markdown/mistune/`) |
+| Dependencies | **standard library only**; no `pip`, no system packages. Markdown parsing uses a *vendored* mistune (BSD-3, `services/markdown/mistune/`). One exception, and it is optional: the native text inspector (`cpp/`) is compiled locally against the system Qt (`sh cpp/build.sh`) — the editor falls back to script when it is absent, so nothing ever *requires* a build |
 | External binaries | `python3`, `sh`, `rm`, `mkdir`, `inotifywait`, `wl-copy`, `wl-paste`, `xdg-open`; ImageMagick optional |
 | Privileges | none — no sudo, no pkexec, no services, no config files of other apps |
 | Sandbox | none: an Omarchy plugin runs unsandboxed inside the shell. Behave accordingly |
@@ -22,6 +22,10 @@ ui/NoteList.qml             sidebar (rows, drag, scrolling, the coloured page)
 ui/NotebookTabs.qml         the binder rail down the left edge
 ui/TabColors.js             the tab palette, and the wash both it and the page use
 ui/NoteEditor.qml           title, toolbar, editor, notices and provider views
+ui/QuoteBars.js             where the quote bars go (native blocks or HTML scan)
+ui/NativeBlocks.qml         the optional import of the native inspector
+cpp/                        the native text inspector: QTextDocument block formats
+                            for QML (textblocks.h, build.sh, its own selftest.py)
 providers/PROVIDERS.md      the provider contract — the file to read first
 providers/local/            Markdown folders in ~/Notes
 providers/sticky/           Microsoft Sticky Notes  (sticky.py)

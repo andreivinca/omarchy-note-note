@@ -84,11 +84,20 @@ against these, and `qthtml/selftest.py` fails the moment one changes.
 | written as | comes back as | read as |
 |---|---|---|
 | `<h1>` | a paragraph with `font-size:xx-large; font-weight:700` (the tag survives only below the first block) | heading level, from the size |
-| `<blockquote>` | a paragraph with `margin-left:40px; margin-right:40px` | quote (both margins) |
-| `<pre>` | a paragraph whose runs are `font-family:'monospace'` | fenced code (neighbouring ones merge) |
+| `<blockquote>` | a paragraph with `margin-left:40px; margin-right:40px` (the writer adds a muted-colour span for the eye, and the editor draws the quote bar itself, outside the document — Qt has no block borders) | quote (both margins) |
+| `<pre>` | a paragraph whose runs are `font-family:'monospace'`, on a block-level `background-color` (a near-invisible marker — the visible slab is drawn by the editor, over the document), without a quote's margins; its left margin is padding, not indent | fenced code (neighbouring ones merge; all-monospace *without* the block background is inline code, and *with* quote margins it is a quote of inline code; a code line's margins are never read back) |
 | indentation | `margin-left: 36px` per level, right margin 0 | indent level |
 | a checkbox | `<li class="unchecked">` / `class="checked"` | `- [ ]` / `- [x]` |
 | a highlight | `background-color:` on the span — **kept**, unlike in Markdown | `==text==` |
+
+**Block backgrounds survive on the paragraph** (measured on 6.11): a
+`background-color` in a `<p>`'s style comes back in the same place, is not
+copied onto spans that already exist, and zeroed vertical margins
+(`margin-top:0px; margin-bottom:0px`, which keep a code block one slab) come
+back zeroed. The one trap: on a paragraph holding *loose* text — no span —
+Qt wraps the text in a new span carrying the same `background-color`, which
+the reader would read as a highlight. So a block background may only sit on
+a paragraph whose text is entirely inside spans — a code line's always is.
 
 **Read the document as a range, not as `text`.** `getFormattedText(0, length)`
 is what the converter is written against: Qt brackets a range with fragment

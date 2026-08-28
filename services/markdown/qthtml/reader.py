@@ -42,8 +42,17 @@ NO_BLOCK = -1
 
 
 def to_markdown(html):
-    """HTML from a RichText `TextEdit` -> Markdown text."""
-    return convert(html)["markdown"]
+    """HTML from a RichText `TextEdit` -> Markdown text, as it belongs on
+    disk: trailing blank lines are the editor's (the line the caret parks on
+    after leaving a block), not the note's, so they are trimmed here — and
+    only here. `convert` keeps them, because the toolbar's caret map must
+    name every line the caret can be on; trimming there sent block tools to
+    the line above whenever the caret sat on a trailing blank."""
+    markdown = convert(html)["markdown"]
+    lines = markdown.rstrip("\n").split("\n") if markdown else []
+    while lines and not lines[-1].strip():
+        lines.pop()
+    return "\n".join(lines) + "\n" if lines else ""
 
 
 def convert(html):
@@ -127,6 +136,11 @@ class _Reader:
         body = self.inline(node.children)
 
         if not body.strip():
+            # An empty block still carrying the code marker is an empty line
+            # *inside* a code block — the one typing Enter there makes — not
+            # a blank between blocks: read it as code or the fence splits.
+            if dialect.has_block_background(style) and not dialect.is_quote(style):
+                return [_Chunk("code", [""], [at])]
             return [_Chunk("blank", [dialect.BLANK_PARAGRAPH], [at])]
 
         level = self.heading_level(node, style)
@@ -134,8 +148,8 @@ class _Reader:
             head = self.inline(node.children, IN_HEADING).strip()
             return [_Chunk("heading", ["#" * level + " " + head], [at])]
 
-        if self.is_code(node):
-            lines = self.plain(node.children).split("\n")
+        if self.is_code(node, style):
+            lines = [_code_line(line) for line in self.plain(node.children).split("\n")]
             return [_Chunk("code", lines, [at] * len(lines))]
 
         prefix = "> " if dialect.is_quote(style) else INDENT_TEXT * dialect.indent_level(style)
@@ -155,8 +169,14 @@ class _Reader:
             return dialect.heading_level(dialect.style_map(spans[0].style))
         return 0
 
-    def is_code(self, node):
-        """A code block is a paragraph whose every run is monospace."""
+    def is_code(self, node, style):
+        """A code block is a paragraph of monospace runs on a block
+        background, without a quote's margins: all-monospace with no slab is
+        a paragraph of inline code (`` `x` `` alone on a line, or a run the
+        code tool set), and on a quote's margins it is a quote of inline
+        code, whatever background pasted HTML may have brought along."""
+        if not dialect.has_block_background(style) or dialect.is_quote(style):
+            return False
         runs = [c for c in node.children if c.tag == "span"]
         loose = "".join(c.text or "" for c in node.children if c.tag is None)
         return bool(runs) and not loose.strip() and all(
@@ -331,6 +351,18 @@ def _wrap(marker, body):
     return lead + marker + stripped + marker + tail
 
 
+def _code_line(line):
+    """One filler (dialect.EMPTY_CODE_LINE) may sit at either end of a code
+    line: the writer's empty-line filler, or the same character left where the
+    user typed beside it. It is never the author's — the editor has no way to
+    type one — so one comes off each end."""
+    if line.startswith(dialect.EMPTY_CODE_LINE):
+        line = line[1:]
+    if line.endswith(dialect.EMPTY_CODE_LINE):
+        line = line[:-1]
+    return line
+
+
 # ---- assembling -----------------------------------------------------------
 
 def _rows(node):
@@ -372,7 +404,9 @@ def _merge_code(chunks):
 
 
 def _join(chunks, total):
-    """Blocks are separated by a blank line; items and rows inside one are not."""
+    """Blocks are separated by a blank line; items and rows inside one are
+    not. Trailing blanks stay: the caret map covers every line (see
+    `to_markdown`, which is where they come off for the note on disk)."""
     lines, blocks = [], []
     for index, chunk in enumerate(chunks):
         if index:
@@ -380,9 +414,6 @@ def _join(chunks, total):
             blocks.append(NO_BLOCK)
         lines.extend(chunk.lines)
         blocks.extend(chunk.blocks)
-    while lines and not lines[-1].strip():
-        lines.pop()
-        blocks.pop()
     return {"markdown": "\n".join(lines) + "\n" if lines else "", "blocks": blocks, "count": total}
 
 

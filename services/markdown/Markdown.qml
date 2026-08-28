@@ -28,11 +28,19 @@ Item {
   // never looks at one.
   property string link: "#4282d7"
 
+  // A quote's ink and the slab behind a code block, both set by the host
+  // from the theme (Notes.qml). Neither reaches disk: the quote's meaning is
+  // its margins (its bar is drawn by the editor, over the document), the
+  // code block's is its monospace runs on *a* block background.
+  property string quoteInk: "#9399b2"
+  property string codeBackground: "transparent"
+
   // Markdown -> HTML for `TextEdit.text`.  callback(html)
   function toHtml(markdown, callback) {
     if (!markdown) { callback(""); return }
     run(["to-html", "--highlight", root.highlight, "--highlight-ink", root.highlightInk,
-         "--link", root.link],
+         "--link", root.link, "--quote-ink", root.quoteInk,
+         "--code-background", root.codeBackground],
         markdown, function(text) { callback(text) })
   }
 

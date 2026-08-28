@@ -217,6 +217,58 @@ The backend stores the subject as a copy of the first body line and offers no
 ordering — exposing a title field or drag handles would be inventing
 behaviour the backend cannot keep.
 
+### The quote bar is an overlay; block formats are read natively when built
+
+Qt rich text has no block borders, so the classic bar beside a quote cannot
+live in the document: the editor draws it over the `TextEdit`, anchored with
+`positionToRectangle` (NoteEditor, quote bars). Decoration only — it never
+touches the document, the caret map or the note.
+
+Finding the quote blocks is the part with options. QML alone can see the
+document only as serialised HTML, so the first implementation scanned that
+with a regex — workable, but a third private copy of "what counts as a
+block, in what order" (the reader and the caret map are the other two), and
+its first disagreement was found the day a second opinion existed. So block
+formats are now read natively: a ~80-line C++ class (`cpp/textblocks.h`)
+that takes the TextEdit's `textDocument` and answers with each block's
+position and margins — read-only, so the worst it can do is misplace a bar.
+
+*Considered:* requiring the native module. *Rejected:* every user would need
+a compile step `omarchy plugin add` cannot run, and native code loads into
+the one shared shell process, where a crash takes everything down — a hard
+sell for a decoration. *Considered:* a different rich text editor. *Rejected:*
+inside Quickshell there is none — QML offers this engine or a
+QtWebEngine-sized dependency, and either way the tested dialect would be
+abandoned for it.
+
+*Chosen:* the module is optional. It is built locally against the system Qt
+(`sh cpp/build.sh` — on Arch the headers ship with `qt6-declarative`) and
+loaded through a directory import behind a `Loader` (ui/NativeBlocks.qml);
+when the library is absent the Loader errors and the editor keeps using the
+HTML scan (ui/QuoteBars.js). `cpp/selftest.py` runs every round-trip case
+through a real document and asserts the two find the same bars, so the
+fallback cannot drift from the native truth unnoticed.
+
+### Leaving a block is the second Enter
+
+Enter inside a code block, quote or list continues it — that is Qt's own
+behaviour and the right one. The way *out* is Enter again on the empty line
+that continuation just made: the empty line comes off the block and a blank
+paragraph lands after it, filler selected so typing starts clean. Code and
+quotes leave only from their run's last line (an empty line higher up is
+content); an empty list item leaves from anywhere, splitting the list the
+way every editor does. In a table, the second Enter in the last cell turns
+the extra in-cell line into a new row, caret in its first cell.
+
+The edit is not a hand-rolled document surgery: the editor detects the
+situation synchronously (the native inspector's block formats, or the HTML
+scan as fallback; the table case is two characters next to the caret) and
+then takes the same markdown trip as every block tool. One rule made this
+expressible: an empty block still carrying the code marker reads back as an
+empty line *inside* the fence (`reader.paragraph`), not as a blank between
+blocks — which also stopped a typed blank line from splitting a code block
+on save.
+
 ### Read-only rather than lossy writes
 
 A OneNote page with images or more than the block/section caps, a Notion page
