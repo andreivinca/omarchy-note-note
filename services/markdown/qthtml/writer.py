@@ -13,13 +13,16 @@ from ._vendor import parse
 from .imagesize import local_path, width_of
 
 RULE = "<hr />"
+# Stated on every block (dialect.LINE_HEIGHT_PCT): Qt keeps the value per
+# block and hands it back untouched, so the form is a fixpoint.
+LINE_HEIGHT = "line-height:%d%%;" % dialect.LINE_HEIGHT_PCT
 # An empty block, drawn one line high. It cannot be `<p></p>` (Qt drops a
 # block with nothing in it) and it must not be `<p><br /></p>`: the break
 # opens a *second* line inside the block, so every deliberate blank line
 # would be drawn twice as tall as one. A single non-breaking space is one
 # line, one character — the same length as the break, so the caret map is
 # unchanged — and `reader` reads it back as a blank line either way.
-BLANK = "<p>%s</p>" % dialect.BLANK_PARAGRAPH
+BLANK = '<p style="%s">%s</p>' % (LINE_HEIGHT, dialect.BLANK_PARAGRAPH)
 
 # An image opening a list item is mispainted whether or not a link wraps it
 # (measured on 6.11), so the guard below must see through the anchor.
@@ -100,8 +103,8 @@ class _Renderer:
         span = 'font-size:%s; font-weight:%d;' % (dialect.HEADING_FONT_SIZE[level], dialect.BOLD_WEIGHT)
         # Inside a heading the author's bold is written heavier, so that it
         # survives a document where the heading itself is already bold.
-        return '<h%d><span style="%s">%s</span></h%d>' % (
-            level, span, self.inline(token.get("children"), heavy=True), level)
+        return '<h%d style="%s"><span style="%s">%s</span></h%d>' % (
+            level, LINE_HEIGHT, span, self.inline(token.get("children"), heavy=True), level)
 
     def paragraph(self, token, indent, quote):
         body = self.inline(token.get("children"))
@@ -127,8 +130,8 @@ class _Renderer:
         reaching CODE_PAD_PX back over it; `reader` ignores a code line's
         margins, so it never reads back as an indent."""
         margin = indent * dialect.INDENT_PX + dialect.CODE_PAD_PX
-        style = ' style="margin-top:0px; margin-bottom:0px; margin-left:%dpx; background-color:%s;"' % (
-            margin, self.code_background)
+        style = ' style="margin-top:0px; margin-bottom:0px; margin-left:%dpx; background-color:%s; %s"' % (
+            margin, self.code_background, LINE_HEIGHT)
         lines = token.get("raw", "").rstrip("\n").split("\n")
         return ['<p%s><span style="font-family:\'%s\';">%s</span></p>'
                 % (style, dialect.MONO_FAMILY,
@@ -142,11 +145,11 @@ class _Renderer:
             # quote bars) spans the run without a gap; the neighbours' own
             # margins keep the block clear of everything else.
             return (' style="margin-top:0px; margin-bottom:0px;'
-                    ' margin-left:%dpx; margin-right:%dpx;"'
-                    % (dialect.QUOTE_PX, dialect.QUOTE_PX))
+                    ' margin-left:%dpx; margin-right:%dpx; %s"'
+                    % (dialect.QUOTE_PX, dialect.QUOTE_PX, LINE_HEIGHT))
         if indent > 0:
-            return ' style="margin-left:%dpx;"' % (indent * dialect.INDENT_PX)
-        return ""
+            return ' style="margin-left:%dpx; %s"' % (indent * dialect.INDENT_PX, LINE_HEIGHT)
+        return ' style="%s"' % LINE_HEIGHT
 
     # ---- lists ----------------------------------------------------------
 
@@ -167,7 +170,7 @@ class _Renderer:
         nested = "".join(self.list(c, indent, quote)
                          for c in token.get("children") or [] if c["type"] == "list")
         css = ' class="%s"' % dialect.CHECK_CLASS[bool(checked)] if is_task else ""
-        return "<li%s>%s%s</li>" % (css, body, nested)
+        return '<li%s style="%s">%s%s</li>' % (css, LINE_HEIGHT, body, nested)
 
     # ---- tables ---------------------------------------------------------
 
@@ -182,7 +185,8 @@ class _Renderer:
         # An empty cell holds one non-breaking space, not a <br />: the break
         # opens a second line inside the cell (same trap as BLANK), and the
         # reader strips the space with the cell's edges either way.
-        cells = "".join("<tr>%s</tr>" % "".join("<td><p>%s</p></td>" % (c or dialect.BLANK_PARAGRAPH)
+        cells = "".join("<tr>%s</tr>" % "".join('<td><p style="%s">%s</p></td>'
+                                                % (LINE_HEIGHT, c or dialect.BLANK_PARAGRAPH)
                                                 for c in row)
                         for row in rows)
         # cellspacing 0 or every cell's border sits beside the table's own and

@@ -207,6 +207,34 @@ public:
         }
     }
 
+    // The dialect states its line height on every block it writes
+    // (qthtml/writer.py), but a block born outside the writer — the first
+    // block of a note opened empty, or blocks a paste brings in from
+    // another program — carries Qt's default instead, and drifts from the
+    // form a re-render would give it. This restores that form, the same
+    // way normalizeListMargins does: format-only, joined to the edit that
+    // made the block, and never reaching the note (the reader ignores a
+    // block's line height).
+    Q_INVOKABLE void normalizeLineHeights()
+    {
+        // Mirrors LINE_HEIGHT_PCT in qthtml/dialect.py.
+        constexpr qreal percent = 130;
+        QTextDocument *doc = m_document ? m_document->textDocument() : nullptr;
+        if (!doc)
+            return;
+        for (QTextBlock block = doc->begin(); block.isValid(); block = block.next()) {
+            QTextBlockFormat format = block.blockFormat();
+            if (format.lineHeightType() == QTextBlockFormat::ProportionalHeight
+                && qFuzzyCompare(format.lineHeight(), percent))
+                continue;
+            format.setLineHeight(percent, QTextBlockFormat::ProportionalHeight);
+            QTextCursor cursor(block);
+            cursor.joinPreviousEditBlock();
+            cursor.setBlockFormat(format);
+            cursor.endEditBlock();
+        }
+    }
+
     // A block with no characters directly above a table takes no height:
     // Qt hides it — the same rule that hides the empty block Qt itself
     // puts over a document-opening table — so Enter at a list's end, or a

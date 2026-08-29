@@ -98,6 +98,16 @@ Window {
     e.undo()
     gap.lenUndone = e.length
     out.tableGap = gap
+    // The line-height phase: a note opened empty holds the one block the
+    // writer never styled; typing into it stays at Qt's default until
+    // normalizeLineHeights restores the dialect's value (textblocks.h).
+    e.text = ""
+    e.forceActiveFocus()
+    tc.keyClick(Qt.Key_X)
+    var lh = { typed: e.getFormattedText(0, e.length) }
+    tb.normalizeLineHeights()
+    lh.normalized = e.getFormattedText(0, e.length)
+    out.lineHeight = lh
     console.error("<<<RESULT>>>" + JSON.stringify(out) + "<<<END>>>")
     Qt.exit(0)
   } }
@@ -228,6 +238,11 @@ def main():
     failures += gap_failures
     print("  %s" % ("ok" if not gap_failures else "%d failure(s)" % gap_failures))
 
+    print("line height: typing into a note opened empty")
+    height_failures = check_line_height(results.get("lineHeight") or {}, args.verbose)
+    failures += height_failures
+    print("  %s" % ("ok" if not height_failures else "%d failure(s)" % height_failures))
+
     print("\n%s" % ("all green" if not failures else "%d failure(s)" % failures))
     return 1 if failures else 0
 
@@ -278,6 +293,29 @@ def check_table_gap(result, verbose):
         ("one undo removes row and filler",
          result.get("lenUndone") == result.get("lenBefore"),
          (result.get("lenUndone"), result.get("lenBefore"))),
+    ]
+    failures = 0
+    for name, ok, actual in checks:
+        if not ok:
+            failures += 1
+            print("  FAIL  %-28s %r" % (name, actual))
+        elif verbose:
+            print("  ok    %-28s" % name)
+    return failures
+
+
+def check_line_height(result, verbose):
+    """A note opened empty holds the one block the writer never styled, so
+    text typed there sits at Qt's default line height until
+    `normalizeLineHeights()` restores the dialect's — the same percent the
+    writer states on every block it renders. The inspector mirrors that
+    number (textblocks.h), and this is what keeps the two from drifting
+    apart. The first check pins Qt's behaviour: the day it fails, empty
+    documents inherit a line height on their own and the pass can go."""
+    stated = "line-height:%d%%;" % dialect.LINE_HEIGHT_PCT
+    checks = [
+        ("Qt gave the block no line height", stated not in (result.get("typed") or ""), result.get("typed")),
+        ("normalize states the dialect's", stated in (result.get("normalized") or ""), result.get("normalized")),
     ]
     failures = 0
     for name, ok, actual in checks:

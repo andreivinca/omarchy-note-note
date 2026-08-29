@@ -126,6 +126,16 @@ DEFAULT_CODE_CHIP = "transparent"
 # reaching the same distance back over it.
 CODE_PAD_PX = 14
 
+# How tall a line is drawn: Qt's proportional line height, a little air over
+# the font's natural line (130% of it is about 1.5 lines per font size — the
+# spacing prose editors set). Display only, like the quote's ink: `writer`
+# states it on every block because Qt keeps the value per block — one stated
+# on <body> does not reach list items (measured on 6.11) — and `reader`
+# never reads it, so it lives in the document alone. Mirrored by
+# `normalizeLineHeights` in cpp/textblocks.h, which gives it to blocks born
+# outside `writer` (typing into a note opened empty, a paste from outside).
+LINE_HEIGHT_PCT = 130
+
 
 # Qt's writer brackets its output with these; on the way back *in* they make
 # Qt treat the HTML as a pasted fragment, which merges the first block into the

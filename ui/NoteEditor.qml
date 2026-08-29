@@ -459,20 +459,23 @@ Item {
   // An edit can leave the document off the form a re-render would give;
   // the inspector restores it synchronously from the text change, before
   // the frame paints — on the debounced decorations tick the wrong form
-  // was visible for a blink first. Two restorations: items typed into a
-  // list inherit the split item's margins (normalizeListMargins), and
-  // Enter or a delete can bare the block above a table, which Qt then
-  // hides — the table rides up over the caret's row until the block gets
-  // its blank filler back (fillEmptyBlocksBeforeTables). The caret goes
-  // back in front of a filler put in under it, so typing lands ahead of
-  // the invisible character. The flag stops the inspector's writes from
-  // re-entering as edits of their own.
+  // was visible for a blink first. Three restorations: items typed into a
+  // list inherit the split item's margins (normalizeListMargins), a block
+  // born outside the dialect's writer misses its line height
+  // (normalizeLineHeights), and Enter or a delete can bare the block
+  // above a table, which Qt then hides — the table rides up over the
+  // caret's row until the block gets its blank filler back
+  // (fillEmptyBlocksBeforeTables). The caret goes back in front of a
+  // filler put in under it, so typing lands ahead of the invisible
+  // character. The flag stops the inspector's writes from re-entering as
+  // edits of their own.
   property bool normalizing: false
   function normalizeNow() {
     if (root.normalizing || root.plain || root.readOnly || !nativeBlocks.item) return
     if (!nativeBlocks.item.document) nativeBlocks.item.document = area.textDocument
     root.normalizing = true
     nativeBlocks.item.normalizeListMargins()
+    nativeBlocks.item.normalizeLineHeights()
     var filled = nativeBlocks.item.fillEmptyBlocksBeforeTables()
     root.normalizing = false
     if (filled >= 0 && area.cursorPosition === filled + 1) area.cursorPosition = filled
@@ -1270,7 +1273,7 @@ Item {
                    ? "file://" + encodeURI(root.documentBase).replace(/#/g, "%23").replace(/\?/g, "%3F") + "/"
                    : Qt.resolvedUrl(".")
           font.family: root.bodyFontFamily
-          font.pixelSize: Style.font.subtitle
+          font.pixelSize: Style.font.title
           wrapMode: TextEdit.Wrap
           selectByMouse: true
           Keys.priority: Keys.BeforeItem
@@ -1315,7 +1318,7 @@ Item {
             color: root.foreground
             opacity: 0.45
             font.family: root.bodyFontFamily
-            font.pixelSize: Style.font.subtitle
+            font.pixelSize: Style.font.title
             wrapMode: Text.Wrap
           }
 
@@ -1344,7 +1347,7 @@ Item {
               id: checkItem
               required property var modelData
               readonly property real glyphWidth: markerMetrics.advanceWidth(modelData.checked ? "☒" : "☐")
-              readonly property int side: Math.round(markerMetrics.height * 0.8)
+              readonly property int side: Math.round(markerMetrics.height)
               x: modelData.x - markerMetrics.advanceWidth(" ") - glyphWidth - 1
               y: modelData.y
               width: glyphWidth + 2
@@ -1354,7 +1357,12 @@ Item {
 
               Rectangle {
                 id: face
-                anchors.centerIn: parent
+                // Right edge on the glyph's own, not centred in the cell: a
+                // face wider than the glyph would otherwise lean into the
+                // one-space gap Qt lays before the text, and that gap is
+                // the air that keeps the box off its words.
+                x: parent.width - width - 1
+                anchors.verticalCenter: parent.verticalCenter
                 width: checkItem.side
                 height: checkItem.side
                 radius: Math.max(3, Math.round(checkItem.side * 0.3))
