@@ -138,7 +138,10 @@ Item {
     settingText = true
     area.text = document
     settingText = false
-    area.cursorPosition = area.length
+    // The note opens at its top: caret on the first character, and the view
+    // pinned there — ensureVisible follows the caret everywhere after this.
+    area.cursorPosition = 0
+    flick.contentY = 0
   }
 
   // Highlight is a real background colour in the document, and ==text== in the
@@ -1367,6 +1370,33 @@ Item {
           }
         }
       }
+  }
+
+  // ---- there is more: the sidebar's thin track, on the note's own edge.
+  // Outside the Column (whose layout would give it a row of its own) and
+  // outside the Flickable (whose children scroll away with the content).
+  Rectangle {
+    id: editorTrack
+    visible: flick.visible && flick.contentHeight > flick.height + 1
+    anchors.right: parent.right
+    anchors.rightMargin: Style.spacing.xs
+    // The Column sits panelPadding in from the pane and flick.y is measured
+    // inside it; their sum is the viewport's top in this Item's coordinates.
+    y: Style.spacing.panelPadding + flick.y
+    height: flick.height
+    width: Style.space(3)
+    color: "transparent"
+
+    Rectangle {
+      width: parent.width
+      radius: width / 2
+      height: Math.max(Style.space(24),
+                       editorTrack.height * (flick.height / Math.max(1, flick.contentHeight)))
+      y: (editorTrack.height - height)
+         * Math.max(0, Math.min(1, flick.contentY / Math.max(1, flick.contentHeight - flick.height)))
+      color: Util.alpha(root.foreground, flick.moving ? 0.45 : 0.2)
+      Behavior on color { ColorAnimation { duration: 150 } }
+    }
   }
 
   // Word count sits in the corner of the note's own surface.

@@ -201,7 +201,12 @@ Item {
             readonly property bool isNew: modelData.kind === "new"
             readonly property bool isAction: modelData.kind === "action"
             readonly property bool isTree: modelData.kind === "tree"
-            readonly property int indent: (modelData.level || 0) * Style.space(14)
+            // One step of indent is the parent's icon column plus the gap
+            // after it, so a child's icon starts under its parent's label —
+            // less a nudge for the glyph being centered in a column wider
+            // than its ink, which pushes its visible edge right of the sum.
+            readonly property int indent: (modelData.level || 0)
+              * (Style.font.icon + Style.space(2) + Style.spacing.md - Style.spacing.sm)
             readonly property bool draggable: isNote && !modelData.fixed
             width: listView.width
             height: root.rowHeight
