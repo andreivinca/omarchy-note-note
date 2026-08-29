@@ -456,18 +456,26 @@ Item {
   // exactly that cell, so Qt's glyph never shows through.
   FontMetrics { id: markerMetrics; font: area.font }
 
-  // Items typed into a list inherit the split item's margins; restore the
-  // canonical form a re-render would give. Called synchronously from the
-  // text change, before the frame paints — on the debounced decorations
-  // tick the wrong margins were visible for a blink first. The flag stops
-  // the format-only change from re-entering as an edit of its own.
+  // An edit can leave the document off the form a re-render would give;
+  // the inspector restores it synchronously from the text change, before
+  // the frame paints — on the debounced decorations tick the wrong form
+  // was visible for a blink first. Two restorations: items typed into a
+  // list inherit the split item's margins (normalizeListMargins), and
+  // Enter or a delete can bare the block above a table, which Qt then
+  // hides — the table rides up over the caret's row until the block gets
+  // its blank filler back (fillEmptyBlocksBeforeTables). The caret goes
+  // back in front of a filler put in under it, so typing lands ahead of
+  // the invisible character. The flag stops the inspector's writes from
+  // re-entering as edits of their own.
   property bool normalizing: false
-  function normalizeListsNow() {
+  function normalizeNow() {
     if (root.normalizing || root.plain || root.readOnly || !nativeBlocks.item) return
     if (!nativeBlocks.item.document) nativeBlocks.item.document = area.textDocument
     root.normalizing = true
     nativeBlocks.item.normalizeListMargins()
+    var filled = nativeBlocks.item.fillEmptyBlocksBeforeTables()
     root.normalizing = false
+    if (filled >= 0 && area.cursorPosition === filled + 1) area.cursorPosition = filled
   }
 
   function updateDecorations() {
@@ -1282,7 +1290,7 @@ Item {
           onImplicitHeightChanged: root.scheduleDecorations()
           onTextChanged: {
             if (root.normalizing) return
-            root.normalizeListsNow()
+            root.normalizeNow()
             root.scheduleDecorations()
             if (root.settingText) return
             root.applyPendingToInsertion()

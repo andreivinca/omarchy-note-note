@@ -14,6 +14,11 @@ its natural size and the display cap the converter applied, resizes it with
 `setImageWidth()`, and closes the loop: the document's own HTML must read
 back as `![alt](src){width=N}`.
 
+The table-gap phase presses a real Return (QtTest) at the end of a list
+sitting above a table — baring the block Qt hides — and asserts
+`fillEmptyBlocksBeforeTables()` gives the caret's row its height back with
+one filler, undone together with the split (docs/engine-notes.md).
+
     sh cpp/build.sh
     python3 cpp/selftest.py [--verbose]
 
@@ -38,6 +43,7 @@ QUOTEBARS = os.path.join(ROOT, "ui", "QuoteBars.js")
 
 QML_TEMPLATE = """
 import QtQuick
+import QtTest
 import "%(module)s"
 import "%(quotebars)s" as QuoteBars
 Window {
@@ -45,6 +51,15 @@ Window {
   property var out: ({})
   TextEdit { id: e; textFormat: TextEdit.RichText; font.family: "sans-serif"; width: 600 }
   TextBlocks { id: tb; document: e.textDocument }
+  TestCase { id: tc; name: "selftest"; when: windowShown }
+  // The caret row's clearance under the table: the first cell's top minus
+  // the caret line's bottom — negative while the table is drawn over it.
+  function rowGap() {
+    var t = e.getText(0, e.length), i = 0
+    while (i < t.length && t.charCodeAt(i) !== 0xFDD0) i++
+    var cur = e.positionToRectangle(e.cursorPosition)
+    return e.positionToRectangle(i + 1).y - (cur.y + cur.height)
+  }
   Timer { interval: 60; running: true; onTriggered: {
     var cases = %(cases)s
     for (var key in cases) {
@@ -68,11 +83,30 @@ Window {
       img.html = e.getFormattedText(0, e.length)
     }
     out.images = img
+    // The table-gap phase: Enter at the list's end bares a block Qt hides,
+    // the filler must give the row back, and one undo must take the row and
+    // its filler out together (textblocks.h, fillEmptyBlocksBeforeTables).
+    e.text = %(gaphtml)s
+    e.forceActiveFocus()
+    e.cursorPosition = e.getText(0, e.length).indexOf("three") + 5
+    var gap = { lenBefore: e.length }
+    tc.keyClick(Qt.Key_Return)
+    gap.bared = rowGap()
+    gap.filled = tb.fillEmptyBlocksBeforeTables()
+    gap.fixed = rowGap()
+    gap.filler = gap.filled < 0 ? "" : e.getText(gap.filled, gap.filled + 1)
+    e.undo()
+    gap.lenUndone = e.length
+    out.tableGap = gap
     console.error("<<<RESULT>>>" + JSON.stringify(out) + "<<<END>>>")
     Qt.exit(0)
   } }
 }
 """
+
+# The list whose last item sits right above a table — the shape Enter bares
+# a hidden block in (docs/engine-notes.md).
+GAP_MARKDOWN = "1. one\n2. two\n3. three\n\n| a | b |\n|---|---|\n| 1 | 2 |\n"
 
 
 def make_png(path, width, height):
@@ -135,7 +169,8 @@ def main():
     script = QML_TEMPLATE % {"module": "file://" + MODULE,
                              "quotebars": "file://" + QUOTEBARS,
                              "cases": json.dumps(documents),
-                             "imagehtml": json.dumps(to_html(image_markdown))}
+                             "imagehtml": json.dumps(to_html(image_markdown)),
+                             "gaphtml": json.dumps(to_html(GAP_MARKDOWN))}
     with tempfile.NamedTemporaryFile("w", suffix=".qml", delete=False) as handle:
         handle.write(script)
         path = handle.name
@@ -188,6 +223,11 @@ def main():
     failures += image_failures
     print("  %s" % ("ok" if not image_failures else "%d failure(s)" % image_failures))
 
+    print("table gap: the filler under a list split above a table")
+    gap_failures = check_table_gap(results.get("tableGap") or {}, args.verbose)
+    failures += gap_failures
+    print("  %s" % ("ok" if not gap_failures else "%d failure(s)" % gap_failures))
+
     print("\n%s" % ("all green" if not failures else "%d failure(s)" % failures))
     return 1 if failures else 0
 
@@ -213,6 +253,32 @@ def check_images(result, image_markdown, verbose):
         back = to_markdown(result.get("html") or "")
         expected = image_markdown.replace(")\n", "){width=300}\n")
         checks.append(("reads back as the note's width", back == expected, back))
+    failures = 0
+    for name, ok, actual in checks:
+        if not ok:
+            failures += 1
+            print("  FAIL  %-28s %r" % (name, actual))
+        elif verbose:
+            print("  ok    %-28s" % name)
+    return failures
+
+
+def check_table_gap(result, verbose):
+    """Enter at the end of a list right above a table bares a block Qt then
+    hides, drawing the table over the caret's row (docs/engine-notes.md).
+    `fillEmptyBlocksBeforeTables()` must put the dialect's blank filler in,
+    give the row its height back, and join the edit — one undo removes the
+    row and the filler together. The first check pins Qt's behaviour: the
+    day it fails, Qt lays the bare block out itself and the filler can go."""
+    checks = [
+        ("Qt still hides the bare block", result.get("bared", 0) < 0, result.get("bared")),
+        ("a position was filled", result.get("filled", -1) >= 0, result.get("filled")),
+        ("with the dialect's blank", result.get("filler") == "\u00a0", result.get("filler")),
+        ("the row has its height back", result.get("fixed", -1) >= 0, result.get("fixed")),
+        ("one undo removes row and filler",
+         result.get("lenUndone") == result.get("lenBefore"),
+         (result.get("lenUndone"), result.get("lenBefore"))),
+    ]
     failures = 0
     for name, ok, actual in checks:
         if not ok:

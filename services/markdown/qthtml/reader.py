@@ -157,6 +157,12 @@ class _Reader:
             return [_Chunk("code", lines, [at] * len(lines))]
 
         prefix = "> " if dialect.is_quote(style) else INDENT_TEXT * dialect.indent_level(style)
+        # A blank line's filler with text typed in front of it (the editor
+        # keeps the caret ahead of the filler): the same leftover a code
+        # line sheds, never the author's, so off it comes. Only the tail —
+        # a *leading* U+00A0 run is an indent (INDENT_TEXT), not a filler.
+        if body.endswith(dialect.BLANK_PARAGRAPH):
+            body = body[:-1]
         lines = [prefix + escape_line_start(line) for line in body.split("\n")]
         return [_Chunk("text", lines, [at] * len(lines))]
 

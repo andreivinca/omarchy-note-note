@@ -194,6 +194,28 @@ def check_code_chip(verbose):
     return failures
 
 
+def check_typed_filler(verbose):
+    """Typing into a blank line lands in front of its U+00A0 filler (the
+    editor keeps the caret there — NoteEditor.normalizeNow), so the filler
+    trails the typed text and must come off on the way out — while a blank
+    line alone, and a leading indent run, stay exactly what they are.
+    Hand-made HTML, because to_html never writes a filler beside text."""
+    failures = 0
+    cases = [
+        ("typed before the filler", "<p>x\u00a0</p>", "x\n"),
+        ("a blank line stays blank", "<p>\u00a0</p><p>after</p>", "\u00a0\n\nafter\n"),
+        ("an indent is not a filler", '<p style="margin-left:36px">x</p>', "\u00a0" * 4 + "x\n"),
+    ]
+    for name, html, back in cases:
+        actual = to_markdown(html)
+        if actual != back:
+            failures += 1
+            report(name, "typed filler", back, actual, verbose)
+    print("typed-beside-filler (a blank line's U+00A0 with text typed into it)")
+    print("  %d/%d cases" % (len(cases) - failures, len(cases)))
+    return failures
+
+
 def report(name, stage, expected, actual, verbose):
     print("  FAIL  %-18s (%s)" % (name, stage))
     if verbose:
@@ -220,6 +242,7 @@ def main():
 
     failures += check_display_cap(args.verbose)
     failures += check_code_chip(args.verbose)
+    failures += check_typed_filler(args.verbose)
 
     # The chip rides through Qt too: the span must keep both halves — the
     # family that means code and the colour that shows it — and still read

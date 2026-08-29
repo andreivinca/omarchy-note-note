@@ -6,10 +6,12 @@
 // (getFormattedText), so the editor's quote bars used to find quote blocks
 // by scanning that HTML with a regex. This class reads the same answers from
 // the QTextDocument itself, through the TextEdit's `textDocument` property.
-// It is inspection first: the only writes are format-only and never touch
-// the text — canonical list margins (normalizeListMargins) and an image's
-// display width (setImageWidth, the corner-handle resize) — so the worst a
-// bug here can do is mis-size what is drawn, never lose a character.
+// It is inspection first: the writes are canonical list margins
+// (normalizeListMargins) and an image's display width (setImageWidth, the
+// corner-handle resize), both format-only, and one blank filler character
+// into a block Qt would otherwise hide (fillEmptyBlocksBeforeTables) — none
+// can remove text, so the worst a bug here can do is mis-draw a block,
+// never lose a character.
 //
 // The module is OPTIONAL. It is built locally (`sh cpp/build.sh`) against
 // the system Qt and loaded by a directory import (ui/NativeBlocks.qml);
@@ -30,6 +32,7 @@
 #include <QTextImageFormat>
 #include <QTextLayout>
 #include <QTextList>
+#include <QTextTable>
 #include <QUrl>
 #include <QVariantList>
 #include <QVariantMap>
@@ -202,6 +205,43 @@ public:
             cursor.setBlockFormat(format);
             cursor.endEditBlock();
         }
+    }
+
+    // A block with no characters directly above a table takes no height:
+    // Qt hides it — the same rule that hides the empty block Qt itself
+    // puts over a document-opening table — so Enter at a list's end, or a
+    // delete that bares the block, leaves the table drawn over the caret's
+    // row, and no relayout brings the row back while the block stays empty
+    // (measured on 6.11: markContentsDirty, a format edit and a page-size
+    // round trip all left the table where it was; an empty block *below* a
+    // table keeps its row). The dialect stores every deliberate blank as
+    // one U+00A0 (qthtml/dialect.py), so such a block gets that filler
+    // here — the form a re-render would give it. The write joins the edit
+    // that bared the block, so undo stays one step, and the reader strips
+    // a filler beside typed text, so it never reaches the note. Answers
+    // with the filled position, for the caller to put the caret back in
+    // front of the filler; -1 when every block already had its height.
+    Q_INVOKABLE int fillEmptyBlocksBeforeTables()
+    {
+        QTextDocument *doc = m_document ? m_document->textDocument() : nullptr;
+        if (!doc)
+            return -1;
+        int filled = -1;
+        for (QTextBlock block = doc->begin(); block.isValid(); block = block.next()) {
+            const QTextBlock following = block.next();
+            if (block.length() > 1 || !following.isValid())
+                continue;
+            QTextCursor cursor(block);
+            QTextTable *table = QTextCursor(following).currentTable();
+            if (!table || table == cursor.currentTable())
+                continue;
+            cursor.joinPreviousEditBlock();
+            cursor.insertText(QString(QChar(0xa0)));
+            cursor.endEditBlock();
+            if (filled < 0)
+                filled = block.position();
+        }
+        return filled;
     }
 
 signals:

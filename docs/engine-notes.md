@@ -143,6 +143,19 @@ block above it, even an empty one. **A table cannot open one either**: Qt
 inserts an empty block above it on its own, so the writer emits that block
 itself, or our idea of the document and Qt's drift apart by one.
 
+**A block with no characters directly above a table takes no height.** Qt
+hides it — it is the block Qt itself puts over a document-opening table — so
+Enter at the end of a list right before a table, or a delete that bares that
+block, leaves the table drawn over the caret's row until the block's content
+changes. No relayout brings the row back: `markContentsDirty`, a format edit
+and a page-size round trip were all tried (measured on 6.11; a split
+mid-list, a bare block above a *paragraph* and an empty block *below* a
+table all lay out fine). The inspector puts the dialect's U+00A0 blank into
+such a block, joined to the edit that bared it
+(`fillEmptyBlocksBeforeTables`), the editor keeps the caret in front of the
+filler, and the reader strips a filler trailing typed text — so it never
+reaches the note.
+
 **A list item with no content is dropped, and takes the list's checkbox
 markers with it** — an empty checkbox carries one U+00A0. This is one of the
 two filler characters left in the pipeline.
