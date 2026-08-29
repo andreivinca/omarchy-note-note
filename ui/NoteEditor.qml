@@ -48,6 +48,10 @@ Item {
   readonly property string highlightColour: root.markdown ? root.markdown.highlight : "#f9e2af"
   readonly property string highlightInk: root.markdown ? root.markdown.highlightInk : "#1e1e2e"
   readonly property string linkColour: root.markdown ? root.markdown.link : "#4282d7"
+  // The chip the converter paints behind inline code (Markdown.qml); the
+  // code tool applies the same one, so code made here and code that came
+  // from the note look alike.
+  readonly property string codeChipColour: root.markdown ? root.markdown.codeChip : "transparent"
 
   readonly property alias title: titleField.text
   readonly property bool bodyFocused: area.activeFocus
@@ -153,7 +157,7 @@ Item {
     var to = Math.max(area.selectionStart, area.selectionEnd)
     if (from === to) return
     var fragment = inlineFragment(area.getFormattedText(from, to))
-    var lit = fragment.indexOf("background-color") >= 0
+    var lit = withoutChip(fragment).indexOf("background-color") >= 0
     // The restyled copy goes in after the selection and the original comes
     // out second: inserted at a block's start instead, Qt hands the block
     // the fragment's own paragraph format, and a list item stops being one.
@@ -188,11 +192,20 @@ Item {
 
   // The marker colour goes, and so does the ink that came with it — left
   // behind, it kept reading as near-black text on a dark theme. Only the
-  // highlight's own ink is taken: a link keeps its blue.
+  // highlight's own ink is taken: a link keeps its blue, and inline code
+  // keeps its chip — that background is the code tool's, not this one's.
   function unhighlight(fragment) {
     var ink = String(root.highlightInk).replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
-    return fragment.replace(/background-color\s*:[^;"]*;?/g, "")
+    var chip = String(root.codeChipColour).replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
+    return fragment.replace(new RegExp('background-color\\s*:(?!\\s*' + chip + '\\s*[;"])[^;"]*;?', "gi"), "")
                    .replace(new RegExp("color\\s*:\\s*" + ink + "\\s*;?", "gi"), "")
+  }
+
+  // The chip is a background-color too; the highlight tool looks through
+  // this, or a selection holding inline code would read as already lit.
+  function withoutChip(html) {
+    var chip = String(root.codeChipColour).replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
+    return html.replace(new RegExp("background-color\\s*:\\s*" + chip + "\\s*;?", "gi"), "")
   }
   function focusEditor() { area.forceActiveFocus() }
 
@@ -798,13 +811,61 @@ Item {
   }
 
 
+  // Inline code takes the highlight's trip: the selection's HTML goes back
+  // in wearing the mono family — which IS the dialect's code span — and the
+  // chip the converter paints behind loaded code (codeChipColour), so the
+  // style is visible the moment the tool is used. Same insert-then-remove
+  // order as highlightSelection, for the same list-item reason.
   function toggleCode() {
     if (root.readOnly || root.plain) return
-    var f = area.cursorSelection.font
-    var mono = /mono/i.test(f.family)
-    f.family = mono ? root.bodyFontFamily : "monospace"
-    area.cursorSelection.font = f
+    var from = Math.min(area.selectionStart, area.selectionEnd)
+    var to = Math.max(area.selectionStart, area.selectionEnd)
+    if (from === to) return
+    var fragment = inlineFragment(area.getFormattedText(from, to))
+    var mono = /font-family:[^;"]*mono/i.test(fragment)
+    area.insert(to, mono ? uncode(fragment)
+                         : "<span style=\"font-family:'monospace'; background-color:"
+                           + root.codeChipColour + ';">' + fragment + "</span>")
+    area.remove(from, to)
+    area.select(from, to)
     root.edited()
+  }
+
+  // Off is both halves off: the mono family (the body font takes over) and
+  // the chip. Only mono families are taken — any other face a paste brought
+  // along is not this tool's to touch.
+  function uncode(fragment) {
+    return withoutChip(fragment.replace(/font-family:[^;"]*mono[^;"]*;?/gi, ""))
+  }
+
+  // ── escaping inline code: Right at its end ──────────────────────────
+  // Qt takes the typing format from the character before the caret, so code
+  // that ends the note traps it: there is no character to arrow past, and
+  // everything typed next would come out mono on the chip. Anywhere else
+  // Right already escapes — onto the next character, or onto the next
+  // block, where a non-empty block's own first character wins. So at the
+  // note's very end Right steps out instead: one plain-format space goes
+  // in after the code and the caret lands beyond it, typing in the body
+  // style. The space is the one the next word would want anyway; left
+  // unused at the line's end, the round trips drop it (Qt swallows a
+  // paragraph's trailing space — which is also why the insert needs
+  // white-space:pre to survive at all; measured on 6.11). A second Right
+  // is refused by the mono test: the character before the caret is now
+  // the plain space itself.
+  function escapeCode() {
+    if (root.readOnly || root.plain) return false
+    if (area.selectionStart !== area.selectionEnd) return false
+    var pos = area.cursorPosition
+    if (pos === 0 || pos < area.length) return false
+    if (!/font-family:[^;"]*mono/i.test(area.getFormattedText(pos - 1, pos))) return false
+    // A code block's lines are mono too, and must stay all-mono or the
+    // block stops being one (reader): the escape is inline code's only.
+    var b = blockInfoAt(pos)
+    if (b && b.kind === "code") return false
+    area.insert(pos, '<span style="white-space:pre;"> </span>')
+    area.cursorPosition = area.length
+    root.edited()
+    return true
   }
 
   property bool linkBarOpen: false
@@ -1183,6 +1244,9 @@ Item {
           Keys.onPressed: function(event) {
             root.shortcut(event)
             if (event.accepted || root.plain) return
+            if (event.key === Qt.Key_Right
+                && !(event.modifiers & (Qt.ControlModifier | Qt.ShiftModifier | Qt.AltModifier))
+                && root.escapeCode()) { event.accepted = true; return }
             if (event.key !== Qt.Key_Return && event.key !== Qt.Key_Enter) return
             if (!(event.modifiers & (Qt.ControlModifier | Qt.ShiftModifier | Qt.AltModifier))
                 && root.returnLeavesBlock()) { event.accepted = true; return }

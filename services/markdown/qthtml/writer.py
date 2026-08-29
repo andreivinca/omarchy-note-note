@@ -25,33 +25,36 @@ BLANK = "<p>%s</p>" % dialect.BLANK_PARAGRAPH
 # (measured on 6.11), so the guard below must see through the anchor.
 OPENS_WITH_IMAGE = re.compile(r"(?:<a [^>]*>)?<img")
 
-# Inline spans, by AST token type. `mark` is the odd one out: its colour is
-# the caller's, so it is built in `_Renderer.inline`.
+# Inline spans, by AST token type. `mark` and `codespan` are the odd ones
+# out: their colours are the caller's, so they are built in `_Renderer.inline`.
 INLINE_SPAN = {
     "strong": "font-weight:%d;" % dialect.BOLD_WEIGHT,
     "emphasis": "font-style:italic;",
     "underline": "text-decoration: underline;",
     "strikethrough": "text-decoration: line-through;",
-    "codespan": "font-family:'%s';" % dialect.MONO_FAMILY,
 }
 
 
 def to_html(markdown, highlight=dialect.DEFAULT_HIGHLIGHT, ink=dialect.DEFAULT_HIGHLIGHT_INK,
             link=dialect.DEFAULT_LINK, quote_ink=dialect.DEFAULT_QUOTE_INK,
-            code_background=dialect.DEFAULT_CODE_BACKGROUND, base=""):
+            code_background=dialect.DEFAULT_CODE_BACKGROUND,
+            code_chip=dialect.DEFAULT_CODE_CHIP, base=""):
     """Markdown text -> HTML for a RichText `TextEdit`. `base` is the note's
     own directory, for measuring images the note names by a relative path."""
-    return _Renderer(highlight, ink, link, quote_ink, code_background, base).document(parse(markdown or ""))
+    return _Renderer(highlight, ink, link, quote_ink, code_background, code_chip,
+                     base).document(parse(markdown or ""))
 
 
 class _Renderer:
     def __init__(self, highlight, ink, link, quote_ink=dialect.DEFAULT_QUOTE_INK,
-                 code_background=dialect.DEFAULT_CODE_BACKGROUND, base=""):
+                 code_background=dialect.DEFAULT_CODE_BACKGROUND,
+                 code_chip=dialect.DEFAULT_CODE_CHIP, base=""):
         self.highlight = highlight
         self.ink = ink
         self.link = link
         self.quote_ink = quote_ink
         self.code_background = code_background
+        self.code_chip = code_chip
         self.base = base
 
     # ---- documents and blocks ------------------------------------------
@@ -195,7 +198,13 @@ class _Renderer:
             if kind == "text":
                 out.append(_html.escape(token.get("raw", ""), quote=False))
             elif kind == "codespan":
-                out.append(self.span(INLINE_SPAN["codespan"], _html.escape(token.get("raw", ""), quote=False)))
+                # The mono family is the dialect — a mono span IS a code span
+                # (`reader`); the chip beside it is only for the eye, and the
+                # reader answers the backticks before it looks at any colour.
+                style = "font-family:'%s';" % dialect.MONO_FAMILY
+                if self.code_chip != "transparent":
+                    style += " background-color:%s;" % self.code_chip
+                out.append(self.span(style, _html.escape(token.get("raw", ""), quote=False)))
             elif kind == "strong":
                 weight = dialect.HEAVY_WEIGHT if heavy else dialect.BOLD_WEIGHT
                 out.append(self.span("font-weight:%d;" % weight, self.inline(token.get("children"), heavy)))

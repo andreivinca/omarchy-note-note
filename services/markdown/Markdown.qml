@@ -35,6 +35,12 @@ Item {
   property string quoteInk: "#9399b2"
   property string codeBackground: "transparent"
 
+  // The chip behind inline code — the tinted patch that makes `code` read as
+  // code in prose. Set by the host from the theme (Notes.qml, codeChipColour);
+  // it does not reach disk either: the reader answers backticks for any
+  // monospace span before it looks at a colour.
+  property string codeChip: "transparent"
+
   // Markdown -> HTML for `TextEdit.text`.  callback(html)
   //
   // `base` (optional) is the note's own directory, for notes that name their
@@ -45,7 +51,8 @@ Item {
     if (!markdown) { callback(""); return }
     run(["to-html", "--highlight", root.highlight, "--highlight-ink", root.highlightInk,
          "--link", root.link, "--quote-ink", root.quoteInk,
-         "--code-background", root.codeBackground].concat(base ? ["--base", base] : []),
+         "--code-background", root.codeBackground,
+         "--code-chip", root.codeChip].concat(base ? ["--base", base] : []),
         markdown, function(text) { callback(text) })
   }
 

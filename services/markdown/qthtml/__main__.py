@@ -2,7 +2,8 @@
 
     python3 -m qthtml to-html      [--highlight '#f9e2af'] [--highlight-ink '#1e1e2e']
                                    [--link '#4282d7'] [--quote-ink '#9399b2']
-                                   [--code-background '#313244'] [--base /dir]
+                                   [--code-background '#313244'] [--code-chip '#2a2c3c']
+                                   [--base /dir]
     python3 -m qthtml to-markdown  [--with-map] [--base /dir]
 
 `--base` is the note's own directory, for both directions: it is how an image
@@ -32,13 +33,14 @@ MAX_BYTES = 8 * 1024 * 1024
 
 FLAGS = {"--highlight": "highlight", "--highlight-ink": "ink", "--link": "link",
          "--quote-ink": "quote_ink", "--code-background": "code_background",
-         "--base": "base"}
+         "--code-chip": "code_chip", "--base": "base"}
 
 
 def parse_args(argv):
     options = {"highlight": dialect.DEFAULT_HIGHLIGHT, "ink": dialect.DEFAULT_HIGHLIGHT_INK,
                "link": dialect.DEFAULT_LINK, "quote_ink": dialect.DEFAULT_QUOTE_INK,
-               "code_background": dialect.DEFAULT_CODE_BACKGROUND, "base": "", "map": False}
+               "code_background": dialect.DEFAULT_CODE_BACKGROUND,
+               "code_chip": dialect.DEFAULT_CODE_CHIP, "base": "", "map": False}
     if not argv or argv[0] not in ("to-html", "to-markdown"):
         raise SystemExit(__doc__)
     direction, rest = argv[0], argv[1:]
@@ -64,7 +66,8 @@ def main(argv=None):
 
     if direction == "to-html":
         sys.stdout.write(to_html(text, options["highlight"], options["ink"], options["link"],
-                                 options["quote_ink"], options["code_background"], options["base"]))
+                                 options["quote_ink"], options["code_background"],
+                                 options["code_chip"], options["base"]))
     elif options["map"]:
         json.dump(convert(text, options["base"]), sys.stdout)
     else:

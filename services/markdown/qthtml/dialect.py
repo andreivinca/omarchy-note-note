@@ -111,6 +111,16 @@ DEFAULT_QUOTE_INK = "#9399b2"
 # first block of a run but not for blocks split from it (measured on 6.11).
 DEFAULT_CODE_BACKGROUND = "transparent"
 
+# The chip behind an inline code span — the tinted patch that makes `code`
+# read as code in prose. Display only, like the link's colour: `writer`
+# states it beside the mono family, and `reader` answers backticks for any
+# mono span before it ever looks at a background (runs()), so the chip is
+# never mistaken for a highlight and never reaches the note. The app passes
+# the code slab's own recipe made opaque (Notes.qml, codeChipColour — Qt's
+# HTML writer keeps a colour but drops its alpha); this default writes no
+# background at all, so a bare conversion stays as it always was.
+DEFAULT_CODE_CHIP = "transparent"
+
 # The text's padding inside that slab: code lines carry it as a left margin
 # (readers ignore a code line's margins), and the editor draws the slab
 # reaching the same distance back over it.

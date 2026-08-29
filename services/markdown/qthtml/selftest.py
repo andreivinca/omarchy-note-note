@@ -171,6 +171,29 @@ def check_display_cap(verbose):
     return failures
 
 
+def check_code_chip(verbose):
+    """The chip behind inline code (--code-chip) is display only: the writer
+    states it beside the mono family, and `reader` answers the backticks
+    before it ever looks at a background — so the colour never reaches the
+    note, and is never mistaken for a highlight. Transparent (the default)
+    writes no background at all."""
+    failures = 0
+    markdown = "`x` in ==lit== prose\n"
+    chipped = to_html(markdown, code_chip="#2a2c3c")
+    if "font-family:'%s'; background-color:#2a2c3c;" % dialect.MONO_FAMILY not in chipped:
+        failures += 1
+        report("chip stated", "chip html", "mono span with #2a2c3c", chipped, verbose)
+    if to_markdown(chipped).strip() != markdown.strip():
+        failures += 1
+        report("chip never read back", "chip markdown", markdown, to_markdown(chipped), verbose)
+    if "background-color" in to_html("`x` alone\n"):
+        failures += 1
+        report("no chip by default", "chip html", "no background", to_html("`x` alone\n"), verbose)
+    print("code chip (inline code with --code-chip)")
+    print("  %d/3 cases" % (3 - failures))
+    return failures
+
+
 def report(name, stage, expected, actual, verbose):
     print("  FAIL  %-18s (%s)" % (name, stage))
     if verbose:
@@ -196,6 +219,12 @@ def main():
     print("  %d/%d cases" % (len(CASES) - failures, len(CASES)))
 
     failures += check_display_cap(args.verbose)
+    failures += check_code_chip(args.verbose)
+
+    # The chip rides through Qt too: the span must keep both halves — the
+    # family that means code and the colour that shows it — and still read
+    # back as bare backticks.
+    documents["inline code chip"] = to_html("`x` in prose\n", code_chip="#2a2c3c")
 
     print("through Qt (markdown -> html -> document -> html -> markdown)")
     try:
@@ -225,7 +254,17 @@ def main():
         if counted != result["blocks"]:
             qt_failures += 1
             report(name, "block map", "%d blocks" % result["blocks"], "%d mapped" % counted, args.verbose)
-    print("  %d/%d cases" % (len(CASES) - qt_failures, len(CASES)))
+
+    chip = rendered.get("inline code chip")
+    if not chip or "background-color:#2a2c3c" not in chip["saved"]:
+        qt_failures += 1
+        report("inline code chip", "chip through qt", "chip kept on the span",
+               chip and chip["saved"], args.verbose)
+    elif any(to_markdown(chip[stage]).strip() != "`x` in prose" for stage in ("saved", "reread")):
+        qt_failures += 1
+        report("inline code chip", "chip through qt", "`x` in prose",
+               to_markdown(chip["saved"]), args.verbose)
+    print("  %d/%d cases" % (len(CASES) + 1 - qt_failures, len(CASES) + 1))
 
     total = failures + qt_failures
     print("\n%s" % ("all green" if not total else "%d failure(s)" % total))

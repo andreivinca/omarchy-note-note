@@ -180,6 +180,13 @@ Item {
   readonly property string quoteInkColour: Qt.tint(root.background, Util.alpha(root.foreground, 0.8)).toString()
   readonly property string codeBackgroundColour: "transparent"
 
+  // Inline code wears a chip the editor cannot draw itself — a span has no
+  // block's geometry to hang a decoration on — so this one colour does live
+  // in the document (never the note: the reader reads a mono span as code
+  // before it looks at any background). The slab's own recipe, made opaque
+  // because Qt's HTML writer keeps a colour but drops its alpha.
+  readonly property string codeChipColour: Qt.tint(root.background, Util.alpha(root.foreground, 0.07)).toString()
+
   // Markdown on disk, rich text in the editor: everything the note pane shows
   // or saves passes through here (services/markdown/Markdown.qml).
   Markdown.Markdown {
@@ -187,6 +194,7 @@ Item {
     link: root.linkColour
     quoteInk: root.quoteInkColour
     codeBackground: root.codeBackgroundColour
+    codeChip: root.codeChipColour
   }
 
   // Pasting a picture into a note; only providers that can store one take it.
