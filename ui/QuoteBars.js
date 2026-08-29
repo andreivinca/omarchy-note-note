@@ -1,6 +1,7 @@
-// Where the editor's block decorations go: runs of quote blocks (the bar)
-// and runs of code blocks (the slab), as character ranges the editor turns
-// into rectangles with positionToRectangle.
+// Where the editor's block decorations go: runs of quote blocks (the bar),
+// runs of code blocks (the slab) and the checkbox items (the drawn box), as
+// character ranges the editor turns into rectangles with
+// positionToRectangle.
 //
 // Two ways in, one answer out. `runsFromBlocks` reads real block formats
 // from the native inspector (cpp/textblocks.h) when it is built; `runs` is
@@ -32,20 +33,42 @@ function kindOfBlock(block) {
   return ""
 }
 
-// The kind of every document block, in Qt's own block order: every <p>,
-// <li>, heading, <hr /> and table cell is one; the <p> inside a cell is the
-// cell's content, not a block of its own (docs/engine-notes.md). Headings
-// count even though they are never decorated — missing one shifts every
-// entry after it (cpp/selftest.py is what caught exactly that).
-function kinds(html) {
+// Every document block's tag and open tag, in Qt's own block order — the
+// one walk under kinds() and markers(): every <p>, <li>, heading, <hr />
+// and table cell is a block; the <p> inside a cell is the cell's content,
+// not a block of its own (docs/engine-notes.md).
+function _openTags(html) {
   var body = (html.split("<body>")[1] || "").split("</body>")[0]
   var re = /<(p|li|td|th|hr|h[1-6])[\s>]/g, out = [], cellEnd = -1, m
   while ((m = re.exec(body)) !== null) {
-    if (m[1] === "td" || m[1] === "th") { cellEnd = body.indexOf("</" + m[1], m.index); out.push(""); continue }
+    if (m[1] === "td" || m[1] === "th") { cellEnd = body.indexOf("</" + m[1], m.index); out.push({ tag: m[1], open: "" }); continue }
     if (m.index < cellEnd) continue
-    var open = body.substring(m.index, body.indexOf(">", m.index) + 1)
-    var style = /style="([^"]*)"/.exec(open)
-    out.push(m[1] === "p" && style ? kindOfStyle(style[1]) : "")
+    out.push({ tag: m[1], open: body.substring(m.index, body.indexOf(">", m.index) + 1) })
+  }
+  return out
+}
+
+// The kind of every document block. Headings count even though they are
+// never decorated — missing one shifts every entry after it
+// (cpp/selftest.py is what caught exactly that).
+function kinds(html) {
+  var tags = _openTags(html), out = []
+  for (var i = 0; i < tags.length; i++) {
+    var style = /style="([^"]*)"/.exec(tags[i].open)
+    out.push(tags[i].tag === "p" && style ? kindOfStyle(style[1]) : "")
+  }
+  return out
+}
+
+// The checkbox of every document block — 0 none, 1 an unchecked box, 2 a
+// checked one. The state rides the list item's class attribute
+// (dialect.CHECK_CLASS), and Qt serialises its own markers back the same
+// way.
+function markers(html) {
+  var tags = _openTags(html), out = []
+  for (var i = 0; i < tags.length; i++) {
+    var cls = tags[i].tag === "li" ? /class="(checked|unchecked)"/.exec(tags[i].open) : null
+    out.push(cls ? (cls[1] === "checked" ? 2 : 1) : 0)
   }
   return out
 }
@@ -69,10 +92,9 @@ function _collect(kindAt, count, fromOf, toOf) {
   return out
 }
 
-// From the document's HTML plus its plain text (whose U+2029/U+FDD0
+// Each block's character span, from the plain text (whose U+2029/U+FDD0
 // separators mark the blocks).
-function runs(html, text) {
-  var kind = kinds(html)
+function _blockSpans(text) {
   var starts = [], ends = [], start = 0
   for (var i = 0; i <= text.length; i++) {
     var c = i < text.length ? text.charCodeAt(i) : 0x2029  // the text's end closes the last block
@@ -80,13 +102,37 @@ function runs(html, text) {
     starts.push(start); ends.push(i)
     start = i + 1
   }
-  var count = Math.min(kind.length, starts.length)
+  return { starts: starts, ends: ends }
+}
+
+// From the document's HTML plus its plain text.
+function runs(html, text) {
+  var kind = kinds(html), spans = _blockSpans(text)
+  var count = Math.min(kind.length, spans.starts.length)
   return _collect(function(i) { return kind[i] }, count,
-                  function(i) { return starts[i] }, function(i) { return ends[i] })
+                  function(i) { return spans.starts[i] }, function(i) { return spans.ends[i] })
 }
 
 // The same runs, from the native inspector's block list.
 function runsFromBlocks(blocks) {
   return _collect(function(i) { return kindOfBlock(blocks[i]) }, blocks.length,
                   function(i) { return blocks[i].position }, function(i) { return blocks[i].end })
+}
+
+// [{position, checked}] — one entry per checkbox item, `position` its
+// block's first character, ready for positionToRectangle.
+function boxes(html, text) {
+  var marker = markers(html), spans = _blockSpans(text), out = []
+  var count = Math.min(marker.length, spans.starts.length)
+  for (var i = 0; i < count; i++)
+    if (marker[i]) out.push({ position: spans.starts[i], checked: marker[i] === 2 })
+  return out
+}
+
+// The same boxes, from the native inspector's block list.
+function boxesFromBlocks(blocks) {
+  var out = []
+  for (var i = 0; i < blocks.length; i++)
+    if (blocks[i].marker) out.push({ position: blocks[i].position, checked: blocks[i].marker === 2 })
+  return out
 }

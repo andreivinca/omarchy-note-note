@@ -60,7 +60,11 @@ public:
     // in: the 40/40 margin pair is a quote, left-only steps are indents,
     // and a block background marks a code line (qthtml/dialect.py).
     // `list` says the block is an item of a QTextList, which is how the
-    // editor knows a second Enter should leave the list.
+    // editor knows a second Enter should leave the list. `marker` is the
+    // item's task-list state — 0 none, 1 an unchecked box, 2 a checked one;
+    // Qt Quick paints the marker as a raw ☐/☒ glyph hardcoded in its
+    // renderer, so the editor covers it and draws its own box over the
+    // glyph's cell (NoteEditor.qml, block decorations).
     Q_INVOKABLE QVariantList blocks() const
     {
         QVariantList out;
@@ -76,6 +80,11 @@ public:
             entry.insert(QStringLiteral("marginRight"), format.rightMargin());
             entry.insert(QStringLiteral("background"), format.background().style() != Qt::NoBrush);
             entry.insert(QStringLiteral("list"), block.textList() != nullptr);
+            const QTextBlockFormat::MarkerType marker = format.marker();
+            entry.insert(QStringLiteral("marker"),
+                         marker == QTextBlockFormat::MarkerType::Checked         ? 2
+                                 : marker == QTextBlockFormat::MarkerType::Unchecked ? 1
+                                                                                     : 0);
             out.append(entry);
         }
         return out;

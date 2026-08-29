@@ -90,6 +90,18 @@ against these, and `qthtml/selftest.py` fails the moment one changes.
 | a checkbox | `<li class="unchecked">` / `class="checked"` | `- [ ]` / `- [x]` |
 | a highlight | `background-color:` on the span — **kept**, unlike in Markdown | `==text==` |
 
+**A checkbox's marker is Qt's, its look is ours.** Qt Quick draws a task
+item's marker as a raw ☐/☒ text glyph, hardcoded in the renderer
+(`qquicktextnodeengine.cpp`, with a "provide a way to have a custom checkbox"
+comment deferring it to Qt 7): the glyph's right edge one space-advance ahead
+of the text, the glyph its own advance wide and `fontMetrics.height()` tall
+from the line's top, in the block's font and colour. A click on it is Qt's
+own toggle (`qquicktextcontrol.cpp` flips the block format on release, and
+the change comes back through `textChanged`). So the editor keeps the marker
+— it carries the state, the serialisation and the click — and draws the box
+the eye sees over the glyph's cell (NoteEditor.qml, block decorations;
+`marker` in the inspector's `blocks()`, `class="checked"` in the HTML scan).
+
 **Block backgrounds survive on the paragraph** (measured on 6.11): a
 `background-color` in a `<p>`'s style comes back in the same place, is not
 copied onto spans that already exist, and zeroed vertical margins

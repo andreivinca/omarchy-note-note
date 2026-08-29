@@ -25,6 +25,9 @@ Item {
   property string placeholder: ""
   property color foreground: Color.menu.text
   property color accent: Color.accent
+  // The surface the note sits on — what the checkbox cover paints in, so
+  // the native marker glyph vanishes under it (block decorations, below).
+  property color background: Color.menu.background
   property string fontFamily: Style.font.menuFamily
   // The body must NOT be fixed-pitch: Qt's Markdown writer serialises any
   // monospace text as a code span and drops bold/italic/underline.
@@ -381,6 +384,12 @@ Item {
   // the missing library and the fallback carries on.
   property var quoteBars: []
   property var codeSlabs: []
+  // The checkboxes wear the same trick: Qt Quick paints a task item's
+  // marker as a raw ☐/☒ glyph, hardcoded in its renderer, so the editor
+  // covers the glyph's cell with the surface colour and draws the box the
+  // eye sees. The marker itself stays in the document — it carries the
+  // state, and a click on it is Qt's own toggle.
+  property var checkBoxes: []
   readonly property color quoteBarColour: Util.alpha("#2e75b5", 0.8)
   readonly property color codeSlabColour: Util.alpha(root.foreground, 0.07)
   Timer { id: decorTimer; interval: 120; onTriggered: root.updateDecorations() }
@@ -399,6 +408,13 @@ Item {
       console.log("note-note: native text inspector not built (sh cpp/build.sh); scanning HTML instead")
   }
 
+  // The native marker's cell, measured the way Qt Quick lays it out: the
+  // glyph's right edge sits one space ahead of the text, the glyph its own
+  // advance before that, fontMetrics.height() tall from the line's top
+  // (qquicktextnodeengine.cpp, measured on 6.11). The drawn box covers
+  // exactly that cell, so Qt's glyph never shows through.
+  FontMetrics { id: markerMetrics; font: area.font }
+
   // Items typed into a list inherit the split item's margins; restore the
   // canonical form a re-render would give. Called synchronously from the
   // text change, before the frame paints — on the debounced decorations
@@ -414,20 +430,32 @@ Item {
   }
 
   function updateDecorations() {
-    if (root.plain || area.length === 0) { root.quoteBars = []; root.codeSlabs = []; root.imageBoxes = []; return }
-    var runs
+    if (root.plain) { root.quoteBars = []; root.codeSlabs = []; root.imageBoxes = []; root.checkBoxes = []; return }
+    var runs, boxes
+    // The native path runs even on an empty document: a note can hold no
+    // characters and still be one checkbox block (docs/engine-notes.md),
+    // and that box deserves its drawn face too.
     if (nativeBlocks.item) {
       if (!nativeBlocks.item.document) nativeBlocks.item.document = area.textDocument
-      runs = QuoteBars.runsFromBlocks(nativeBlocks.item.blocks())
+      var bs = nativeBlocks.item.blocks()
+      runs = QuoteBars.runsFromBlocks(bs)
+      boxes = QuoteBars.boxesFromBlocks(bs)
       root.imageBoxes = root.readOnly ? [] : root.imageGeometry()
-    } else if (area.length <= 200000) {
-      runs = QuoteBars.runs(area.getFormattedText(0, area.length), area.getText(0, area.length))
-    } else { root.quoteBars = []; root.codeSlabs = []; return }
-    var bars = [], slabs = [], i
+    } else if (area.length > 0 && area.length <= 200000) {
+      var html = area.getFormattedText(0, area.length), text = area.getText(0, area.length)
+      runs = QuoteBars.runs(html, text)
+      boxes = QuoteBars.boxes(html, text)
+    } else { root.quoteBars = []; root.codeSlabs = []; root.checkBoxes = []; return }
+    var bars = [], slabs = [], marks = [], i
     for (i = 0; i < runs.quote.length; i++) bars.push(root.barGeometry(runs.quote[i].from, runs.quote[i].to))
     for (i = 0; i < runs.code.length; i++) slabs.push(root.slabGeometry(runs.code[i].from, runs.code[i].to))
+    for (i = 0; i < boxes.length; i++) {
+      var r = area.positionToRectangle(boxes[i].position)
+      marks.push({ position: boxes[i].position, checked: boxes[i].checked, x: r.x, y: r.y })
+    }
     root.quoteBars = bars
     root.codeSlabs = slabs
+    root.checkBoxes = marks
   }
 
   function barGeometry(from, to) {
@@ -1202,6 +1230,71 @@ Item {
               width: 4
               height: modelData.height
               color: root.quoteBarColour
+            }
+          }
+
+          // The checkboxes, drawn over Qt's own ☐/☒ marker glyphs
+          // (markerMetrics has the cell). Decoration only, and deliberately
+          // without handlers: the click falls through to Qt's marker
+          // underneath, which toggles the real state and comes back through
+          // textChanged to repaint this.
+          Repeater {
+            model: root.checkBoxes
+            Item {
+              id: checkItem
+              required property var modelData
+              readonly property real glyphWidth: markerMetrics.advanceWidth(modelData.checked ? "☒" : "☐")
+              readonly property int side: Math.round(markerMetrics.height * 0.8)
+              x: modelData.x - markerMetrics.advanceWidth(" ") - glyphWidth - 1
+              y: modelData.y
+              width: glyphWidth + 2
+              height: Math.ceil(markerMetrics.height)
+
+              Rectangle { anchors.fill: parent; color: root.background }
+
+              Rectangle {
+                id: face
+                anchors.centerIn: parent
+                width: checkItem.side
+                height: checkItem.side
+                radius: Math.max(3, Math.round(checkItem.side * 0.3))
+                color: checkItem.modelData.checked ? root.accent : "transparent"
+                border.color: checkItem.modelData.checked ? root.accent
+                            : Util.alpha(root.foreground, overBox.hovered ? 0.75 : 0.4)
+                border.width: checkItem.modelData.checked ? 0 : Math.max(1.2, checkItem.side / 9)
+                antialiasing: true
+
+                // The tick: two round-capped arms meeting at the elbow, in
+                // the surface colour so it reads as cut out of the accent.
+                readonly property real arm: Math.max(1.5, checkItem.side * 0.16)
+                Rectangle {
+                  visible: checkItem.modelData.checked
+                  x: face.width * 0.32 - width / 2
+                  y: face.height * 0.625 - height / 2
+                  width: face.width * 0.276 + face.arm
+                  height: face.arm
+                  radius: face.arm / 2
+                  rotation: 45
+                  antialiasing: true
+                  color: root.background
+                }
+                Rectangle {
+                  visible: checkItem.modelData.checked
+                  x: face.width * 0.60 - width / 2
+                  y: face.height * 0.52 - height / 2
+                  width: face.width * 0.538 + face.arm
+                  height: face.arm
+                  radius: face.arm / 2
+                  rotation: -48
+                  antialiasing: true
+                  color: root.background
+                }
+              }
+
+              // The pointing hand over the box, where the TextEdit below
+              // would show its I-beam; the handler grabs nothing, so the
+              // click still falls through to Qt's marker.
+              HoverHandler { id: overBox; cursorShape: Qt.PointingHandCursor }
             }
           }
 

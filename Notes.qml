@@ -1443,6 +1443,7 @@ Item {
             : (root.rows.length === 0 && !root.filterText ? "No notes yet — press ctrl+n to create one." : "")
           foreground: root.foreground
           accent: root.accent
+          background: root.background
           shortcutHandler: root.handleShortcut
           onEdited: root.onEdited()
           onStatusRequestedTextChanged: if (statusRequestedText) { root.showStatus(statusRequestedText); statusRequestedText = "" }

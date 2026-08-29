@@ -1,6 +1,6 @@
-"""Agreement test for the two ways the editor finds quote blocks — and the
-inspector's image side, which has no fallback to agree with and is asserted
-against the document directly.
+"""Agreement test for the two ways the editor finds quote blocks and
+checkbox items — and the inspector's image side, which has no fallback to
+agree with and is asserted against the document directly.
 
 The native inspector (textblocks.h) reads block formats from the document;
 the fallback (ui/QuoteBars.js) scans the document's serialised HTML. Both
@@ -51,7 +51,9 @@ Window {
       e.text = cases[key]
       out[key] = {
         native: QuoteBars.runsFromBlocks(tb.blocks()),
-        scanned: QuoteBars.runs(e.getFormattedText(0, e.length), e.getText(0, e.length))
+        scanned: QuoteBars.runs(e.getFormattedText(0, e.length), e.getText(0, e.length)),
+        boxesNative: QuoteBars.boxesFromBlocks(tb.blocks()),
+        boxesScanned: QuoteBars.boxes(e.getFormattedText(0, e.length), e.getText(0, e.length))
       }
     }
     // The image phase reads on a second tick, giving the document's
@@ -101,6 +103,21 @@ def has_code(markdown):
     return "```" in markdown
 
 
+def box_states(markdown):
+    """The note's checkboxes in document order, True for a checked one —
+    fences skipped, a `- [x]` inside code is text."""
+    out, fence = [], False
+    for line in markdown.split("\n"):
+        stripped = line.strip()
+        if stripped.startswith("```"):
+            fence = not fence
+            continue
+        if (not fence and stripped[:5] in ("- [ ]", "- [x]", "- [X]")
+                and (len(stripped) == 5 or stripped[5] == " ")):
+            out.append(stripped[3].lower() == "x")
+    return out
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("-v", "--verbose", action="store_true")
@@ -143,6 +160,7 @@ def main():
     for name, markdown in CASES.items():
         result = results.get(name, {})
         native, scanned = result.get("native"), result.get("scanned")
+        boxes_native, boxes_scanned = result.get("boxesNative"), result.get("boxesScanned")
         if native != scanned:
             failures += 1
             print("  FAIL  %-24s native %r != scanned %r" % (name, native, scanned))
@@ -154,8 +172,15 @@ def main():
             failures += 1
             print("  FAIL  %-24s markdown %s a code block, found %r"
                   % (name, "holds" if has_code(markdown) else "holds no", native["code"]))
-        elif args.verbose and (native["quote"] or native["code"]):
-            print("  ok    %-24s %r" % (name, native))
+        elif boxes_native != boxes_scanned:
+            failures += 1
+            print("  FAIL  %-24s native boxes %r != scanned %r" % (name, boxes_native, boxes_scanned))
+        elif [box["checked"] for box in boxes_native] != box_states(markdown):
+            failures += 1
+            print("  FAIL  %-24s markdown holds boxes %r, found %r"
+                  % (name, box_states(markdown), boxes_native))
+        elif args.verbose and (native["quote"] or native["code"] or boxes_native):
+            print("  ok    %-24s %r %r" % (name, native, boxes_native))
     print("  %d/%d cases" % (len(CASES) - failures, len(CASES)))
 
     print("images: natural size, the display cap, and the corner-handle resize")
