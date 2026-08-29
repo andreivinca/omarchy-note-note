@@ -94,9 +94,10 @@ Item {
   readonly property real ruleRoomAbove: Style.spacing.lg
   readonly property real ruleRoomBelow: Style.space(17)
 
-  // The title, a step above `heading`. The shell's scale goes 16 then straight
-  // to 24, and a note's title wants the size in between.
-  readonly property int titleSize: Math.round(Style.font.heading * 1.25)
+  // A document title needs display weight, while the readable-width cap keeps
+  // both short notes and long prose calm on wide windows.
+  readonly property int titleSize: Math.round(Style.font.heading * 1.55)
+  readonly property real contentMaxWidth: Style.space(620)
   readonly property bool showingNotice: noticeText.length > 0 || customView !== null
   function showView(component, props) {
     customView = component; customViewProps = props || ({})
@@ -996,8 +997,13 @@ Item {
   // around it and no rule beside it — a box drawn around a page is one line
   // too many.
   Column {
-    anchors.fill: parent
-    anchors.margins: Style.spacing.panelPadding
+    id: sheet
+    anchors.top: parent.top
+    anchors.bottom: parent.bottom
+    anchors.topMargin: Style.spacing.panelPadding
+    anchors.bottomMargin: Style.spacing.panelPadding
+    x: Math.max(Style.spacing.panelPadding, (parent.width - width) / 2)
+    width: Math.min(root.contentMaxWidth, parent.width - Style.spacing.panelPadding * 2)
     spacing: Style.spacing.xs
 
     // ---- header: the title belongs on the note's own sheet
@@ -1033,6 +1039,7 @@ Item {
           accent: root.accent
           font.family: root.fontFamily
           font.pixelSize: root.titleSize
+          font.bold: true
           horizontalPadding: Style.spacing.xs
           verticalPadding: 0
           // A title is a title: no box around it. The padding still comes off
@@ -1066,7 +1073,7 @@ Item {
       id: toolbar
       visible: root.hasNote && !root.plain && !root.readOnly && !root.showingNotice && (root.enabledTools === null || root.enabledTools.length > 0)
       width: parent.width
-      spacing: Style.spacing.sm
+      spacing: Style.spacing.xxs
 
       Repeater {
         // Material Design glyphs from the shell's Nerd Font, by name:
@@ -1120,8 +1127,8 @@ Item {
           bordered: hovering
           foreground: root.foreground
           accent: root.accent
-          iconSize: Style.font.icon
-          horizontalPadding: Style.spacing.sm
+          iconSize: Style.font.iconSmall
+          horizontalPadding: Style.spacing.xs
           verticalPadding: Style.spacing.xxs
           onHovered: function(isHovered) { hovering = isHovered }
           onClicked: root.tool(toolId)
@@ -1513,7 +1520,7 @@ Item {
     anchors.bottom: parent.bottom
     // Lined up with the note's own margin, not tucked into the corner:
     // it reads as the last line of the page rather than a badge on it.
-    anchors.rightMargin: Style.spacing.panelPadding
+    anchors.rightMargin: Math.max(Style.spacing.panelPadding, (parent.width - sheet.width) / 2)
     anchors.bottomMargin: Style.spacing.panelPadding
     text: root.wordCount + (root.wordCount === 1 ? " word" : " words")
     color: Util.alpha(root.foreground, 0.35)

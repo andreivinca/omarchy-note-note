@@ -19,6 +19,7 @@ Item {
   property string notebook: ""
   property color foreground: Color.menu.text
   property color accent: Color.accent
+  property color selectionAccent: accent
   property color selectedBackground: Color.menu.selectedBackground
   property color selectedText: Color.menu.selectedText
   property string fontFamily: Style.font.menuFamily
@@ -29,8 +30,7 @@ Item {
   // Row geometry, handed down by NoteList: these results stand where its rows
   // stood, so they must measure exactly as its rows do.
   property real rowHeight: Style.spacing.controlHeight + Style.spacing.xs
-  property real markWidth: Style.space(2)
-  property real textInset: markWidth + Style.spacing.md
+  property real textInset: Style.spacing.md
   readonly property int count: root.model ? root.model.length : 0
 
   function positionViewAtIndex(i, mode) { results.positionViewAtIndex(i, mode) }
@@ -70,18 +70,15 @@ Item {
         id: hit
         required property var modelData
         readonly property bool current: modelData.path === root.currentPath
-        width: results.width
+        x: Style.spacing.xxs
+        width: results.width - Style.spacing.xxs * 2
         height: root.rowHeight
+        radius: Math.min(Style.cornerRadius, Style.space(6))
         color: current ? root.selectedBackground : (hitHover.hovered ? Style.hoverFill : "transparent")
+        border.width: current ? Math.max(1, Style.spacing.hairline) : 0
+        border.color: Util.alpha(root.selectionAccent, 0.62)
 
         HoverHandler { id: hitHover }
-
-        Rectangle {
-          width: root.markWidth
-          height: parent.height
-          visible: hit.current
-          color: root.accent
-        }
 
         Text {
           textFormat: Text.PlainText

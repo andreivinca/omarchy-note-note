@@ -3,13 +3,9 @@ import qs.Commons
 import qs.Ui
 import "TabColors.js" as TabColors
 
-// The left-hand picker: a rail of binder tabs, one per notebook and per source,
-// and beside it the notes of whichever tab is open — a "New note…" row at the
-// end, and a "New notebook…" row at the bottom. Rows can be dragged to reorder
-// within their notebook (only while no filter is active).
-//
-// There are no headings any more: the tab is the heading, and the panel is
-// painted in its colour, so the open divider and its page are one thing.
+// The left-hand navigation: a compact source rail beside the current source's
+// note tree. Provider colour stays present as a restrained surface tint and
+// selection accent; note titles remain the visual focus.
 //
 // Model rows carry { kind, notebook, path, title, preview }:
 //   kind "note"        a note (fixed: true → not draggable)
@@ -54,9 +50,7 @@ Item {
   // Qt.lighter/Qt.darker, which pick a direction and are wrong on the theme
   // that runs the other way.
   readonly property color accentInk: Qt.tint(foreground, Util.alpha(accent, 0.6))
-  property color selectedBackground: Color.menu.selectedBackground
-  property color selectedText: Color.menu.selectedText
-  property string fontFamily: Style.font.menuFamily
+  property string fontFamily: "sans-serif"
   // (title, preview) -> string shown in the row.
   property var titleFor: function(t, p) { return t || p || "Untitled" }
 
@@ -72,15 +66,12 @@ Item {
   signal moveRequested(string fromPath, string toPath)
   signal reorderFinished(string notebook)
 
-  readonly property int rowHeight: Style.spacing.controlHeight + Style.spacing.xs
-  readonly property real railWidth: Style.space(30)
+  readonly property int rowHeight: Style.spacing.controlHeight
+  readonly property real railWidth: Style.space(48)
   // The page's own margin. The rows sit inside it, so a title never starts on
   // the panel's edge and the list has air above and below it.
   readonly property real pagePadding: Style.spacing.lg
-  // The bar that marks the open note, and where a row's contents start because
-  // of it — the search panel measures itself the same way.
-  readonly property real markWidth: Style.space(2)
-  readonly property real textInset: markWidth + Style.spacing.md
+  readonly property real textInset: Style.spacing.md
 
   // The page the open divider is attached to, painted in exactly the tab's
   // colour — the same wash over the same background, from the same number,
@@ -88,7 +79,8 @@ Item {
   // than a surface, so the theme's own text goes on it unchanged and nothing
   // here has to know whether the theme is dark or light.
   readonly property color page: Qt.tint(Color.menu.background,
-                                        Util.alpha(rail.activeBase, TabColors.fillAlpha()))
+                                        Util.alpha(rail.activeBase, 0.075))
+  readonly property color selectionFill: Qt.tint(page, Util.alpha(rail.activeBase, 0.14))
 
 
   // Whichever list is on screen: the search panel replaces the main list
@@ -129,6 +121,7 @@ Item {
       activeKey: root.activeKey
       filtering: root.filtering
       foreground: root.foreground
+      fontFamily: root.fontFamily
       onActivated: function(key) { root.sectionActivated(key) }
     }
 
@@ -161,12 +154,12 @@ Item {
       notebook: root.activeName
       foreground: root.foreground
       accent: root.accent
-      selectedBackground: root.selectedBackground
-      selectedText: root.selectedText
+      selectionAccent: rail.activeBase
+      selectedBackground: root.selectionFill
+      selectedText: root.foreground
       fontFamily: root.fontFamily
       titleFor: root.titleFor
       rowHeight: root.rowHeight
-      markWidth: root.markWidth
       textInset: root.textInset
       onActivated: function(path) { root.activated(path) }
     }
@@ -222,20 +215,16 @@ Item {
 
             Rectangle {
               id: row
-              width: slot.width
-              height: root.rowHeight
+              x: Style.spacing.xxs
+              width: slot.width - Style.spacing.xxs * 2
+              height: root.rowHeight - Style.spacing.xxs
+              anchors.verticalCenter: parent.verticalCenter
+              radius: Math.min(Style.cornerRadius, Style.space(6))
               readonly property bool current: slot.isNote && slot.modelData.path === root.currentPath
-              color: current ? root.selectedBackground
+              color: current ? root.selectionFill
                 : (rowHover.hovered ? Style.hoverFill : "transparent")
-
-              // A bar on the open note's edge, in the accent — the same idea as
-              // the tab that reaches the panel, said one level down.
-              Rectangle {
-                width: root.markWidth
-                height: parent.height
-                visible: row.current
-                color: root.accent
-              }
+              border.width: current ? Math.max(1, Style.spacing.hairline) : 0
+              border.color: Util.alpha(rail.activeBase, 0.62)
               // Action rows ("New note…", sign in/out, settings) are dimmed so
               // notes stand out from the things you can do; hover lifts them.
               // Dimmed, not faint: opacity fades toward whichever background
@@ -261,7 +250,7 @@ Item {
                   // the eye goes to the words.
                   color: slot.isNew || slot.isAction ? root.accentInk
                     : (slot.isTree ? root.accentInk
-                    : (row.current ? root.selectedText : Util.alpha(root.foreground, 0.4)))
+                    : (row.current ? root.foreground : Util.alpha(root.foreground, 0.4)))
                   font.family: Style.fontFamily
                   font.pixelSize: (slot.isNew || slot.isAction) ? Style.font.iconSmall : Style.font.icon
                   horizontalAlignment: Text.AlignHCenter
@@ -274,7 +263,7 @@ Item {
                     - (closeButton.visible ? closeButton.width + Style.spacing.xs : 0)
                   text: slot.isNew ? "New note…"
                     : (slot.isAction || slot.isTree ? slot.modelData.title : root.titleFor(slot.modelData.title, slot.modelData.preview))
-                  color: row.current ? root.selectedText : (slot.isTree ? root.accentInk : root.foreground)
+                  color: row.current ? root.foreground : (slot.isTree ? root.accentInk : root.foreground)
                   font.bold: slot.isTree && (slot.modelData.level || 0) === 0
                   font.family: root.fontFamily
                   // Actions ("New note…", sign in/out, settings) read as chrome,
@@ -318,7 +307,7 @@ Item {
                 Behavior on opacity { NumberAnimation { duration: 120 } }
                 iconText: "󰅖"
                 tooltipText: "Delete this note"
-                foreground: row.current ? root.selectedText : root.foreground
+                foreground: root.foreground
                 accent: root.accent
                 iconSize: Style.font.iconSmall
                 horizontalPadding: Style.spacing.xs

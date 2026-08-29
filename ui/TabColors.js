@@ -6,12 +6,9 @@
 // it has a tab per notebook folder, so each one takes its colour from its own
 // name.
 
-// The tab colours of a binder divider. Full-strength mid-tones on purpose:
-// a tab is never painted in this colour directly but in an alpha wash of it
-// (see fillAlpha), and a mid-tone is the one lightness that survives the wash
-// on any theme — over a light background it settles into a pastel, over a
-// dark one into a deep tint. A pastel here would do the first and vanish in
-// the second reversed: it is the alpha, not the colour, that adapts.
+// Full-strength mid-tones on purpose: components apply them as alpha washes,
+// and a mid-tone survives that wash on either a light or dark theme. A pastel
+// here would disappear when the theme reverses; the alpha is what adapts.
 var PALETTE = ["#d74269",  // rose
                "#d78942",  // apricot
                "#d7b642",  // butter
@@ -66,19 +63,6 @@ function parseColor(hex) {
 }
 
 function baseFor(color, name) { return pastelize(color || fromName(name)) }
-
-// A tab is a shade of its colour over whatever is behind it, not a surface made
-// of it: enough to tell the tabs apart and to say which page you are on, little
-// enough that the theme's own text still sits on it with room to spare. Every
-// tab is washed the same — which one is open is said by its shape, the way it
-// is on a binder, and a divider does not light up under the cursor or fade
-// because you are not on it. This one number over a mid-tone base is the whole
-// of the theme handling: the background underneath decides whether the wash
-// comes out pastel or deep, and nothing ever asks which theme is on.
-//
-// The panel is painted from this same number, so a tab and the page it belongs
-// to are provably the same colour.
-function fillAlpha() { return 0.3 }
 
 // A tab's words are written in its own ink: the theme's text colour tinted
 // this far toward the tab's colour. Starting from the theme's foreground —

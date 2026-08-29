@@ -73,15 +73,13 @@ Item {
   property var borderSpec: Border.surfaceSpec("menu", "border", borderColor, Math.max(1, Style.space(2)))
 
   // The frame hugs the notes: the app keeps a hair of padding inside its
-  // border, so the notebook rail, the list and the note itself run out to
-  // the edge. Only the header is held back — it takes the inset the whole
-  // app used to have, minus the hair, and so looks exactly as it did.
+  // border, so the navigation and note surface run cleanly to the edge.
   readonly property real appPadding: Math.max(1, Style.space(2))
-  readonly property real headerPadding: Math.max(0, Style.spacing.panelPadding - appPadding)
   property color scrim: Color.menu.scrim
   property color accent: Color.accent
   property color selectedBackground: Color.menu.selectedBackground
   property color selectedText: Color.menu.selectedText
+  readonly property string interfaceFont: "sans-serif"
 
   // ── shell contract ──────────────────────────────────────────────────
   function open(payloadJson) {
@@ -1094,28 +1092,35 @@ Item {
 
     Column {
       anchors.fill: parent
-      spacing: Style.spacing.md
+      spacing: 0
 
       // ---- header
       Item {
         width: parent.width
-        height: headerInner.height + root.headerPadding
+        height: Style.space(44)
 
-        // The app pads itself by a hair, so the header carries what is
-        // left of the old inset on its own: the masthead, the search
-        // field and the hints keep their distance from the frame, while
-        // the list and the note below run out to the edge. Vertically the
-        // inset is split around the content — the same air above it as
-        // below, counting the column gap — so the band reads centered.
+        Rectangle {
+          anchors.fill: parent
+          color: Qt.tint(root.background, Util.alpha(root.foreground, 0.015))
+        }
+
+        Rectangle {
+          anchors.bottom: parent.bottom
+          width: parent.width
+          height: Math.max(1, Style.spacing.hairline)
+          color: Util.alpha(root.foreground, 0.1)
+        }
+
+        // A stable desktop toolbar: provider at the left, search in the
+        // visual centre, window controls at the right.
         Item {
           id: headerInner
           anchors.left: parent.left
           anchors.right: parent.right
-          anchors.top: parent.top
-          anchors.topMargin: Math.max(0, (root.headerPadding + Style.spacing.md - root.appPadding) / 2)
-          anchors.leftMargin: root.headerPadding
-          anchors.rightMargin: root.headerPadding
-          height: Math.max(searchField.height, titleText.implicitHeight)
+          anchors.verticalCenter: parent.verticalCenter
+          anchors.leftMargin: Style.spacing.lg
+          anchors.rightMargin: Style.spacing.lg
+          height: searchField.height
 
           // The masthead is the open tab said large: the provider's mark, its
           // name, in the tab's own ink — so the header always answers "whose
@@ -1125,7 +1130,7 @@ Item {
             id: titleRow
             anchors.left: parent.left
             anchors.verticalCenter: parent.verticalCenter
-            width: Style.space(150)
+            width: Style.space(180)
             spacing: Style.spacing.sm
 
             Image {
@@ -1133,10 +1138,10 @@ Item {
               visible: status === Image.Ready
               source: root.headerLogo
               anchors.verticalCenter: parent.verticalCenter
-              width: Style.font.title
-              height: Style.font.title
-              sourceSize.width: Style.font.title * 2
-              sourceSize.height: Style.font.title * 2
+              width: Style.font.icon
+              height: Style.font.icon
+              sourceSize.width: Style.font.icon * 2
+              sourceSize.height: Style.font.icon * 2
               fillMode: Image.PreserveAspectFit
               smooth: true
             }
@@ -1149,8 +1154,8 @@ Item {
               text: root.headerName
               color: root.headerInk
               Behavior on color { ColorAnimation { duration: 150 } }
-              font.family: Style.font.menuFamily
-              font.pixelSize: Style.font.title
+              font.family: root.interfaceFont
+              font.pixelSize: Style.font.heading
               font.bold: true
               elide: Text.ElideRight
             }
@@ -1163,16 +1168,16 @@ Item {
           // clear, so the right edge always says the one thing you can do.
           TextField {
             id: searchField
-            x: Math.max(titleRow.width + Style.spacing.lg, (parent.width - width) / 2)
+            x: Math.max(titleRow.width + Style.spacing.lg,
+                        Math.min((parent.width - width) / 2,
+                                 settingsButton.x - Style.spacing.lg - width))
             anchors.verticalCenter: parent.verticalCenter
-            width: Style.space(340)
+            width: Style.space(360)
             placeholderText: "Search notes…"
             foreground: root.foreground
             accent: root.accent
-            font.family: Style.font.menuFamily
-            // Two steps up from the default: the field is the header's one
-            // control and reads better with more air.
-            verticalPadding: Style.spacing.md
+            font.family: root.interfaceFont
+            verticalPadding: Style.spacing.sm
             onTextEdited: root.setFilter(text)
             rightPadding: root.filterText.length > 0
               ? clearSearchButton.width + Style.spacing.xs
@@ -1202,7 +1207,7 @@ Item {
                 anchors.centerIn: parent
                 text: "ctrl+k"
                 color: Util.alpha(root.foreground, 0.6)
-                font.family: Style.font.menuFamily
+                font.family: root.interfaceFont
                 font.pixelSize: Style.font.caption
               }
             }
@@ -1261,6 +1266,7 @@ Item {
             selected: root.detached
             foreground: root.foreground
             accent: root.accent
+            fontFamily: root.interfaceFont
             iconSize: Style.font.iconSmall
             // Wider than the default control padding: a labelled pill wants
             // air around its word.
@@ -1334,7 +1340,7 @@ Item {
               anchors.verticalCenter: parent.verticalCenter
               text: root.statusText
               color: Qt.tint(root.foreground, Util.alpha(root.accent, 0.6))
-              font.family: Style.font.menuFamily
+              font.family: root.interfaceFont
               font.pixelSize: Style.font.caption
               elide: Text.ElideRight
               horizontalAlignment: Text.AlignRight
@@ -1356,7 +1362,7 @@ Item {
           // otherwise — clamped either way, so neither the list nor the note
           // can be squeezed out of use by a drag or a narrow window.
           width: {
-            var w = root.listWidth > 0 ? root.listWidth : Style.space(215) + list.railWidth
+            var w = root.listWidth > 0 ? root.listWidth : Style.space(210) + list.railWidth
             return Math.max(list.railWidth + Style.space(140), Math.min(w, body.width - Style.space(320)))
           }
           height: parent.height
@@ -1370,8 +1376,7 @@ Item {
           canCreateNotebook: root.revision < 0 ? false : root.canCreateNotebook()
           foreground: root.foreground
           accent: root.accent
-          selectedBackground: root.selectedBackground
-          selectedText: root.selectedText
+          fontFamily: root.interfaceFont
           titleFor: root.displayTitle
           onActivated: function(path) { root.selectPath(path); editor.focusEditor() }
           onNewRequested: function(target) {
@@ -1404,16 +1409,16 @@ Item {
         // the cursor's own change of shape is the invitation.
         Item {
           id: splitter
-          width: Style.spacing.lg
+          width: Style.space(8)
           height: parent.height
 
           Rectangle {
             anchors.centerIn: parent
-            width: Style.space(3)
+            width: Math.max(1, Style.spacing.hairline)
             height: parent.height
-            radius: width / 2
-            color: Util.alpha(root.foreground, splitterArea.pressed ? 0.35 : 0.18)
-            visible: splitterArea.containsMouse || splitterArea.pressed
+            color: Util.alpha(root.foreground,
+                              splitterArea.pressed ? 0.35 : (splitterArea.containsMouse ? 0.22 : 0.08))
+            Behavior on color { ColorAnimation { duration: 120 } }
           }
 
           MouseArea {
@@ -1457,6 +1462,8 @@ Item {
           foreground: root.foreground
           accent: root.accent
           background: root.background
+          fontFamily: root.interfaceFont
+          bodyFontFamily: root.interfaceFont
           shortcutHandler: root.handleShortcut
           onEdited: root.onEdited()
           onStatusRequestedTextChanged: if (statusRequestedText) { root.showStatus(statusRequestedText); statusRequestedText = "" }
@@ -1476,7 +1483,7 @@ Item {
       scrim: root.scrim
       selectedBackground: root.selectedBackground
       selectedText: root.selectedText
-      fontFamily: Style.font.menuFamily
+      fontFamily: root.interfaceFont
       cornerRadius: Style.cornerRadius
       onCanceled: root.cancelDelete()
       onConfirmed: root.confirmDelete()
