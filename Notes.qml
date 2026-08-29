@@ -975,8 +975,13 @@ Item {
       if (event.key === Qt.Key_U) { editor.toggleFormat("underline"); return true }
       if (event.key === Qt.Key_S) { editor.toggleFormat("strikeout"); return true }
       if (event.key === Qt.Key_H && (event.modifiers & Qt.ShiftModifier)) { editor.highlightSelection(); return true }
-      // The editor decides whether this paste is a picture or text.
-      if (event.key === Qt.Key_V && !(event.modifiers & Qt.ShiftModifier)) { editor.paste(); return true }
+      // The editor decides whether this paste is a picture or text; with
+      // Shift the source's formatting stays behind.
+      if (event.key === Qt.Key_V) {
+        if (event.modifiers & Qt.ShiftModifier) editor.pastePlain()
+        else editor.paste()
+        return true
+      }
     }
     return false
   }

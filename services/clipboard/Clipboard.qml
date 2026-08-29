@@ -2,7 +2,8 @@ import Quickshell
 import Quickshell.Io
 import QtQuick
 
-// The clipboard's image, for pasting a picture into a note.
+// The clipboard, for pasting into a note: its image, and its text for the
+// plain paste.
 //
 // Wayland keeps the clipboard in the compositor, so the work happens in
 // `clipboard.py` (wl-paste, bounded reads, a screenshot scaled down to
@@ -26,6 +27,12 @@ Item {
   // "no image in the clipboard" is the ordinary case, not a failure to report.
   function takeImage(callback) {
     run(["image", root.stagingDir], function(result) { callback(result && result.path ? result : null) })
+  }
+
+  // The clipboard's text, whatever flavour it is on offer in.  callback(string)
+  // — "" when the clipboard holds no text at all.
+  function takeText(callback) {
+    run(["text"], function(result) { callback(result && result.text ? result.text : "") })
   }
 
   function run(args, callback) {

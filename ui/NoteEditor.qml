@@ -230,6 +230,31 @@ Item {
     })
   }
 
+  // Ctrl+Shift+V: the clipboard's text and nothing that rode along with it —
+  // no fonts, no colours, no source formatting. The text goes in escaped, so
+  // nothing in it can read as markup; newlines become line breaks, and
+  // white-space:pre keeps the runs of spaces (a pasted snippet's indentation)
+  // that Qt's HTML parser folds otherwise. Inserted after the selection and
+  // the selection removed second, the highlight's order, for the same
+  // block-start reason. A clipboard with no text pastes nothing.
+  function pastePlain() {
+    if (root.readOnly) return
+    if (!root.clipboard || root.plain) { area.paste(); return }
+    root.clipboard.takeText(function(text) {
+      if (!text) return
+      var from = Math.min(area.selectionStart, area.selectionEnd)
+      var to = Math.max(area.selectionStart, area.selectionEnd)
+      var esc = text.replace(/\r\n?/g, "\n").replace(/&/g, "&amp;").replace(/</g, "&lt;")
+                    .replace(/\n/g, "<br />")
+      var before = area.length
+      area.insert(to, '<span style="white-space:pre;">' + esc + "</span>")
+      var added = area.length - before
+      if (from !== to) area.remove(from, to)
+      area.cursorPosition = from + added
+      root.edited()
+    })
+  }
+
   function insertImage(path) {
     if (root.readOnly || root.plain) return
     var at = area.cursorPosition
