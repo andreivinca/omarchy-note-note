@@ -1073,7 +1073,7 @@ Item {
       id: toolbar
       visible: root.hasNote && !root.plain && !root.readOnly && !root.showingNotice && (root.enabledTools === null || root.enabledTools.length > 0)
       width: parent.width
-      spacing: Style.spacing.xxs
+      spacing: Style.spacing.sm
 
       Repeater {
         // Material Design glyphs from the shell's Nerd Font, by name:
@@ -1127,8 +1127,8 @@ Item {
           bordered: hovering
           foreground: root.foreground
           accent: root.accent
-          iconSize: Style.font.iconSmall
-          horizontalPadding: Style.spacing.xs
+          iconSize: Style.font.icon
+          horizontalPadding: Style.spacing.sm
           verticalPadding: Style.spacing.xxs
           onHovered: function(isHovered) { hovering = isHovered }
           onClicked: root.tool(toolId)

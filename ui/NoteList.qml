@@ -221,10 +221,7 @@ Item {
               anchors.verticalCenter: parent.verticalCenter
               radius: Math.min(Style.cornerRadius, Style.space(6))
               readonly property bool current: slot.isNote && slot.modelData.path === root.currentPath
-              color: current ? root.selectionFill
-                : (rowHover.hovered ? Style.hoverFill : "transparent")
-              border.width: current ? Math.max(1, Style.spacing.hairline) : 0
-              border.color: Util.alpha(rail.activeBase, 0.62)
+              color: current || rowHover.hovered ? Style.hoverFill : "transparent"
               // Action rows ("New note…", sign in/out, settings) are dimmed so
               // notes stand out from the things you can do; hover lifts them.
               // Dimmed, not faint: opacity fades toward whichever background
@@ -250,7 +247,7 @@ Item {
                   // the eye goes to the words.
                   color: slot.isNew || slot.isAction ? root.accentInk
                     : (slot.isTree ? root.accentInk
-                    : (row.current ? root.foreground : Util.alpha(root.foreground, 0.4)))
+                    : Util.alpha(root.foreground, 0.4))
                   font.family: Style.fontFamily
                   font.pixelSize: (slot.isNew || slot.isAction) ? Style.font.iconSmall : Style.font.icon
                   horizontalAlignment: Text.AlignHCenter
