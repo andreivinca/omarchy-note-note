@@ -1518,9 +1518,9 @@ Item {
     textFormat: Text.PlainText
     anchors.right: parent.right
     anchors.bottom: parent.bottom
-    // Lined up with the note's own margin, not tucked into the corner:
+    // Lined up with the sheet's own right edge, not tucked into the corner:
     // it reads as the last line of the page rather than a badge on it.
-    anchors.rightMargin: Math.max(Style.spacing.panelPadding, (parent.width - sheet.width) / 2)
+    anchors.rightMargin: parent.width - sheet.x - sheet.width
     anchors.bottomMargin: Style.spacing.panelPadding
     text: root.wordCount + (root.wordCount === 1 ? " word" : " words")
     color: Util.alpha(root.foreground, 0.35)

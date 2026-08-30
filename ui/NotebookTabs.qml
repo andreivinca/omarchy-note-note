@@ -14,7 +14,7 @@ Item {
   property string activeKey: ""
   property bool filtering: false
   property color foreground: Color.menu.text
-  property string fontFamily: "sans-serif"
+  property string fontFamily: Style.font.menuFamily
   signal activated(string key)
 
   readonly property color activeBase: {
@@ -25,9 +25,9 @@ Item {
   }
   readonly property real maxButtonHeight: Style.space(150)
   readonly property real buttonGap: Style.spacing.xxs
-  readonly property real buttonLeftInset: 0
   readonly property real buttonRightInset: Style.space(3)
-  readonly property real buttonVerticalPadding: Style.space(24)
+  // Air at each end of a button, between its edge and the icon or label.
+  readonly property real buttonPadding: Style.space(12)
   readonly property real iconLabelGap: Style.spacing.xs
 
   Rectangle {
@@ -36,7 +36,7 @@ Item {
 
     Rectangle {
       anchors.right: parent.right
-      width: Math.max(1, Style.spacing.hairline)
+      width: Style.spacing.hairline
       height: parent.height
       color: Util.alpha(root.foreground, 0.1)
     }
@@ -70,24 +70,24 @@ Item {
           readonly property bool dimmed: root.filtering && hits === 0
           readonly property int shownCount: root.filtering ? hits : (modelData.count || 0)
           readonly property color base: TabColors.baseFor(modelData.color || "", modelData.name || "")
-          readonly property bool localNotebook: modelData.providerId === "local"
+          readonly property bool localNotebook: modelData.local === true
+          readonly property string displayName: modelData.name || "Notes"
           readonly property real iconBlock: localNotebook ? 0 : Style.font.icon + root.iconLabelGap
           width: buttons.width
           height: Math.min(root.maxButtonHeight,
-                           labelMetrics.width + iconBlock + root.buttonVerticalPadding)
+                           labelMetrics.width + iconBlock + root.buttonPadding * 2)
 
           TextMetrics {
             id: labelMetrics
             font.family: root.fontFamily
             font.pixelSize: Style.font.caption
-            text: tab.modelData.name || "Notes"
+            text: tab.displayName
           }
 
           HoverHandler { id: tabHover }
 
           Rectangle {
             anchors.fill: parent
-            anchors.leftMargin: root.buttonLeftInset
             anchors.rightMargin: root.buttonRightInset
             radius: Math.min(Style.cornerRadius, Style.space(8))
             color: tab.current || tabHover.hovered ? Style.hoverFill : "transparent"
@@ -100,7 +100,7 @@ Item {
             visible: !tab.localNotebook && status === Image.Ready
             source: tab.modelData.logo || ""
             anchors.top: parent.top
-            anchors.topMargin: root.buttonVerticalPadding / 2
+            anchors.topMargin: root.buttonPadding
             anchors.horizontalCenter: parent.horizontalCenter
             width: Style.font.icon
             height: Style.font.icon
@@ -114,7 +114,7 @@ Item {
           Text {
             visible: !tab.localNotebook && !logo.visible
             anchors.top: parent.top
-            anchors.topMargin: root.buttonVerticalPadding / 2
+            anchors.topMargin: root.buttonPadding
             anchors.horizontalCenter: parent.horizontalCenter
             text: "󰉋"
             color: tab.current
@@ -129,10 +129,10 @@ Item {
             id: label
             anchors.centerIn: parent
             anchors.verticalCenterOffset: tab.iconBlock / 2
-            width: Math.max(0, tab.height - tab.iconBlock - root.buttonVerticalPadding)
-            height: tab.width - root.buttonLeftInset - root.buttonRightInset
+            width: Math.max(0, tab.height - tab.iconBlock - root.buttonPadding * 2)
+            height: tab.width - root.buttonRightInset
             rotation: -90
-            text: tab.modelData.name || "Notes"
+            text: tab.displayName
             color: Util.alpha(root.foreground, tab.current ? 0.92 : 0.68)
             opacity: tab.dimmed ? 0.4 : 1
             font.family: root.fontFamily
@@ -150,7 +150,7 @@ Item {
 
           PanelToolTip {
             visible: tabHover.hovered && labelMetrics.width > label.width
-            text: (tab.modelData.name || "Notes") + " · " + tab.shownCount
+            text: tab.displayName + " · " + tab.shownCount
           }
         }
       }

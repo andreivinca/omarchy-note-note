@@ -29,7 +29,8 @@ Item {
 
   // Row geometry, handed down by NoteList: these results stand where its rows
   // stood, so they must measure exactly as its rows do.
-  property real rowHeight: Style.spacing.controlHeight + Style.spacing.xs
+  property real rowHeight: Style.spacing.controlHeight
+  property real rowRadius: Math.min(Style.cornerRadius, Style.space(6))
   property real textInset: Style.spacing.md
   readonly property int count: root.model ? root.model.length : 0
 
@@ -66,38 +67,44 @@ Item {
 
       ListWheel { flick: results }
 
-      delegate: Rectangle {
+      delegate: Item {
         id: hit
         required property var modelData
         readonly property bool current: modelData.path === root.currentPath
-        x: Style.spacing.xxs
-        width: results.width - Style.spacing.xxs * 2
+        width: results.width
         height: root.rowHeight
-        radius: Math.min(Style.cornerRadius, Style.space(6))
-        color: current ? root.selectedBackground : (hitHover.hovered ? Style.hoverFill : "transparent")
-        border.width: current ? Math.max(1, Style.spacing.hairline) : 0
-        border.color: Util.alpha(root.selectionAccent, 0.62)
 
-        HoverHandler { id: hitHover }
-
-        Text {
-          textFormat: Text.PlainText
-          anchors.left: parent.left
-          anchors.right: parent.right
+        Rectangle {
+          x: Style.spacing.xxs
+          width: parent.width - Style.spacing.xxs * 2
+          height: root.rowHeight - Style.spacing.xxs
           anchors.verticalCenter: parent.verticalCenter
-          anchors.leftMargin: root.textInset
-          anchors.rightMargin: Style.spacing.sm
-          text: root.titleFor(hit.modelData.title, hit.modelData.preview)
-          color: hit.current ? root.selectedText : root.foreground
-          font.family: root.fontFamily
-          font.pixelSize: Style.font.body
-          elide: Text.ElideRight
-        }
+          radius: root.rowRadius
+          color: hit.current ? root.selectedBackground : (hitHover.hovered ? Style.hoverFill : "transparent")
+          border.width: hit.current ? Style.spacing.hairline : 0
+          border.color: Util.alpha(root.selectionAccent, 0.62)
 
-        MouseArea {
-          anchors.fill: parent
-          cursorShape: Qt.PointingHandCursor
-          onClicked: root.activated(hit.modelData.path)
+          HoverHandler { id: hitHover }
+
+          Text {
+            textFormat: Text.PlainText
+            anchors.left: parent.left
+            anchors.right: parent.right
+            anchors.verticalCenter: parent.verticalCenter
+            anchors.leftMargin: root.textInset
+            anchors.rightMargin: Style.spacing.sm
+            text: root.titleFor(hit.modelData.title, hit.modelData.preview)
+            color: hit.current ? root.selectedText : root.foreground
+            font.family: root.fontFamily
+            font.pixelSize: Style.font.body
+            elide: Text.ElideRight
+          }
+
+          MouseArea {
+            anchors.fill: parent
+            cursorShape: Qt.PointingHandCursor
+            onClicked: root.activated(hit.modelData.path)
+          }
         }
       }
     }

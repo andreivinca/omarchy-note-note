@@ -27,7 +27,8 @@ Item {
   // Providers are still answering the content search; the search panel says
   // so instead of a premature "No match" (see the host's searchBusy).
   property bool searchBusy: false
-  // The rail's tabs, as the host builds them: { key, name, color, count }.
+  // The rail's tabs, as the host builds them:
+  // { key, local, name, color, logo, count }.
   property var sections: []
   // Search hits per tab key; kept beside `sections` so a keystroke moves the
   // numbers without touching the tabs (see the host's rebuildRows).
@@ -50,7 +51,7 @@ Item {
   // Qt.lighter/Qt.darker, which pick a direction and are wrong on the theme
   // that runs the other way.
   readonly property color accentInk: Qt.tint(foreground, Util.alpha(accent, 0.6))
-  property string fontFamily: "sans-serif"
+  property string fontFamily: Style.font.menuFamily
   // (title, preview) -> string shown in the row.
   property var titleFor: function(t, p) { return t || p || "Untitled" }
 
@@ -72,16 +73,19 @@ Item {
   // the panel's edge and the list has air above and below it.
   readonly property real pagePadding: Style.spacing.lg
   readonly property real textInset: Style.spacing.md
+  // Rows draw as rounded pills; the search panel's rows measure the same way.
+  readonly property real rowRadius: Math.min(Style.cornerRadius, Style.space(6))
 
-  // The page the open divider is attached to, painted in exactly the tab's
-  // colour — the same wash over the same background, from the same number,
-  // which is the only way the two are provably identical. It is a shade rather
-  // than a surface, so the theme's own text goes on it unchanged and nothing
-  // here has to know whether the theme is dark or light.
+  // The panel carries a restrained wash of the open source's colour — a shade
+  // over the theme's background rather than a surface, so the theme's own text
+  // goes on it unchanged and nothing here has to know whether the theme is
+  // dark or light. The selection fill is the same wash said once more, one
+  // step deeper.
+  readonly property real pageWashAlpha: 0.075
+  readonly property real selectionWashAlpha: 0.14
   readonly property color page: Qt.tint(Color.menu.background,
-                                        Util.alpha(rail.activeBase, 0.075))
-  readonly property color selectionFill: Qt.tint(page, Util.alpha(rail.activeBase, 0.14))
-
+                                        Util.alpha(rail.activeBase, pageWashAlpha))
+  readonly property color selectionFill: Qt.tint(page, Util.alpha(rail.activeBase, selectionWashAlpha))
 
   // Whichever list is on screen: the search panel replaces the main list
   // while a filter is on, and a keyboard move must scroll the one visible.
@@ -130,9 +134,9 @@ Item {
       width: parent.width - root.railWidth
       height: parent.height
 
-      // The page the open divider is attached to, in the divider's own colour.
-      // Opaque rather than a translucent wash, so the scroll fades below have
-      // something definite to fade into.
+      // The open source's panel, in its restrained wash. Opaque rather than a
+      // translucent colour, so the scroll fades below have something definite
+      // to fade into.
       readonly property color fill: root.page
 
       Rectangle {
@@ -160,6 +164,7 @@ Item {
       fontFamily: root.fontFamily
       titleFor: root.titleFor
       rowHeight: root.rowHeight
+      rowRadius: root.rowRadius
       textInset: root.textInset
       onActivated: function(path) { root.activated(path) }
     }
@@ -219,7 +224,7 @@ Item {
               width: slot.width - Style.spacing.xxs * 2
               height: root.rowHeight - Style.spacing.xxs
               anchors.verticalCenter: parent.verticalCenter
-              radius: Math.min(Style.cornerRadius, Style.space(6))
+              radius: root.rowRadius
               readonly property bool current: slot.isNote && slot.modelData.path === root.currentPath
               color: current || rowHover.hovered ? Style.hoverFill : "transparent"
               // Action rows ("New note…", sign in/out, settings) are dimmed so
@@ -260,7 +265,7 @@ Item {
                     - (closeButton.visible ? closeButton.width + Style.spacing.xs : 0)
                   text: slot.isNew ? "New note…"
                     : (slot.isAction || slot.isTree ? slot.modelData.title : root.titleFor(slot.modelData.title, slot.modelData.preview))
-                  color: row.current ? root.foreground : (slot.isTree ? root.accentInk : root.foreground)
+                  color: slot.isTree && !row.current ? root.accentInk : root.foreground
                   font.bold: slot.isTree && (slot.modelData.level || 0) === 0
                   font.family: root.fontFamily
                   // Actions ("New note…", sign in/out, settings) read as chrome,

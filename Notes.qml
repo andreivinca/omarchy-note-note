@@ -640,7 +640,7 @@ Item {
       // for the rest the note rows already are all of them.
       var notes = q ? s.notes || all.filter(function(r) { return r.kind === "note" }) : all
       var found = q ? notes.filter(function(r) { return matchesQuery(r, q) || contentSet[r.path] === true }) : []
-      tabs.push({ key: key, providerId: prov.id, name: s.name, color: s.color || "", logo: prov.logo || "",
+      tabs.push({ key: key, local: prov.id === "local", name: s.name, color: s.color || "", logo: prov.logo || "",
                   count: s.count !== undefined ? s.count : all.filter(function(r) { return r.kind === "note" }).length })
       hits[key] = found.length
       if (key !== active) return
@@ -1107,7 +1107,7 @@ Item {
         Rectangle {
           anchors.bottom: parent.bottom
           width: parent.width
-          height: Math.max(1, Style.spacing.hairline)
+          height: Style.spacing.hairline
           color: Util.alpha(root.foreground, 0.1)
         }
 
@@ -1414,7 +1414,7 @@ Item {
 
           Rectangle {
             anchors.centerIn: parent
-            width: Math.max(1, Style.spacing.hairline)
+            width: Style.spacing.hairline
             height: parent.height
             color: Util.alpha(root.foreground,
                               splitterArea.pressed ? 0.35 : (splitterArea.containsMouse ? 0.22 : 0.08))
