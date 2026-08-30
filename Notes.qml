@@ -1129,6 +1129,7 @@ Item {
           Row {
             id: titleRow
             anchors.left: parent.left
+            anchors.leftMargin: Style.spacing.md
             anchors.verticalCenter: parent.verticalCenter
             width: Style.space(180)
             spacing: Style.spacing.sm
@@ -1155,8 +1156,7 @@ Item {
               color: root.headerInk
               Behavior on color { ColorAnimation { duration: 150 } }
               font.family: root.interfaceFont
-              font.pixelSize: Style.font.heading
-              font.bold: true
+              font.pixelSize: Style.font.title
               elide: Text.ElideRight
             }
           }
