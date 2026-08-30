@@ -3,9 +3,9 @@ import qs.Commons
 import qs.Ui
 import "TabColors.js" as TabColors
 
-// Source tabs keep the useful vertical labels of the original binder, but
-// use restrained desktop styling: a faint provider wash, a fine outline and
-// one crisp edge where the active source meets the navigation pane.
+// A quiet activity rail: one simple button per source. The icon keeps provider
+// identity and the vertical name distinguishes local notebooks, while the
+// surrounding control stays neutral and consistent with the desktop chrome.
 Item {
   id: root
 
@@ -23,12 +23,12 @@ Item {
         return TabColors.baseFor(root.sections[i].color || "", root.sections[i].name || "")
     return Color.menu.background
   }
-  readonly property real minTabHeight: Style.space(72)
-  readonly property real maxTabHeight: Style.space(136)
-  readonly property real tabGap: Style.spacing.xxs
-  readonly property real logoSize: Style.font.iconSmall
-  readonly property real logoRoom: logoSize + Style.spacing.md
-  readonly property real countRoom: Style.font.caption + Style.spacing.sm
+  readonly property real maxButtonHeight: Style.space(150)
+  readonly property real buttonGap: Style.spacing.xxs
+  readonly property real buttonLeftInset: 0
+  readonly property real buttonRightInset: Style.space(3)
+  readonly property real buttonVerticalPadding: Style.space(24)
+  readonly property real iconLabelGap: Style.spacing.xs
 
   Rectangle {
     anchors.fill: parent
@@ -47,7 +47,7 @@ Item {
     anchors.fill: parent
     anchors.topMargin: Style.spacing.sm
     anchors.bottomMargin: Style.spacing.sm
-    contentHeight: stack.height
+    contentHeight: buttons.height
     boundsBehavior: Flickable.StopAtBounds
     interactive: contentHeight > height
     clip: true
@@ -55,9 +55,9 @@ Item {
     ListWheel { flick: rail }
 
     Column {
-      id: stack
+      id: buttons
       width: rail.width
-      spacing: root.tabGap
+      spacing: root.buttonGap
 
       Repeater {
         model: root.sections
@@ -68,14 +68,13 @@ Item {
           readonly property bool current: modelData.key === root.activeKey
           readonly property int hits: root.matchCounts[modelData.key] || 0
           readonly property bool dimmed: root.filtering && hits === 0
-          readonly property color base: TabColors.baseFor(modelData.color || "", modelData.name || "")
           readonly property int shownCount: root.filtering ? hits : (modelData.count || 0)
-          readonly property bool hasLogo: String(modelData.logo || "").length > 0
-          readonly property real topRoom: hasLogo ? root.logoRoom : Style.spacing.md
-          width: stack.width
-          height: Math.max(root.minTabHeight,
-                           Math.min(root.maxTabHeight,
-                                    labelMetrics.width + topRoom + root.countRoom + Style.spacing.lg))
+          readonly property color base: TabColors.baseFor(modelData.color || "", modelData.name || "")
+          readonly property bool localNotebook: modelData.providerId === "local"
+          readonly property real iconBlock: localNotebook ? 0 : Style.font.icon + root.iconLabelGap
+          width: buttons.width
+          height: Math.min(root.maxButtonHeight,
+                           labelMetrics.width + iconBlock + root.buttonVerticalPadding)
 
           TextMetrics {
             id: labelMetrics
@@ -87,80 +86,60 @@ Item {
           HoverHandler { id: tabHover }
 
           Rectangle {
-            id: card
             anchors.fill: parent
-            anchors.leftMargin: Style.spacing.xs
-            anchors.rightMargin: Style.spacing.xs
+            anchors.leftMargin: root.buttonLeftInset
+            anchors.rightMargin: root.buttonRightInset
             radius: Math.min(Style.cornerRadius, Style.space(8))
-            color: tab.current
-              ? Qt.tint(Color.menu.background, Util.alpha(tab.base, 0.16))
-              : (tabHover.hovered
-                  ? Qt.tint(Color.menu.background, Util.alpha(tab.base, 0.09))
-                  : Qt.tint(Color.menu.background, Util.alpha(tab.base, 0.045)))
-            border.width: Math.max(1, Style.spacing.hairline)
-            border.color: Util.alpha(tab.base, tab.current ? 0.72 : (tabHover.hovered ? 0.42 : 0.2))
+            color: tab.current || tabHover.hovered ? Style.hoverFill : "transparent"
             opacity: tab.dimmed ? 0.38 : 1
             Behavior on color { ColorAnimation { duration: 120 } }
-            Behavior on border.color { ColorAnimation { duration: 120 } }
-
-            // The active edge points into the pane it controls; unlike the
-            // old full-colour divider, it does not need to become the pane.
-            Rectangle {
-              anchors.right: parent.right
-              anchors.rightMargin: -1
-              anchors.verticalCenter: parent.verticalCenter
-              width: Style.space(2)
-              height: parent.height - Style.spacing.md * 2
-              radius: width / 2
-              color: tab.base
-              opacity: tab.current ? 1 : 0
-              Behavior on opacity { NumberAnimation { duration: 120 } }
-            }
           }
 
           Image {
             id: logo
-            visible: status === Image.Ready
+            visible: !tab.localNotebook && status === Image.Ready
             source: tab.modelData.logo || ""
             anchors.top: parent.top
-            anchors.topMargin: Style.spacing.md
+            anchors.topMargin: root.buttonVerticalPadding / 2
             anchors.horizontalCenter: parent.horizontalCenter
-            width: root.logoSize
-            height: root.logoSize
+            width: Style.font.icon
+            height: Style.font.icon
             sourceSize.width: width * 2
             sourceSize.height: height * 2
             fillMode: Image.PreserveAspectFit
             smooth: true
-            opacity: tab.dimmed ? 0.45 : 0.9
+            opacity: tab.dimmed ? 0.4 : (tab.current ? 1 : 0.72)
+          }
+
+          Text {
+            visible: !tab.localNotebook && !logo.visible
+            anchors.top: parent.top
+            anchors.topMargin: root.buttonVerticalPadding / 2
+            anchors.horizontalCenter: parent.horizontalCenter
+            text: "󰉋"
+            color: tab.current
+              ? Qt.tint(root.foreground, Util.alpha(tab.base, 0.7))
+              : Qt.tint(Util.alpha(root.foreground, 0.62), Util.alpha(tab.base, 0.38))
+            opacity: tab.dimmed ? 0.4 : 1
+            font.family: Style.fontFamily
+            font.pixelSize: Style.font.icon
           }
 
           Text {
             id: label
             anchors.centerIn: parent
-            anchors.verticalCenterOffset: (tab.topRoom - root.countRoom) / 2
-            width: Math.max(0, tab.height - tab.topRoom - root.countRoom - Style.spacing.lg)
-            height: card.width
+            anchors.verticalCenterOffset: tab.iconBlock / 2
+            width: Math.max(0, tab.height - tab.iconBlock - root.buttonVerticalPadding)
+            height: tab.width - root.buttonLeftInset - root.buttonRightInset
             rotation: -90
             text: tab.modelData.name || "Notes"
-            color: Qt.tint(root.foreground, Util.alpha(tab.base, TabColors.inkAlpha()))
-            opacity: tab.dimmed ? 0.45 : 1
+            color: Util.alpha(root.foreground, tab.current ? 0.92 : 0.68)
+            opacity: tab.dimmed ? 0.4 : 1
             font.family: root.fontFamily
             font.pixelSize: Style.font.caption
             elide: Text.ElideRight
             horizontalAlignment: Text.AlignHCenter
             verticalAlignment: Text.AlignVCenter
-          }
-
-          Text {
-            anchors.bottom: parent.bottom
-            anchors.bottomMargin: Style.spacing.sm
-            anchors.horizontalCenter: parent.horizontalCenter
-            text: tab.shownCount > 999 ? "999+" : String(tab.shownCount)
-            color: Util.alpha(Qt.tint(root.foreground,
-                                      Util.alpha(tab.base, TabColors.inkAlpha())), 0.72)
-            opacity: tab.dimmed ? 0.45 : 1
-            font.family: root.fontFamily
-            font.pixelSize: Math.max(8, Style.font.caption - 1)
           }
 
           MouseArea {

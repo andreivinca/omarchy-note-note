@@ -640,7 +640,7 @@ Item {
       // for the rest the note rows already are all of them.
       var notes = q ? s.notes || all.filter(function(r) { return r.kind === "note" }) : all
       var found = q ? notes.filter(function(r) { return matchesQuery(r, q) || contentSet[r.path] === true }) : []
-      tabs.push({ key: key, name: s.name, color: s.color || "", logo: prov.logo || "",
+      tabs.push({ key: key, providerId: prov.id, name: s.name, color: s.color || "", logo: prov.logo || "",
                   count: s.count !== undefined ? s.count : all.filter(function(r) { return r.kind === "note" }).length })
       hits[key] = found.length
       if (key !== active) return

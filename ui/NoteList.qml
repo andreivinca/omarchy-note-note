@@ -67,7 +67,7 @@ Item {
   signal reorderFinished(string notebook)
 
   readonly property int rowHeight: Style.spacing.controlHeight
-  readonly property real railWidth: Style.space(48)
+  readonly property real railWidth: Style.space(40)
   // The page's own margin. The rows sit inside it, so a title never starts on
   // the panel's edge and the list has air above and below it.
   readonly property real pagePadding: Style.spacing.lg
