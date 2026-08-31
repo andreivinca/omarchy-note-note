@@ -22,7 +22,15 @@ Item {
   property var services: null
   // This provider's own Microsoft sign-in: own token file, own scope.
   property var ms: null
-  Component.onCompleted: { if (services && services.microsoft) root.ms = services.microsoft.create(root.id, root.microsoftScopes) }
+  // And its own request lane. Mail's limits are far above OneNote's, so this
+  // lane exists mostly to keep sticky notes moving *while* OneNote is parked:
+  // separate keys, separate cooldowns (providers/PROVIDERS.md).
+  property var rq: null
+  Component.onCompleted: {
+    if (services && services.microsoft) root.ms = services.microsoft.create(root.id, root.microsoftScopes)
+    if (services && services.requests) root.rq = services.requests.queueFor("graph-mail", root)
+  }
+  Component.onDestruction: { if (services && services.requests) services.requests.cancelOwner(root) }
 
   readonly property string dir: Qt.resolvedUrl(".").toString().replace(/^file:\/\//, "").replace(/\/$/, "")
   readonly property string script: dir + "/sticky.py"
@@ -89,8 +97,24 @@ Item {
 
   function refresh() {
     if (!root.ready) { root.notes = []; rebuild(); return }
-    listProc.cached = true
-    listProc.running = true
+    cachedProc.running = true       // a local file: instant, and never queued
+    root.listNotes()
+  }
+
+  // One listing request, deduped: open() and the account's own updated()
+  // both ask, and one request answers both.
+  function listNotes() {
+    if (!root.rq || !root.ready) return
+    root.rq.enqueue({ key: "list", mode: "dedupe", priority: 1, owner: root, label: "listing" },
+      function(ctx) { root.runScript(["list"], "", ctx) },
+      function(r) {
+        if (!r) return
+        if (r.error) {
+          root.statusRequested("Sticky Notes: " + r.error)
+          if (/not signed in|expired/.test(r.error) && root.ms) root.ms.refresh()
+        } else if (Array.isArray(r.notes)) root.notes = r.notes
+        root.rebuild()
+      })
   }
 
   // Content search, answered from memory: the listing already carries every
@@ -107,7 +131,10 @@ Item {
   Connections {
     target: root.ms
     function onUpdated() {
-      if (!root.ms.signedIn) { root.notes = []; clearProc.running = true }
+      if (!root.ms.signedIn) {
+        root.notes = []; clearProc.running = true
+        if (services && services.requests) services.requests.cancelOwner(root)
+      }
       root.refresh()
     }
   }
@@ -117,84 +144,105 @@ Item {
     cb(n ? { title: "", body: n.body, editable: true, version: n.modified || "" } : { error: "unknown note" })
   }
 
-  property var saveCb: null
   function save(path, title, body, cb) {
     var n = noteAt(path)
     if (n) n.body = body
     rebuild()
-    root.saveCb = cb
-    saveProc.command = ["python3", root.script, "update", idOf(path), "-"]
-    saveProc.stdinEnabled = true
-    saveProc.running = true
-    saveProc.write(JSON.stringify({ title: title, body: body }))
-    saveProc.stdinEnabled = false          // close stdin: the script reads to EOF
+    if (!root.rq) { if (cb) cb({ error: "not ready" }); return }
+    var id = idOf(path), payload = JSON.stringify({ title: title, body: body })
+    // A note's save and delete share one key, so they can never overlap; a
+    // newer save replaces a queued older one, and flush keeps it draining
+    // after the window closes.
+    root.rq.enqueue({ key: "note:" + id, mode: "replace", priority: 0, owner: root, flush: true, label: "save" },
+      function(ctx) { root.runScript(["update", id, "-"], payload, ctx) },
+      function(r) {
+        if (!r) { if (cb) cb({}); return }     // superseded: the newer save answers
+        if (cb) cb(r.error ? { error: r.error } : {})
+      })
   }
 
-  property var createCb: null
   function create(target, cb) {
-    if (!root.ready || createProc.running) { if (cb) cb({ error: "not ready" }); return }
+    if (!root.ready || !root.rq) { if (cb) cb({ error: "not ready" }); return }
     root.statusRequested("Creating a sticky note…")
-    root.createCb = cb
-    createProc.running = true
-  }
-
-  property var removeCb: null
-  function remove(path, cb) {
-    root.notes = root.notes.filter(function(n) { return n.id !== idOf(path) })
-    rebuild()
-    root.removeCb = cb
-    deleteProc.command = ["python3", root.script, "delete", idOf(path)]
-    deleteProc.running = true
-  }
-
-  function setOrder(sectionKey, paths) {}
-  // One listing request per poll; nothing else is needed to spot changes.
-  function poll() { if (root.ready && !listProc.running) { listProc.cached = false; listProc.running = true } }
-
-  function parse(text) { try { return JSON.parse(text) } catch (e) { return { error: "unexpected reply" } } }
-
-  Process {
-    id: listProc
-    property bool cached: true
-    environment: root.ms ? root.ms.env : ({})
-    command: ["python3", root.script, "list"].concat(cached ? ["--cached"] : [])
-    stdout: StdioCollector {
-      onStreamFinished: {
-        var res = root.parse(this.text)
-        if (res.error) {
-          if (!listProc.cached) root.statusRequested("Sticky Notes: " + res.error)
-          if (/not signed in|expired/.test(res.error) && root.ms) root.ms.refresh()
-        } else if (Array.isArray(res.notes)) root.notes = res.notes
-        root.rebuild()
-      }
-    }
-    onExited: if (cached && root.ready) Qt.callLater(function() { listProc.cached = false; listProc.running = true })
-  }
-  Process {
-    id: saveProc
-    environment: root.ms ? root.ms.env : ({})
-    stdout: StdioCollector { onStreamFinished: { var cb = root.saveCb; root.saveCb = null; var r = root.parse(this.text); if (cb) cb(r.error ? { error: r.error } : {}) } }
-  }
-  Process {
-    id: createProc
-    environment: root.ms ? root.ms.env : ({})
-    command: ["python3", root.script, "create"]
-    stdout: StdioCollector {
-      onStreamFinished: {
-        var cb = root.createCb; root.createCb = null
+    root.rq.enqueue({ key: "create", mode: "append", priority: 0, owner: root, flush: true, label: "new note" },
+      function(ctx) { root.runScript(["create"], "", ctx) },
+      function(r) {
         root.statusRequested("")
-        var r = root.parse(this.text)
+        if (!r) { if (cb) cb({ error: "the window closed before the note was made" }); return }
         if (r.error) { if (cb) cb({ error: r.error }); return }
         root.notes = [r.note].concat(root.notes)
         root.rebuild()
         if (cb) cb({ path: root.pathOf(r.note.id) })
+      })
+  }
+
+  function remove(path, cb) {
+    var id = idOf(path)
+    root.notes = root.notes.filter(function(n) { return n.id !== id })
+    rebuild()
+    if (!root.rq) { if (cb) cb({ error: "not ready" }); return }
+    root.rq.enqueue({ key: "note:" + id, mode: "replace", priority: 0, owner: root, flush: true, label: "delete" },
+      function(ctx) { root.runScript(["delete", id], "", ctx) },
+      function(r) { if (cb) cb(r && r.error ? { error: r.error } : {}) })
+  }
+
+  function setOrder(sectionKey, paths) {}
+  // One listing request per poll; nothing else is needed to spot changes.
+  function poll() { root.listNotes() }
+
+  function parse(text) { try { return JSON.parse(text) } catch (e) { return { error: "unexpected reply" } } }
+
+  // One process per job, so its callback travels with it (the same shape as
+  // providers/onenote/Provider.qml).
+  Component {
+    id: jobProcess
+    Process {
+      id: proc
+      property var ctx: null
+      environment: root.ms ? root.ms.env : ({})
+      stdout: StdioCollector {
+        onStreamFinished: {
+          var answer = proc.ctx
+          proc.ctx = null
+          if (answer) answer.done(root.parse(this.text))
+          Qt.callLater(function() { proc.destroy() })
+        }
+      }
+      onExited: {
+        if (!proc.ctx) return
+        var answer = proc.ctx
+        proc.ctx = null
+        answer.done({ error: "unexpected reply" })
+        Qt.callLater(function() { proc.destroy() })
       }
     }
   }
+
+  function runScript(args, payload, ctx) {
+    var proc = jobProcess.createObject(root, { ctx: ctx })
+    if (!proc) { ctx.done({ error: "could not start sticky.py" }); return }
+    proc.command = ["python3", root.script].concat(args)
+    if (payload) {
+      proc.stdinEnabled = true               // stdin must be open before it starts
+      proc.running = true
+      proc.write(payload)                    // the note goes over stdin, never argv
+      proc.stdinEnabled = false              // close stdin: the script reads to EOF
+    } else {
+      proc.running = true
+    }
+  }
+
   Process {
-    id: deleteProc
+    id: cachedProc
     environment: root.ms ? root.ms.env : ({})
-    stdout: StdioCollector { onStreamFinished: { var cb = root.removeCb; root.removeCb = null; var r = root.parse(this.text); if (cb) cb(r.error ? { error: r.error } : {}) } }
+    command: ["python3", root.script, "list", "--cached"]
+    stdout: StdioCollector {
+      onStreamFinished: {
+        var res = root.parse(this.text)
+        if (!res.error && Array.isArray(res.notes)) root.notes = res.notes
+        root.rebuild()
+      }
+    }
   }
   Process { id: clearProc; environment: root.ms ? root.ms.env : ({}); command: ["python3", root.script, "clear-cache"] }
 }

@@ -28,7 +28,19 @@ Item {
   property var services: null
   // This provider's own Microsoft sign-in: own token file, own scope.
   property var ms: null
-  Component.onCompleted: { if (services && services.microsoft) root.ms = services.microsoft.create(root.id, root.microsoftScopes) }
+  // And its own request lane, keyed to its own Graph budget: everything below
+  // goes through it, in order, and it parks whole when OneNote says it has
+  // had enough (services/requests/, providers/PROVIDERS.md). Sticky Notes has
+  // a lane of its own, so a OneNote throttle never reaches it.
+  property var rq: null
+  Component.onCompleted: {
+    if (services && services.microsoft) root.ms = services.microsoft.create(root.id, root.microsoftScopes)
+    if (services && services.requests) root.rq = services.requests.queueFor("graph-onenote", root)
+  }
+  // A provider is destroyed and rebuilt when its settings change, and on
+  // sign-out. What it had not started yet goes with it; what is already
+  // running finishes, since its process is running either way.
+  Component.onDestruction: { if (services && services.requests) services.requests.cancelOwner(root) }
 
   readonly property string dir: Qt.resolvedUrl(".").toString().replace(/^file:\/\//, "").replace(/\/$/, "")
   readonly property string script: dir + "/onenote.py"
@@ -98,7 +110,7 @@ Item {
           rows.push({ kind: "new", path: "section:" + sec.id, level: 2 })
         }
       }
-      if (books.length === 0) rows.push(listProc.running
+      if (books.length === 0) rows.push(root.listing
         ? { kind: "action", path: "refresh", title: "Loading notebooks…", icon: "󰑐" }
         : { kind: "action", path: "refresh", title: "No notebooks found — refresh", icon: "󰑐" })
       rows.push({ kind: "action", path: "logout", title: "Sign out" + (ms.account ? " (" + ms.account + ")" : ""), icon: "󰍃" })
@@ -147,7 +159,7 @@ Item {
       "You'll need to sign in again" + (ms.account ? " as " + ms.account : "") + " to keep using OneNote.", "",
       [{ label: "Sign out", action: function() { root.noticeCleared(); ms.logout() } },
        { label: "Cancel", action: function() { root.noticeCleared() } }])
-    else if (id === "refresh") { listProc.cached = false; listProc.force = true; listProc.running = true }
+    else if (id === "refresh") root.listPages(true)
     else if (id.indexOf("newsection:") === 0) {
       root.newSectionNotebook = id.substring(11)
       root.newSectionError = ""
@@ -170,14 +182,29 @@ Item {
   function createSection(name) {
     var n = name.trim()
     if (!n) { root.newSectionError = "A section needs a name."; return }
-    if (sectionProc.running) return
+    if (root.newSectionBusy || !root.rq) return
+    var notebook = root.newSectionNotebook
     root.newSectionBusy = true
     root.newSectionError = ""
-    sectionProc.command = ["python3", root.script, "create-section", root.newSectionNotebook, "-"]
-    sectionProc.stdinEnabled = true
-    sectionProc.running = true
-    sectionProc.write(JSON.stringify({ name: n }))
-    sectionProc.stdinEnabled = false          // close stdin: the script reads to EOF
+    root.rq.enqueue({ key: "section:" + notebook, mode: "append", priority: 0, owner: root,
+                      flush: true, label: "new section" },
+      function(ctx) { root.runScript(["create-section", notebook, "-"], JSON.stringify({ name: n }), ctx) },
+      function(r, info) {
+        root.newSectionBusy = false
+        if (!r) { root.newSectionError = info.cancelled ? "The window closed before the section was made." : ""; return }
+        if (r.error) { root.newSectionError = r.error; return }
+        var sct = r.section
+        if (!sct.notebook) sct.notebook = root.notebookName(sct.notebookId)
+        root.onSections = root.onSections.concat([sct])
+        var exp = root.expanded.slice()
+        if (exp.indexOf(sct.notebookId) < 0) exp.push(sct.notebookId)
+        if (exp.indexOf(sct.id) < 0) exp.push(sct.id)
+        root.expanded = exp
+        root.viewCleared()
+        root.rebuild()
+        root.persistRequested()
+        root.statusRequested("Section created")
+      })
   }
 
   Component {
@@ -240,33 +267,78 @@ Item {
     }
   }
 
-  Process {
-    id: sectionProc
-    environment: root.ms ? root.ms.env : ({})
-    stdout: StdioCollector {
-      onStreamFinished: {
-        root.newSectionBusy = false
-        var r = root.parse(this.text)
-        if (r.error) { root.newSectionError = r.error; return }
-        var sct = r.section
-        if (!sct.notebook) sct.notebook = root.notebookName(sct.notebookId)
-        root.onSections = root.onSections.concat([sct])
-        var exp = root.expanded.slice()
-        if (exp.indexOf(sct.notebookId) < 0) exp.push(sct.notebookId)
-        if (exp.indexOf(sct.id) < 0) exp.push(sct.id)
-        root.expanded = exp
-        root.viewCleared()
-        root.rebuild()
-        root.persistRequested()
-        root.statusRequested("Section created")
+  // ── running the script ──────────────────────────────────────────────
+  // One process per job, made when the job runs and destroyed when it
+  // answers, so the callback travels with the process instead of living in a
+  // single `saveCb`-shaped slot that the next save would overwrite. (That
+  // slot is where a second save used to drop the first one's answer.)
+  Component {
+    id: jobProcess
+    Process {
+      id: proc
+      property var ctx: null
+      environment: root.ms ? root.ms.env : ({})
+      stdout: StdioCollector {
+        onStreamFinished: {
+          var answer = proc.ctx
+          proc.ctx = null
+          if (answer) answer.done(root.parse(this.text))
+          Qt.callLater(function() { proc.destroy() })
+        }
       }
+      // A script that died without writing anything — killed, or crashed
+      // before its own error handler — would otherwise leave its job in
+      // flight for ever, and everything behind it in the lane with it.
+      onExited: {
+        if (!proc.ctx) return
+        var answer = proc.ctx
+        proc.ctx = null
+        answer.done({ error: "unexpected reply" })
+        Qt.callLater(function() { proc.destroy() })
+      }
+    }
+  }
+
+  function runScript(args, payload, ctx) {
+    var proc = jobProcess.createObject(root, { ctx: ctx })
+    if (!proc) { ctx.done({ error: "could not start onenote.py" }); return }
+    proc.command = ["python3", root.script].concat(args)
+    if (payload) {
+      proc.stdinEnabled = true               // stdin must be open before it starts
+      proc.running = true
+      proc.write(payload)                    // the note goes over stdin, never argv
+      proc.stdinEnabled = false              // close stdin: the script reads to EOF
+    } else {
+      proc.running = true
     }
   }
 
   function refresh() {
     if (!root.ready) { root.onSections = []; root.pages = []; rebuild(); return }
-    listProc.cached = true
-    listProc.running = true
+    // The cached read is a local file and no request at all, so it does not
+    // belong in the lane — it must answer instantly even while OneNote is
+    // parked, which is what keeps the sidebar populated during a throttle.
+    cachedProc.running = true
+    root.listPages(false)
+  }
+
+  // The account-wide listing. One request when nothing changed (the sections
+  // call reports each section's own timestamp and onenote.py fetches pages
+  // only for the ones that moved), and ~40 when everything has.
+  function listPages(force) {
+    if (!root.rq || !root.ready) return
+    root.rq.enqueue({ key: "list", mode: force ? "replace" : "dedupe", priority: 1,
+                      owner: root, label: "listing" },
+      function(ctx) { root.runScript(["list"].concat(force ? ["--force"] : ["--max-age", "600"]), "", ctx) },
+      function(r) {
+        if (!r) return                       // superseded by a Refresh, or cancelled
+        if (r.error) root.statusRequested("OneNote: " + r.error)
+        else {
+          if (Array.isArray(r.sections)) root.onSections = r.sections
+          if (Array.isArray(r.pages)) root.pages = r.pages
+        }
+        root.rebuild()
+      })
   }
 
   // No `search()` here, deliberately: Microsoft Graph's OneNote pages
@@ -281,25 +353,44 @@ Item {
   Connections {
     target: root.ms
     function onUpdated() {
-      if (!root.ms.signedIn) { root.onSections = []; root.pages = []; root.bodies = ({}); clearProc.running = true }
+      if (!root.ms.signedIn) {
+        root.onSections = []; root.pages = []; root.bodies = ({}); clearProc.running = true
+        // Nothing queued belongs to the account that just left. The rate
+        // cooldown is deliberately *not* cleared: Microsoft throttles per
+        // app+user, so signing back in does not lift it, and pretending
+        // otherwise would just spend the first request learning that again.
+        if (services && services.requests) services.requests.cancelOwner(root)
+      }
       root.refresh()
     }
   }
 
   // ── pages ───────────────────────────────────────────────────────────
-  property var loadQueue: ({})   // path -> cb
+  // Every call below hands the lane a key, a mode and a callback, and the
+  // lane decides when it runs. The keys are what say which requests may not
+  // overlap: a page's save, delete and load are three different intents about
+  // one page, and only the first two must be ordered against each other.
   function load(path, cb) {
     var id = idOf(path), cached = root.bodies[id], pg = pageAt(path)
     // A cached body is only good while the page's modified time matches.
     if (cached && (!pg || cached.version === (pg.modified || ""))) { cb({ title: cached.title, body: cached.body, editable: cached.editable, version: cached.version || "" }); return }
-    root.loadQueue[path] = cb
-    if (pageProc.running) return
-    pageProc.path = path
-    pageProc.command = ["python3", root.script, "page", id]
-    pageProc.running = true
+    if (!root.rq) { cb({ error: "not ready" }); return }
+    // dedupe: asking for the same page twice before it arrives is one read,
+    // and both askers are answered from it.
+    root.rq.enqueue({ key: "load:" + path, mode: "dedupe", priority: 0, owner: root, label: "page" },
+      function(ctx) { root.runScript(["page", id], "", ctx) },
+      function(r) {
+        if (!r) { if (cb) cb({ error: "not loaded — the window closed" }); return }
+        if (r.error) { if (cb) cb({ error: r.error }); return }
+        var page = root.pageAt(path), title = r.title || (page ? page.title : "")
+        var ver = page ? page.modified || "" : ""
+        var b = root.bodies
+        b[root.idOf(path)] = { title: title, body: r.body || "", editable: r.editable === true, originalTitle: title, version: ver }
+        root.bodies = b
+        if (cb) cb({ title: title, body: r.body || "", editable: r.editable === true, version: ver })
+      })
   }
 
-  property var saveCb: null
   function save(path, title, body, cb) {
     var id = idOf(path), b = root.bodies
     var original = b[id] && b[id].originalTitle !== undefined ? b[id].originalTitle : title
@@ -309,159 +400,34 @@ Item {
     for (var i = 0; i < pgs.length; i++) if (pgs[i].id === id) pgs[i] = { id: id, sectionId: pgs[i].sectionId, title: title, modified: pgs[i].modified }
     root.pages = pgs
     rebuild()
-    root.saveCb = cb
-    saveProc.path = path
-    saveProc.command = ["python3", root.script, "update", id, "-"]
-    saveProc.stdinEnabled = true
-    saveProc.running = true
-    saveProc.write(JSON.stringify({ title: title, originalTitle: original, body: body }))
-    saveProc.stdinEnabled = false          // close stdin: the script reads to EOF
-  }
-
-  property var createCb: null
-  function create(target, cb) {
-    if (!root.ready || createProc.running || target.indexOf("section:") !== 0) { if (cb) cb({ error: "not ready" }); return }
-    root.statusRequested("Creating a OneNote page…")
-    root.createCb = cb
-    createProc.command = ["python3", root.script, "create", target.substring(8), "-"]
-    createProc.stdinEnabled = true
-    createProc.running = true
-    createProc.write(JSON.stringify({ title: "", body: "" }))
-    createProc.stdinEnabled = false          // close stdin: the script reads to EOF
-  }
-
-  property var removeCb: null
-  function remove(path, cb) {
-    root.pages = root.pages.filter(function(p) { return p.id !== idOf(path) })
-    rebuild()
-    root.removeCb = cb
-    deleteProc.command = ["python3", root.script, "delete", idOf(path)]
-    deleteProc.running = true
-  }
-
-  function setOrder(sectionKey, paths) {}
-
-  // Polling: every minute, re-list only the sections the user has open —
-  // one small request each; the account-wide listing stays on its cache.
-  property int pollTick: 0
-  function poll(currentPath) {
-    if (!root.ready) return
-    root.pollTick++
-    if (root.pollTick % 3 !== 0) return
-    if (currentPath && currentPath.indexOf(root.id + ":") === 0 && !checkProc.running && !pageProc.running) {
-      checkProc.path = currentPath
-      checkProc.command = ["python3", root.script, "page", idOf(currentPath)]
-      checkProc.running = true
-    }
-    if (pagesProc.running) return
-    var open = root.onSections.filter(function(s) { return root.expanded.indexOf(s.id) >= 0 }).map(function(s) { return s.id })
-    if (open.length === 0) return
-    pagesProc.command = ["python3", root.script, "pages"].concat(open.slice(0, 10))
-    pagesProc.running = true
-  }
-  Process {
-    id: checkProc
-    property string path: ""
-    environment: root.ms ? root.ms.env : ({})
-    stdout: StdioCollector {
-      onStreamFinished: {
-        var r = root.parse(this.text)
-        if (r.error) return
-        var id = root.idOf(checkProc.path), old = root.bodies[id]
-        if (old && old.body === (r.body || "") && old.title === (r.title || old.title)) return
-        var pg = root.pageAt(checkProc.path)
-        var b = root.bodies
-        b[id] = { title: r.title || (pg ? pg.title : ""), body: r.body || "", editable: r.editable === true,
-                  originalTitle: r.title || (pg ? pg.title : ""), version: pg ? pg.modified || "" : "" }
-        root.bodies = b
-        root.noteChanged(checkProc.path)
-      }
-    }
-  }
-  Process {
-    id: pagesProc
-    environment: root.ms ? root.ms.env : ({})
-    stdout: StdioCollector {
-      onStreamFinished: {
-        var r = root.parse(this.text)
-        if (r.error || !Array.isArray(r.pages)) return
-        var ids = {}; r.sections.forEach(function(id) { ids[id] = true })
-        var merged = root.pages.filter(function(p) { return !ids[p.sectionId] }).concat(r.pages)
-        if (JSON.stringify(merged) !== JSON.stringify(root.pages)) { root.pages = merged; root.rebuild() }
-      }
-    }
-  }
-  function parse(text) { try { return JSON.parse(text) } catch (e) { return { error: "unexpected reply" } } }
-
-  // A full listing is ~40 Graph calls; do it at most every ten minutes unless
-  // asked (the "refresh" row), and show the cache meanwhile.
-  Process {
-    id: listProc
-    property bool cached: true
-    property bool force: false
-    environment: root.ms ? root.ms.env : ({})
-    command: ["python3", root.script, "list"].concat(cached ? ["--cached"] : (force ? [] : ["--max-age", "600"]))
-    stdout: StdioCollector {
-      onStreamFinished: {
-        var res = root.parse(this.text)
-        if (res.error) { if (!listProc.cached) root.statusRequested("OneNote: " + res.error) }
-        else {
-          if (Array.isArray(res.sections)) root.onSections = res.sections
-          if (Array.isArray(res.pages)) root.pages = res.pages
-        }
-        root.rebuild()
-      }
-    }
-    onExited: {
-      if (cached && root.ready) Qt.callLater(function() { listProc.cached = false; listProc.force = false; listProc.running = true })
-      else listProc.force = false
-    }
-  }
-  Process {
-    id: pageProc
-    environment: root.ms ? root.ms.env : ({})
-    property string path: ""
-    stdout: StdioCollector {
-      onStreamFinished: {
-        var path = pageProc.path, cb = root.loadQueue[path]
-        delete root.loadQueue[path]
-        var r = root.parse(this.text)
-        if (!r.error) {
-          var pg = root.pageAt(path), title = r.title || (pg ? pg.title : "")
-          var ver = pg ? pg.modified || "" : ""
-          var b = root.bodies; b[root.idOf(path)] = { title: title, body: r.body || "", editable: r.editable === true, originalTitle: title, version: ver }; root.bodies = b
-          if (cb) cb({ title: title, body: r.body || "", editable: r.editable === true, version: ver })
-        } else if (cb) cb({ error: r.error })
-      }
-    }
-    onExited: {
-      // serve whatever was requested while this one ran
-      for (var next in root.loadQueue) { var cb = root.loadQueue[next]; delete root.loadQueue[next]; Qt.callLater(function() { root.load(next, cb) }); break }
-    }
-  }
-  Process {
-    id: saveProc
-    environment: root.ms ? root.ms.env : ({})
-    property string path: ""
-    stdout: StdioCollector {
-      onStreamFinished: {
-        var cb = root.saveCb; root.saveCb = null
-        var r = root.parse(this.text)
+    if (!root.rq) { if (cb) cb({ error: "not ready" }); return }
+    // replace: a newer save of one page strictly contains the older one's
+    // intent, so a queued one is dropped rather than sent. flush: a save the
+    // app has accepted is finished even if the window closes over it.
+    var payload = JSON.stringify({ title: title, originalTitle: original, body: body })
+    root.rq.enqueue({ key: "page:" + id, mode: "replace", priority: 0, owner: root, flush: true, label: "save" },
+      function(ctx) { root.runScript(["update", id, "-"], payload, ctx) },
+      function(r) {
+        if (!r) { if (cb) cb({}); return }    // superseded or cancelled: the newer save answers
         if (r.error) { if (cb) cb({ error: r.error }); return }
-        var b = root.bodies, k = root.idOf(saveProc.path)
-        if (!r.warning && b[k]) { b[k].originalTitle = b[k].title; root.bodies = b }
+        var bodiesNow = root.bodies, k = root.idOf(path)
+        if (!r.warning && bodiesNow[k]) { bodiesNow[k].originalTitle = bodiesNow[k].title; root.bodies = bodiesNow }
         if (cb) cb(r.warning ? { warning: r.warning } : {})
-      }
-    }
+      })
   }
-  Process {
-    id: createProc
-    environment: root.ms ? root.ms.env : ({})
-    stdout: StdioCollector {
-      onStreamFinished: {
-        var cb = root.createCb; root.createCb = null
+
+  function create(target, cb) {
+    if (!root.ready || !root.rq || target.indexOf("section:") !== 0) { if (cb) cb({ error: "not ready" }); return }
+    root.statusRequested("Creating a OneNote page…")
+    var section = target.substring(8)
+    // Not deduped: two Ctrl+Ns mean two pages. During a cooldown this fails
+    // fast rather than being sent, which is what stops the "page created
+    // while throttled 404s for ever" poisoning (docs/testing.md).
+    root.rq.enqueue({ key: "create:" + target, mode: "append", priority: 0, owner: root, flush: true, label: "new page" },
+      function(ctx) { root.runScript(["create", section, "-"], JSON.stringify({ title: "", body: "" }), ctx) },
+      function(r) {
         root.statusRequested("")
-        var r = root.parse(this.text)
+        if (!r) { if (cb) cb({ error: "the window closed before the page was made" }); return }
         if (r.error) { if (cb) cb({ error: r.error }); return }
         root.pages = [r.page].concat(root.pages)
         var b = root.bodies; b[r.page.id] = { title: "", body: "", editable: true, originalTitle: "" }; root.bodies = b
@@ -472,13 +438,93 @@ Item {
         root.rebuild()
         root.persistRequested()
         if (cb) cb({ path: root.pathOf(r.page.id) })
+      })
+  }
+
+  function remove(path, cb) {
+    var id = idOf(path)
+    root.pages = root.pages.filter(function(p) { return p.id !== id })
+    rebuild()
+    if (!root.rq) { if (cb) cb({ error: "not ready" }); return }
+    // The page's own key, and replace: a delete supersedes a save of the same
+    // page that has not gone yet (there is nothing left to save it into), and
+    // queues behind one that has — per-key order means no resurrection, and
+    // no lost answer either way.
+    root.rq.enqueue({ key: "page:" + id, mode: "replace", priority: 0, owner: root, flush: true, label: "delete" },
+      function(ctx) { root.runScript(["delete", id], "", ctx) },
+      function(r) { if (cb) cb(r && r.error ? { error: r.error } : {}) })
+  }
+
+  function setOrder(sectionKey, paths) {}
+
+  // Polling, on a diet. Every third tick (so once a minute) this costs at
+  // most two requests: the open page, and the pages of the section it is in.
+  // It used to re-list *every* expanded section — up to eleven requests a
+  // minute, which is 660 an hour against a budget of 400, so polling alone
+  // could exhaust the account. Other sections come back with the periodic
+  // listing (which now fetches only what changed) or a manual refresh.
+  property int pollTick: 0
+  function poll(currentPath) {
+    if (!root.ready || !root.rq) return
+    root.pollTick++
+    // Everything the poll no longer looks at comes back here instead: every
+    // fifth minute the account is re-listed, which is one request while
+    // nothing has changed (onenote.py diffs each section's own timestamp) and
+    // usually not even that, since the script serves its cache under
+    // --max-age. That is the whole of the budget the old poll was spending.
+    if (root.pollTick % 15 === 0) root.listPages(false)
+    if (root.pollTick % 3 !== 0) return
+    var mine = currentPath && currentPath.indexOf(root.id + ":") === 0
+    if (mine) {
+      root.rq.enqueue({ key: "check:" + currentPath, mode: "dedupe", priority: 1, owner: root, label: "check" },
+        function(ctx) { root.runScript(["page", root.idOf(currentPath)], "", ctx) },
+        function(r) { if (r && !r.error) root.applyCheck(currentPath, r) })
+    }
+    var page = mine ? root.pageAt(currentPath) : null
+    if (!page || !page.sectionId) return
+    root.rq.enqueue({ key: "pages:" + page.sectionId, mode: "dedupe", priority: 1, owner: root, label: "section pages" },
+      function(ctx) { root.runScript(["pages", page.sectionId], "", ctx) },
+      function(r) {
+        if (!r || r.error || !Array.isArray(r.pages) || !Array.isArray(r.sections)) return
+        var ids = {}; r.sections.forEach(function(id) { ids[id] = true })
+        var merged = root.pages.filter(function(p) { return !ids[p.sectionId] }).concat(r.pages)
+        if (JSON.stringify(merged) !== JSON.stringify(root.pages)) { root.pages = merged; root.rebuild() }
+      })
+  }
+
+  // Graph does not reliably bump a page's lastModifiedDateTime, so the open
+  // page is compared by its text instead.
+  function applyCheck(path, r) {
+    var id = root.idOf(path), old = root.bodies[id]
+    if (old && old.body === (r.body || "") && old.title === (r.title || old.title)) return
+    var pg = root.pageAt(path)
+    var b = root.bodies
+    b[id] = { title: r.title || (pg ? pg.title : ""), body: r.body || "", editable: r.editable === true,
+              originalTitle: r.title || (pg ? pg.title : ""), version: pg ? pg.modified || "" : "" }
+    root.bodies = b
+    root.noteChanged(path)
+  }
+
+  function parse(text) { try { return JSON.parse(text) } catch (e) { return { error: "unexpected reply" } } }
+
+  // The cache, read straight off disk so the sidebar fills instantly — and
+  // still fills while the account is parked, which is the point of reading it
+  // outside the lane.
+  readonly property bool listing: cachedProc.running || (root.rq ? root.rq.depth > 0 : false)
+  Process {
+    id: cachedProc
+    environment: root.ms ? root.ms.env : ({})
+    command: ["python3", root.script, "list", "--cached"]
+    stdout: StdioCollector {
+      onStreamFinished: {
+        var res = root.parse(this.text)
+        if (!res.error) {
+          if (Array.isArray(res.sections)) root.onSections = res.sections
+          if (Array.isArray(res.pages)) root.pages = res.pages
+        }
+        root.rebuild()
       }
     }
-  }
-  Process {
-    id: deleteProc
-    environment: root.ms ? root.ms.env : ({})
-    stdout: StdioCollector { onStreamFinished: { var cb = root.removeCb; root.removeCb = null; var r = root.parse(this.text); if (cb) cb(r.error ? { error: r.error } : {}) } }
   }
   Process { id: clearProc; environment: root.ms ? root.ms.env : ({}); command: ["python3", root.script, "clear-cache"] }
 }

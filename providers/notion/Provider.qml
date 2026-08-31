@@ -28,6 +28,11 @@ Item {
 
   property var host: null
   property var services: null
+  // This provider's own request lane, keyed to Notion's own limit — a
+  // Microsoft throttle has nothing to do with it (providers/PROVIDERS.md).
+  property var rq: null
+  Component.onCompleted: { if (services && services.requests) root.rq = services.requests.queueFor("notion", root) }
+  Component.onDestruction: { if (services && services.requests) services.requests.cancelOwner(root) }
 
   readonly property string dir: Qt.resolvedUrl(".").toString().replace(/^file:\/\//, "").replace(/\/$/, "")
   readonly property string script: dir + "/notion.py"
@@ -92,30 +97,49 @@ Item {
   function poll() {
     if (!root.configured) return
     root.pollTick++
-    if (root.pollTick % 3 !== 0 || listProc.running) return
-    listProc.cached = false; listProc.force = true; listProc.running = true
+    if (root.pollTick % 3 !== 0) return
+    root.listPages(true)
   }
 
   function action(id) {
     if (id === "setup" || id === "settings") root.viewRequested(root.configured ? "Notion — settings" : "Set up Notion", setupView, {})
-    else if (id === "refresh") { listProc.cached = false; listProc.force = true; listProc.running = true }
+    else if (id === "refresh") root.listPages(true)
   }
 
   function refresh() { statusProc.running = true }
 
+  // The listing. Deduped, so the poll and an open() collapse into one; a
+  // Refresh replaces a queued one so the user's explicit ask is the one sent.
+  function listPages(force) {
+    if (!root.rq || !root.configured) return
+    root.rq.enqueue({ key: "list", mode: force ? "replace" : "dedupe", priority: 1, owner: root, label: "listing" },
+      function(ctx) { root.runScript(["list"].concat(force ? [] : ["--max-age", "300"]), "", ctx) },
+      function(r) {
+        if (!r) return
+        if (r.error) root.statusRequested("Notion: " + r.error)
+        else if (Array.isArray(r.pages)) root.pages = r.pages
+        root.rebuild()
+      })
+  }
+
   // ── notes ───────────────────────────────────────────────────────────
-  property var loadQueue: ({})
   function load(path, cb) {
     var id = idOf(path), cached = root.bodies[id], pg = pageAt(path)
     if (cached && (!pg || cached.version === (pg.edited || ""))) { cb({ title: cached.title, body: cached.body, editable: cached.editable, version: cached.version || "" }); return }
-    root.loadQueue[path] = cb
-    if (pageProc.running) return
-    pageProc.path = path
-    pageProc.command = ["python3", root.script, "page", id]
-    pageProc.running = true
+    if (!root.rq) { cb({ error: "not ready" }); return }
+    root.rq.enqueue({ key: "load:" + path, mode: "dedupe", priority: 0, owner: root, label: "page" },
+      function(ctx) { root.runScript(["page", id], "", ctx) },
+      function(r) {
+        if (!r) { if (cb) cb({ error: "not loaded — the window closed" }); return }
+        if (r.error) { if (cb) cb({ error: r.error }); return }
+        var pg2 = root.pageAt(path), ver = pg2 ? pg2.edited || "" : ""
+        var b = root.bodies
+        b[root.idOf(path)] = { title: r.title || "", body: r.body || "", editable: r.editable === true, version: ver }
+        root.bodies = b
+        if (cb) cb({ title: r.title || "", body: r.body || "", editable: r.editable === true, version: ver })
+      })
   }
 
-  property var saveCb: null
   function save(path, title, body, cb) {
     var id = idOf(path), b = root.bodies
     b[id] = { title: title, body: body, editable: true, version: "" }
@@ -124,38 +148,84 @@ Item {
     for (var i = 0; i < pgs.length; i++) if (pgs[i].id === id) pgs[i] = { id: id, title: title, parent: pgs[i].parent, edited: pgs[i].edited }
     root.pages = pgs
     rebuild()
-    root.saveCb = cb
-    saveProc.command = ["python3", root.script, "update", id, "-"]
-    saveProc.stdinEnabled = true
-    saveProc.running = true
-    saveProc.write(JSON.stringify({ title: title, body: body }))
-    saveProc.stdinEnabled = false          // close stdin: the script reads to EOF
+    if (!root.rq) { if (cb) cb({ error: "not ready" }); return }
+    var payload = JSON.stringify({ title: title, body: body })
+    root.rq.enqueue({ key: "page:" + id, mode: "replace", priority: 0, owner: root, flush: true, label: "save" },
+      function(ctx) { root.runScript(["update", id, "-"], payload, ctx) },
+      function(r) {
+        if (!r) { if (cb) cb({}); return }     // superseded: the newer save answers
+        if (cb) cb(r.error ? { error: r.error } : {})
+      })
   }
 
-  property var createCb: null
   function create(target, cb) {
-    if (!root.configured || createProc.running) { if (cb) cb({ error: "not ready" }); return }
+    if (!root.configured || !root.rq) { if (cb) cb({ error: "not ready" }); return }
     var parent = target === "new" ? (root.pages.length ? root.pages[0].id : "") : (target.indexOf("parent:") === 0 ? target.substring(7) : "")
     if (!parent) { if (cb) cb({ error: "share at least one page with the integration first — new pages need a parent" }); return }
     root.statusRequested("Creating a Notion page…")
-    root.createCb = cb
-    createProc.command = ["python3", root.script, "create", parent, "-"]
-    createProc.stdinEnabled = true
-    createProc.running = true
-    createProc.write(JSON.stringify({ title: "", body: "" }))
-    createProc.stdinEnabled = false          // close stdin: the script reads to EOF
+    root.rq.enqueue({ key: "create:" + parent, mode: "append", priority: 0, owner: root, flush: true, label: "new page" },
+      function(ctx) { root.runScript(["create", parent, "-"], JSON.stringify({ title: "", body: "" }), ctx) },
+      function(r) {
+        root.statusRequested("")
+        if (!r) { if (cb) cb({ error: "the window closed before the page was made" }); return }
+        if (r.error) { if (cb) cb({ error: r.error }); return }
+        root.pages = [r.page].concat(root.pages)
+        var b = root.bodies; b[r.page.id] = { title: "", body: "", editable: true }; root.bodies = b
+        root.rebuild()
+        if (cb) cb({ path: root.pathOf(r.page.id) })
+      })
   }
 
-  property var removeCb: null
   function remove(path, cb) {
-    root.pages = root.pages.filter(function(p) { return p.id !== idOf(path) })
+    var id = idOf(path)
+    root.pages = root.pages.filter(function(p) { return p.id !== id })
     rebuild()
-    root.removeCb = cb
-    deleteProc.command = ["python3", root.script, "delete", idOf(path)]
-    deleteProc.running = true
+    if (!root.rq) { if (cb) cb({ error: "not ready" }); return }
+    root.rq.enqueue({ key: "page:" + id, mode: "replace", priority: 0, owner: root, flush: true, label: "delete" },
+      function(ctx) { root.runScript(["delete", id], "", ctx) },
+      function(r) { if (cb) cb(r && r.error ? { error: r.error } : {}) })
   }
 
   function parse(text) { try { return JSON.parse(text) } catch (e) { return { error: "unexpected reply" } } }
+
+  // One process per job, so its callback travels with it (the same shape as
+  // providers/onenote/Provider.qml).
+  Component {
+    id: jobProcess
+    Process {
+      id: proc
+      property var ctx: null
+      stdout: StdioCollector {
+        onStreamFinished: {
+          var answer = proc.ctx
+          proc.ctx = null
+          if (answer) answer.done(root.parse(this.text))
+          Qt.callLater(function() { proc.destroy() })
+        }
+      }
+      onExited: {
+        if (!proc.ctx) return
+        var answer = proc.ctx
+        proc.ctx = null
+        answer.done({ error: "unexpected reply" })
+        Qt.callLater(function() { proc.destroy() })
+      }
+    }
+  }
+
+  function runScript(args, payload, ctx) {
+    var proc = jobProcess.createObject(root, { ctx: ctx })
+    if (!proc) { ctx.done({ error: "could not start notion.py" }); return }
+    proc.command = ["python3", root.script].concat(args)
+    if (payload) {
+      proc.stdinEnabled = true               // stdin must be open before it starts
+      proc.running = true
+      proc.write(payload)                    // the secret and the note go over stdin
+      proc.stdinEnabled = false              // close stdin: the script reads to EOF
+    } else {
+      proc.running = true
+    }
+  }
 
   // ── processes ───────────────────────────────────────────────────────
   Process {
@@ -167,79 +237,21 @@ Item {
         root.configured = st.configured === true
         root.workspace = st.workspace || ""
         if (!root.configured) { root.pages = []; root.bodies = ({}); rebuild(); return }
-        listProc.cached = true
-        listProc.running = true
+        cachedProc.running = true
+        root.listPages(false)
       }
     }
   }
+  // The cache, read straight off disk: no request, so no lane — the sidebar
+  // fills instantly and keeps filling while Notion is parked.
   Process {
-    id: listProc
-    property bool cached: true
-    property bool force: false
-    command: ["python3", root.script, "list"].concat(cached ? ["--cached"] : (force ? [] : ["--max-age", "300"]))
+    id: cachedProc
+    command: ["python3", root.script, "list", "--cached"]
     stdout: StdioCollector {
       onStreamFinished: {
         var res = root.parse(this.text)
-        if (res.error) { if (!listProc.cached) root.statusRequested("Notion: " + res.error) }
-        else if (Array.isArray(res.pages)) root.pages = res.pages
+        if (!res.error && Array.isArray(res.pages)) root.pages = res.pages
         root.rebuild()
-      }
-    }
-    onExited: {
-      if (cached && root.configured) Qt.callLater(function() { listProc.cached = false; listProc.force = false; listProc.running = true })
-      else listProc.force = false
-    }
-  }
-  Process {
-    id: pageProc
-    property string path: ""
-    stdout: StdioCollector {
-      onStreamFinished: {
-        var path = pageProc.path, cb = root.loadQueue[path]
-        delete root.loadQueue[path]
-        var r = root.parse(this.text)
-        if (!r.error) {
-          var pg = root.pageAt(path), ver = pg ? pg.edited || "" : ""
-          var b = root.bodies; b[root.idOf(path)] = { title: r.title || "", body: r.body || "", editable: r.editable === true, version: ver }; root.bodies = b
-          if (cb) cb({ title: r.title || "", body: r.body || "", editable: r.editable === true, version: ver })
-        } else if (cb) cb({ error: r.error })
-      }
-    }
-    onExited: { for (var next in root.loadQueue) { var cb = root.loadQueue[next]; delete root.loadQueue[next]; Qt.callLater(function() { root.load(next, cb) }); break } }
-  }
-  Process {
-    id: saveProc
-    stdout: StdioCollector { onStreamFinished: { var cb = root.saveCb; root.saveCb = null; var r = root.parse(this.text); if (cb) cb(r.error ? { error: r.error } : {}) } }
-  }
-  Process {
-    id: createProc
-    stdout: StdioCollector {
-      onStreamFinished: {
-        var cb = root.createCb; root.createCb = null
-        root.statusRequested("")
-        var r = root.parse(this.text)
-        if (r.error) { if (cb) cb({ error: r.error }); return }
-        root.pages = [r.page].concat(root.pages)
-        var b = root.bodies; b[r.page.id] = { title: "", body: "", editable: true }; root.bodies = b
-        root.rebuild()
-        if (cb) cb({ path: root.pathOf(r.page.id) })
-      }
-    }
-  }
-  Process {
-    id: deleteProc
-    stdout: StdioCollector { onStreamFinished: { var cb = root.removeCb; root.removeCb = null; var r = root.parse(this.text); if (cb) cb(r.error ? { error: r.error } : {}) } }
-  }
-  Process {
-    id: setupProc
-    stdout: StdioCollector {
-      onStreamFinished: {
-        var r = root.parse(this.text)
-        root.setupBusy = false
-        if (r.error) { root.setupError = r.error; return }
-        root.setupError = ""
-        root.viewCleared()
-        root.refresh()
       }
     }
   }
@@ -251,13 +263,21 @@ Item {
   function submitToken(token) {
     var t = token.trim()
     if (!t) { root.setupError = "Paste the integration secret."; return }
+    if (!root.rq) { root.setupError = "The request queue is not available."; return }
     root.setupBusy = true
     root.setupError = ""
-    setupProc.command = ["python3", root.script, "setup", "-"]
-    setupProc.stdinEnabled = true
-    setupProc.running = true
-    setupProc.write(JSON.stringify({ token: t }))
-    setupProc.stdinEnabled = false          // close stdin: the script reads to EOF
+    // Verifying the secret is a request to Notion like any other, so it is
+    // paced like one — and it is interactive, so it goes ahead of any listing.
+    root.rq.enqueue({ key: "setup", mode: "replace", priority: 0, owner: root, flush: true, label: "setup" },
+      function(ctx) { root.runScript(["setup", "-"], JSON.stringify({ token: t }), ctx) },
+      function(r, info) {
+        root.setupBusy = false
+        if (!r) { root.setupError = info.cancelled ? "The window closed before the secret was checked." : ""; return }
+        if (r.error) { root.setupError = r.error; return }
+        root.setupError = ""
+        root.viewCleared()
+        root.refresh()
+      })
   }
 
   Component {

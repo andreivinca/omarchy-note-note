@@ -9,6 +9,7 @@ import "ui/TabColors.js" as TabColors
 import "services/clipboard" as Clipboard
 import "services/markdown" as Markdown
 import "services/microsoft" as Microsoft
+import "services/requests" as Requests
 
 // Note Note — notes for the Omarchy shell, laid out like Toolroll: a header
 // with search and key hints, a sidebar of notebooks, and the note itself on
@@ -61,6 +62,10 @@ Item {
   // a save while a note is being swapped in.
   property string currentPath: ""
   property bool loadingNote: false
+  // The open note's load ended in an error and the pane is showing nothing.
+  // Retried on the next open() — a queued read is dropped when the window
+  // hides, so this is the ordinary way a hidden window ends a load.
+  property bool loadFailed: false
   property bool dirty: false
   property string currentCrumb: ""
   property string loadingPath: ""
@@ -86,6 +91,13 @@ Item {
     root.opened = true
     root.deleteConfirmOpen = false
     root.settingsOpen = false
+    root.pauseQueues(false)
+    // A save that failed while nobody was looking is reported now, once.
+    if (root.missedSaveNotice) { root.showStatus(root.missedSaveNotice); root.missedSaveNotice = "" }
+    // A note whose load never landed — the window closed over it, or the
+    // backend was busy — would otherwise sit blank and read-only until the
+    // user picked something else and came back. Ask again.
+    if (root.currentPath && root.loadFailed) root.reloadCurrent()
     // Not while a sign-in is under way: entering its device code means
     // switching to a browser, which can hide and reopen this overlay — that
     // must not wipe the very code the user is about to type in.
@@ -95,11 +107,12 @@ Item {
     Qt.callLater(function() { editor.focusEditor() })
   }
   function stopWatching() { for (var i = 0; i < root.providers.length; i++) if (typeof root.providers[i].watch === "function") root.providers[i].watch(false) }
-  function close() { root.flushSave(); root.opened = false; stopWatching() }
+  function close() { root.flushSave(); root.opened = false; stopWatching(); root.pauseQueues(true) }
   function dismiss() {
     root.flushSave()
     root.opened = false
     stopWatching()
+    root.pauseQueues(true)
     if (root.shell && typeof root.shell.hide === "function") root.shell.hide(root.pluginId)
   }
   function toggle() { if (root.opened) root.dismiss(); else root.open("{}") }
@@ -197,7 +210,75 @@ Item {
 
   // Pasting a picture into a note; only providers that can store one take it.
   Clipboard.Clipboard { id: clipboardService }
-  readonly property var services: ({ microsoft: { create: function(owner, scopes) { return root.createMicrosoftAccount(owner, scopes) } } })
+  readonly property var services: ({
+    microsoft: { create: function(owner, scopes) { return root.createMicrosoftAccount(owner, scopes) } },
+    requests: { queueFor: function(key, provider) { return root.queueFor(key, provider) },
+                cancelOwner: function(owner) { root.cancelQueuedFor(owner) } }
+  })
+
+  // ── request queues ──────────────────────────────────────────────────
+  // One lane per rate key, made on demand and owned by the host rather than
+  // by the provider that asked for it. That is deliberate: a provider is
+  // destroyed and rebuilt whenever its settings change, and a backend's
+  // cooldown has to outlive that — the service is throttling the account, not
+  // the QML object. See services/requests/RequestQueue.qml.
+  property var queues: ({})
+  property var queueList: []
+  property var queueNames: ({})
+  property int queueRevision: 0
+  Component { id: queueComponent; Requests.RequestQueue {} }
+
+  function queueFor(key, provider) {
+    if (provider && provider.name) root.queueNames[key] = provider.name
+    if (root.queues[key]) return root.queues[key]
+    var q = queueComponent.createObject(root, { domain: key, paused: !root.opened })
+    if (!q) { console.warn("note-note: could not create a request queue for", key); return null }
+    root.queues[key] = q
+    root.queueList = root.queueList.concat([q])
+    q.updated.connect(function() { root.queueRevision++ })
+    return q
+  }
+  function cancelQueuedFor(owner) {
+    for (var i = 0; i < root.queueList.length; i++) root.queueList[i].cancelOwner(owner)
+  }
+  // Hidden: reads and polls stop, as they always have. Queued *writes* keep
+  // draining — a save this app already accepted is finished, or fails out
+  // loud, even if the window closed meanwhile (docs/business-requirements.md).
+  function pauseQueues(paused) {
+    for (var i = 0; i < root.queueList.length; i++) root.queueList[i].paused = paused
+  }
+  // Of the parked lanes, the one with the longest still to wait — or null.
+  // Bound through queueRevision because a plain JS object is invisible to a
+  // binding.
+  function coolingQueue() {
+    var worst = null
+    for (var i = 0; i < root.queueList.length; i++) {
+      var q = root.queueList[i]
+      if (q.cooling && (worst === null || q.cooldownRemaining > worst.cooldownRemaining)) worst = q
+    }
+    return worst
+  }
+  readonly property bool anyCooling: root.queueRevision >= 0 ? (root.coolingQueue() !== null) : false
+
+  // A backend saying "not now" is worth saying out loud, with the number:
+  // "later" on its own is not information, and the queue does know when.
+  Timer {
+    id: cooldownStatus
+    interval: 1000
+    repeat: true
+    running: root.opened && root.anyCooling
+    triggeredOnStart: true
+    onTriggered: {
+      var q = root.coolingQueue()
+      if (!q) return
+      var lead = (root.queueNames[q.domain] || q.domain) + " is rate-limited"
+      // Something else is being said — a save's error, "Section created". Let
+      // it have its few seconds; the countdown picks up when it clears.
+      if (root.statusText && root.statusText.indexOf(lead) !== 0) return
+      root.showStatus(lead + " — retrying in " + Math.ceil(q.cooldownRemaining) + "s"
+                      + (q.depth > 0 ? " (" + q.depth + " queued)" : ""))
+    }
+  }
 
   property var providers: []
   property var providerState: ({})
@@ -243,7 +324,7 @@ Item {
     p.viewCleared.connect(function() { editor.clearNotice() })
     p.persistRequested.connect(function() { root.saveState() })
     if (p.noteChanged) p.noteChanged.connect(function(path) {
-      if (path === root.currentPath && !root.dirty && !root.saving && !root.loadingNote) root.reloadCurrent()
+      if (path === root.currentPath && !root.dirty && !root.saveInFlight(path) && !root.loadingNote) root.reloadCurrent()
     })
     if (root.providerState[p.id]) p.restoreState(root.providerState[p.id])
     root.providers = root.providers.concat([p])
@@ -683,7 +764,7 @@ Item {
     // The open note changed elsewhere (its version moved): reload it, unless
     // there are unsaved edits here.
     var v = versionOf(root.currentPath)
-    if (root.currentPath && v && root.loadedVersion !== "" && v !== root.loadedVersion && !root.dirty && !root.saving && !root.loadingNote) reloadCurrent()
+    if (root.currentPath && v && root.loadedVersion !== "" && v !== root.loadedVersion && !root.dirty && !root.saveInFlight(root.currentPath) && !root.loadingNote) reloadCurrent()
     else if (v && root.loadedVersion === "") root.loadedVersion = v
   }
   property string loadedVersion: ""
@@ -699,7 +780,8 @@ Item {
     root.loadedVersion = versionOf(path)
     p.load(path, function(r) {
       if (root.currentPath !== path) return
-      if (r.error) { root.loadingNote = false; return }
+      if (r.error) { root.loadingNote = false; root.loadFailed = true; return }
+      root.loadFailed = false
       var pos = editor.cursorPosition()
       editor.documentBase = r.base || ""
       editor.setNote(r.title || "", r.body || "")
@@ -783,8 +865,14 @@ Item {
   function scrollList(y) { list.setScrollOffset(Number(y)); return list.scrollOffset() }
   function listOffset() { return list.scrollOffset() }
   function debugState() {
+    var lanes = []
+    for (var q = 0; q < root.queueList.length; q++)
+      lanes.push({ key: root.queueList[q].domain, depth: root.queueList[q].depth,
+                   cooling: root.queueList[q].cooling,
+                   cooldown: Math.round(root.queueList[q].cooldownRemaining) })
     return JSON.stringify({ currentPath: root.currentPath, loadingPath: root.loadingPath, loadingNote: root.loadingNote,
                             status: root.statusText, readOnly: editor.readOnly, words: editor.wordCount, notice: editor.noticeTitle, viewFocused: editor.viewHasFocus,
+                            saving: root.saveInFlight(root.currentPath), loadFailed: root.loadFailed, queues: lanes,
                             providers: root.providers.map(function(p) { return p.id }) })
   }
   // The provider whose section holds a row of this kind and id. The open
@@ -843,7 +931,8 @@ Item {
     p.load(path, function(r) {
       if (root.currentPath !== path) return
       root.loadingPath = ""
-      if (r.error) { root.loadingNote = false; showStatus(p.name + ": " + r.error); return }
+      if (r.error) { root.loadingNote = false; root.loadFailed = true; showStatus(p.name + ": " + r.error); return }
+      root.loadFailed = false
       root.loadedVersion = r.version || versionOf(path)
       editor.documentBase = r.base || ""
       editor.setNote(r.title || "", r.body || "")
@@ -994,43 +1083,47 @@ Item {
   }
   Timer { id: saveTimer; interval: 500; onTriggered: root.flushSave() }
 
-  // One save in flight at a time; a save requested meanwhile runs afterwards
-  // with whatever the note says by then. Transient backend errors retry.
-  property bool saving: false
-  property bool saveAgain: false
-  property int saveRetries: 0
-  Timer { id: saveRetryTimer; interval: 2500; onTriggered: { root.dirty = true; root.flushSave() } }
+  // Ordering, retrying and coalescing saves is the provider's queue's job now
+  // (services/requests/), so what is left here is only what the host knows:
+  // which note is being saved, and whether the text it captured is still the
+  // newest. There is no `saving` flag and no re-derivation of the body — the
+  // payload is captured whole per dispatch, which is what stopped a save
+  // requested during another one from writing the *wrong note's* text.
+  property var saveEpoch: ({})       // path -> seq: drops a stale conversion
+  property var savesPending: ({})    // path -> count: what saveInFlight() reads
+  // A save that failed while the window was hidden, held until it reopens.
+  // In memory only: this is not an offline queue (business-requirements.md).
+  property string missedSaveNotice: ""
+
+  function saveInFlight(path) { return (root.savesPending[path] || 0) > 0 }
 
   function flushSave() {
     if (!root.dirty || !root.currentPath) return
     var p = providerOf(root.currentPath)
     if (!p) return
     if (editor.readOnly) { root.dirty = false; return }
-    if (root.saving) { root.saveAgain = true; return }
     saveTimer.stop()
     var path = root.currentPath, title = editor.title
     root.dirty = false
-    root.saving = true
     root.loadedVersion = ""
-    // The document is rich text; the note is Markdown. Asking for it is
-    // asynchronous, so the save proper lives in sendSave().
-    editor.requestMarkdown(function(body) { root.sendSave(p, path, title, body) })
-  }
-
-  function sendSave(p, path, title, body) {
-    p.save(path, title, body, function(r) {
-      root.saving = false
-      if (r.error) {
-        if (/transient|timed? ?out|try again|too many requests|429|503/i.test(r.error) && root.saveRetries < 3) {
-          root.saveRetries++
-          showStatus(p.name + ": busy, retrying…")
-          saveRetryTimer.restart()
-        } else { root.saveRetries = 0; showStatus(p.name + ": " + r.error) }
-      } else {
-        root.saveRetries = 0
-        if (r.warning) showStatus(p.name + ": " + r.warning)
-      }
-      if (root.saveAgain) { root.saveAgain = false; root.dirty = true; Qt.callLater(root.flushSave) }
+    var seq = (root.saveEpoch[path] || 0) + 1
+    root.saveEpoch[path] = seq
+    // The document is rich text and the note is Markdown, so the body arrives
+    // asynchronously — but requestMarkdown snapshots the document *now*, so
+    // this text belongs to `path` even if the user moves to another note
+    // before the converter answers.
+    editor.requestMarkdown(function(body) {
+      if (root.saveEpoch[path] !== seq) return     // a newer snapshot of this note exists
+      root.savesPending[path] = (root.savesPending[path] || 0) + 1
+      p.save(path, title, body, function(r) {
+        root.savesPending[path] = Math.max(0, (root.savesPending[path] || 1) - 1)
+        var message = ""
+        if (r && r.error) message = p.name + ": " + r.error
+        else if (r && r.warning) message = p.name + ": " + r.warning
+        if (!message) return
+        if (root.opened) showStatus(message)
+        else root.missedSaveNotice = message     // said on the next open()
+      })
     })
   }
 

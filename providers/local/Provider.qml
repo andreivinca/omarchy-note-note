@@ -254,16 +254,38 @@ Item {
     if (cb) cb(warning ? { warning: warning } : {})
   }
 
+  // A note with a pasted picture is the one save here that is not immediate:
+  // images.py has to copy the file into `.assets/` before the note can name
+  // it. So two saves of one note can be in flight at once, and the slower one
+  // would land last and undo the newer text. One stage per note, then: a save
+  // arriving while one runs waits for it, replacing whatever was already
+  // waiting — the newest text strictly contains the older, and its caller is
+  // answered rather than dropped. (The remote providers get the same
+  // guarantee from their queue's "replace" mode; this is the local shape of
+  // it, for the one path here that needs it.)
+  property var staging: ({})     // path -> true while a stage runs
+  property var stageNext: ({})   // path -> the newest save waiting behind it
+
   // The note is written no matter what: a failed copy only leaves the link
   // pointing at the staged file (still shown, pruned eventually) and says so.
   function stageImages(path, title, body, cb) {
+    if (root.staging[path]) {
+      var waiting = root.stageNext[path]
+      root.stageNext[path] = { title: title, body: body, cb: cb }
+      if (waiting && waiting.cb) waiting.cb({})    // superseded, never silent
+      return
+    }
+    root.staging[path] = true
     root.lastOwnWrite = Date.now()
     var proc = imageStager.createObject(root, {
       command: ["python3", root.imagesScript, root.notesDir, fileOf(path)],
       callback: function(result) {
         var ok = result && result.body !== undefined
+        delete root.staging[path]
         writeNote(path, title, ok ? result.body : body, cb,
                   (result && (result.warning || result.error)) || (ok ? "" : "pasted images were not copied into the notebook"))
+        var next = root.stageNext[path]
+        if (next) { delete root.stageNext[path]; root.stageImages(path, next.title, next.body, next.cb) }
       }
     })
     proc.stdinEnabled = true                 // stdin must be open before it starts
