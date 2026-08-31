@@ -62,6 +62,11 @@ first run.
   the `providers` object reorders the sidebar tabs to match.
 - `providers.local.notesDir` — where local notebooks live, overriding
   `~/Notes/` or `NOTE_NOTE_DIR`.
+- `providers.<id>.notebookTabs` — `true` spreads a source's notebooks into
+  a tab each down the left (how your local notebooks show by default);
+  `false` folds them into one tab as an expandable tree (OneNote's
+  default). Offered by the sources that have notebooks: `local` and
+  `onenote` — Sticky Notes and Notion are a single flat list either way.
 
 ## Notebooks
 
@@ -80,7 +85,10 @@ milk, eggs
 A note with no title shows the first words of its body in the list instead.
 
 Each source and notebook gets its own tab down the left; click one, or
-`Ctrl+Tab` through them. `+ New note…` adds a note to the open notebook;
+`Ctrl+Tab` through them. Whether a source's notebooks spread into a tab
+each or fold inside a single tab is per source — the `notebookTabs`
+setting; your local folders spread by default, OneNote folds. `+ New
+note…` adds a note to the open notebook;
 `+ New notebook…` makes one in your own notes (the only source that
 supports it from here). Drag rows to reorder. Delete a note with the `×` on
 its row. Rename or remove a notebook by renaming or removing its folder.

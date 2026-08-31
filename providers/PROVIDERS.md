@@ -4,7 +4,9 @@ A provider is a QML `Item` (file `Provider.qml`) that supplies one or more
 sidebar sections and the notes in them. Built-in providers live under
 `providers/<id>/`; external ones under
 `~/.config/omarchy/note-note/providers/<id>/Provider.qml` (a plain git clone
-is enough). The host instantiates each with `host` and `services` set.
+is enough). The host instantiates each with `host` and `services` set, and
+right after creation assigns any settings from the provider's entry in the
+host's config (see "Settings from the host's config").
 
 ## Properties the host reads
 
@@ -55,6 +57,25 @@ tab first, so a shared name never reaches another provider's row.
 a `lastModifiedDateTime`, an etag. The host compares it with the `version`
 returned by `load()`: when a listing shows a newer version for the note that
 is open (and it has no unsaved edits), the host reloads it.
+
+## Settings from the host's config
+
+The host keeps one entry per provider in its own config file
+(`~/.config/notenote/config.json`, described in the README). Right after
+creating a provider it assigns every key of that entry that names a property
+the provider declares — verbatim, the provider interprets its own values.
+`enabled` is never assigned (whether the instance exists is what it means),
+a key the provider does not declare is not its business, and a read-only
+property keeps its value. A provider opts into a setting simply by declaring
+the property, external providers included: the user adds the key to your
+entry, and it arrives on creation. When an entry changes, the provider is
+destroyed and recreated with the new values, so a live one never watches for
+them.
+
+| key | type | meaning |
+|---|---|---|
+| `notebookTabs` | bool | true: build `sections` with one entry per notebook, a binder tab each, the way the local folders show; false: fold them into a single section as `tree` rows. Declare it only when your notes have notebooks to spread — Sticky Notes and Notion do not. The local provider defaults it true, OneNote false |
+| `notesDir` | string | the local provider's root directory; `~` is the provider's to expand |
 
 ## Functions
 

@@ -155,6 +155,10 @@ Item {
   property var accounts: []
   function copyText(s) { Quickshell.execDetached(["sh", "-c", 'printf %s "$1" | wl-copy', "sh", s]) }
   function createMicrosoftAccount(owner, scopes) {
+    // A provider recreated on a settings change asks for its account again;
+    // the one its old instance left behind would otherwise stay in the list,
+    // costing a status process on every open for nobody.
+    root.accounts = root.accounts.filter(function(a) { if (a.owner !== owner) return true; a.destroy(); return false })
     var acc = accountComponent.createObject(root, { owner: owner, scopes: ["offline_access", "User.Read"].concat(scopes || []).join(" ") })
     acc.codeReceived.connect(function(code, uri) {
       editor.showNotice("Sign in to Microsoft for " + owner,
@@ -169,6 +173,11 @@ Item {
     })
     acc.updated.connect(function() { if (acc.signedIn && editor.noticeTitle === "Signed in") editor.clearNotice(); root.rebuildRows() })
     root.accounts = root.accounts.concat([acc])
+    // An account knows its own status from birth, not from the next open():
+    // a provider made while the window is already open (a settings change)
+    // would otherwise sit at "not signed in" until the overlay is summoned
+    // again, since open() is the only other thing that asks.
+    acc.refresh()
     return acc
   }
   Component { id: accountComponent; Microsoft.Account {} }
@@ -309,13 +318,26 @@ Item {
   }
   function canCreateNotebook() { return notebookMaker() !== null }
 
-  function addProvider(url, extraProps) {
+  // A provider's entry in config.providers is the host's file, but most of
+  // its keys are the provider's own settings — local's notesDir, a
+  // notebookTabs flag. Every key that names a property the provider declares
+  // is assigned right after creation; `enabled` never is (whether the
+  // instance exists is what it means), a key the provider does not declare
+  // is not its business, and a read-only property keeps its value — so a
+  // hand-edited config cannot break a provider, only miss it.
+  function applyProviderSettings(p) {
+    var entry = (root.config.providers || {})[p.id]
+    for (var k in entry) {
+      if (k === "enabled" || !(k in p)) continue
+      try { p[k] = entry[k] } catch (e) { console.warn("note-note: provider", p.id, "setting", k, "was not taken:", e.message) }
+    }
+  }
+  function addProvider(url) {
     var comp = Qt.createComponent(url)
     if (comp.status === Component.Error) { console.warn("note-note: provider failed:", url, comp.errorString()); return null }
-    var props = { host: root, services: root.services }
-    if (extraProps) for (var k in extraProps) props[k] = extraProps[k]
-    var p = comp.createObject(root, props)
+    var p = comp.createObject(root, { host: root, services: root.services })
     if (!p || !p.id) { console.warn("note-note: provider has no id:", url); return null }
+    root.applyProviderSettings(p)
     p.updated.connect(function() { root.rebuildRows() })
     p.statusRequested.connect(function(t) { root.showStatus(t) })
     p.noticeRequested.connect(function(title, text, code, actions) { editor.showNotice(title, text, code, actions) })
@@ -369,7 +391,7 @@ Item {
     var ids = root.orderProviderIds(entries.map(function(x) { return x.id }), root.config)
     for (var u = 0; u < ids.length; u++)
       if (root.providerEnabledIn(root.config, ids[u]))
-        root.addProvider(root.providerUrls[ids[u]], ids[u] === "local" ? { notesDir: root.localNotesDir() } : null)
+        root.addProvider(root.providerUrls[ids[u]])
     root.providersLoaded = true
     if (root.opened) root.open("{}")
   }
@@ -401,10 +423,15 @@ Item {
 
   function defaultConfig() {
     return {
+      // notebookTabs: one binder tab per notebook (the local folders'
+      // historic shape) instead of one tab holding them as fold-out trees.
+      // Only sources that have notebooks offer it; sticky and notion are a
+      // single flat list either way, and a setting that changes nothing is
+      // not listed.
       providers: {
-        local: { enabled: true, notesDir: Quickshell.env("NOTE_NOTE_DIR") || (Quickshell.env("HOME") + "/Notes") },
+        local: { enabled: true, notebookTabs: true, notesDir: Quickshell.env("NOTE_NOTE_DIR") || (Quickshell.env("HOME") + "/Notes") },
         sticky: { enabled: true },
-        onenote: { enabled: true },
+        onenote: { enabled: true, notebookTabs: false },
         notion: { enabled: true }
       }
     }
@@ -428,13 +455,6 @@ Item {
     }
     out.providers = mergedProviders
     return out
-  }
-  // "~" and "~/…" expand against $HOME — this value reaches processes as a
-  // literal argv entry, never through a shell, so nothing else would expand it.
-  function expandHome(p) { return (p && p.charAt(0) === "~") ? Quickshell.env("HOME") + p.substring(1) : p }
-  function localNotesDir() {
-    var p = root.config.providers && root.config.providers.local
-    return root.expandHome(p && p.notesDir) || (Quickshell.env("NOTE_NOTE_DIR") || (Quickshell.env("HOME") + "/Notes"))
   }
   function providerEnabledIn(cfg, id) {
     var p = cfg && cfg.providers, e = p && p[id]
@@ -524,8 +544,7 @@ Item {
         // is what open()'s own loop over root.providers triggers, but the
         // overlay is already open by the time Settings can be reached, so
         // that loop has already run and won't run again on its own.
-        var extra = id === "local" ? { notesDir: root.localNotesDir() } : null
-        var p = root.addProvider(root.providerUrls[id], extra)
+        var p = root.addProvider(root.providerUrls[id])
         if (p) { p.refresh(); if (typeof p.watch === "function") p.watch(true) }
       }
     }
@@ -721,7 +740,7 @@ Item {
       // for the rest the note rows already are all of them.
       var notes = q ? s.notes || all.filter(function(r) { return r.kind === "note" }) : all
       var found = q ? notes.filter(function(r) { return matchesQuery(r, q) || contentSet[r.path] === true }) : []
-      tabs.push({ key: key, local: prov.id === "local", name: s.name, color: s.color || "", logo: prov.logo || "",
+      tabs.push({ key: key, name: s.name, color: s.color || "", logo: prov.logo || "",
                   count: s.count !== undefined ? s.count : all.filter(function(r) { return r.kind === "note" }).length })
       hits[key] = found.length
       if (key !== active) return
@@ -792,10 +811,16 @@ Item {
       showStatus(p.name + ": reloaded, changed elsewhere")
     })
   }
+  // A note is "in" its provider while a section shows its row — or holds it
+  // in `notes`, the section's searchable whole: a folded tree hides the row
+  // without the note going anywhere (PROVIDERS.md).
   function noteExists(path) {
     var found = false
-    eachSection(function(prov, s, key) { if ((s.rows || []).some(function(r) { return r.kind === "note" && r.path === path })) found = true })
-    if (!found) { var p = providerOf(path); if (p && p.id === "onenote" && p.pageAt && p.pageAt(path)) found = true }
+    eachSection(function(prov, s, key) {
+      if (found) return
+      if ((s.rows || []).some(function(r) { return r.kind === "note" && r.path === path })) { found = true; return }
+      if ((s.notes || []).some(function(n) { return n.path === path })) found = true
+    })
     return found
   }
   function rowIndexOf(path) {
@@ -989,9 +1014,10 @@ Item {
   }
 
   // "New notebook…" makes one inside the tab you are on, and only where the
-  // provider says it can: the local one, whose notebooks are folders and each
-  // its own tab, so a new one opens the moment it exists. The others keep
-  // their notebooks inside their single tab and are made where they live.
+  // provider says it can (canCreateSection — the local folders today). Which
+  // tab the new notebook opens as is the provider's answer, not assumed here:
+  // a tab of its own when the provider spreads notebooks into tabs, the one
+  // tab that holds them all when it folds them (createSection's cb).
   function newNotebook(name) {
     var p = notebookMaker()
     if (!p) return
@@ -1131,6 +1157,11 @@ Item {
   function saveState() {
     var ps = {}
     for (var i = 0; i < root.providers.length; i++) ps[root.providers[i].id] = root.providers[i].saveState()
+    // Kept live, not only on disk: a provider recreated on a settings change
+    // (applyProviderDiff) is restored from providerState, which would
+    // otherwise still hold the startup snapshot — and lose the fold state
+    // made since.
+    root.providerState = ps
     // version 3: the open tab, where 2 kept two lists of folded sections. An
     // older file simply has no `active`, and the first local notebook opens.
     var st = { version: 3, detached: root.detached, active: root.activeSection, providers: ps }

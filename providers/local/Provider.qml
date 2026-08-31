@@ -5,7 +5,9 @@ import QtQuick
 // Local notebooks: folders under ~/Notes (or $NOTE_NOTE_DIR) holding Markdown
 // files with a tiny title front-matter. Notes directly in the root show up as
 // a "Notes" notebook. Each folder keeps its order in .order; the notebook
-// order lives in .notebooks.
+// order lives in .notebooks. A binder tab per folder, or one "Notes" tab of
+// fold-out trees — the host's notebookTabs setting decides (true here by
+// default).
 Item {
   id: root
 
@@ -28,10 +30,22 @@ Item {
   property var host: null
   property var services: null
 
-  // The host passes this in from config.providers.local.notesDir when it
-  // creates this provider (~/.config/notenote/config.json); this initial
-  // value is only a fallback for the rare case it never arrives.
+  // The host assigns these from config.providers.local right after creating
+  // this provider (~/.config/notenote/config.json); the initial values only
+  // stand in for the rare case they never arrive.
+  // notebookTabs: one binder tab per notebook folder — this provider's
+  // historic shape — or, false, a single "Notes" tab holding the folders as
+  // fold-out trees, the same shape the remote providers use.
+  property bool notebookTabs: true
   property string notesDir: Quickshell.env("NOTE_NOTE_DIR") || (Quickshell.env("HOME") + "/Notes")
+  // notesDir as everything below reads it: "~" expands here, not in the
+  // host — the path is this provider's to interpret, and it reaches
+  // processes as a literal argv entry, never through a shell, so nothing
+  // else would expand it. An emptied setting falls back to the default.
+  readonly property string notesRoot: {
+    var p = root.notesDir || Quickshell.env("NOTE_NOTE_DIR") || (Quickshell.env("HOME") + "/Notes")
+    return p.charAt(0) === "~" ? Quickshell.env("HOME") + p.substring(1) : p
+  }
   readonly property string dir: Qt.resolvedUrl(".").toString().replace(/^file:\/\//, "").replace(/\/$/, "")
   // Both readers refuse symlinks and special files and race a deadline
   // (docs/security.md, rule 9): a path under ~/Notes is user-writable and
@@ -58,7 +72,7 @@ Item {
   property var notes: []
   property var sections: []
 
-  function dirOf(key) { return key ? root.notesDir + "/" + key : root.notesDir }
+  function dirOf(key) { return key ? root.notesRoot + "/" + key : root.notesRoot }
   function baseName(p) { return p.substring(p.lastIndexOf("/") + 1) }
   function fileOf(path) { return path.substring(root.id.length + 1) }
   function pathOf(file) { return root.id + ":" + file }
@@ -90,30 +104,74 @@ Item {
   }
 
   // ── sections ────────────────────────────────────────────────────────
-  function rebuild() {
-    var out = []
-    for (var b = 0; b < root.notebooks.length; b++) {
-      var nb = root.notebooks[b], rows = []
-      for (var i = 0; i < root.notes.length; i++) {
-        var n = root.notes[i]
-        if (n.key !== nb.key) continue
-        rows.push({ kind: "note", path: n.path, title: n.title, preview: n.preview, version: n.version || "" })
-      }
-      rows.push({ kind: "new", path: "section:" + nb.key })
-      // No colour: a notebook takes its own from its name, so Work and
-      // Personal never look alike.
-      out.push({ key: nb.key, name: nb.name, rows: rows })
+  // Notebooks the user folded shut (single-tab shape only), by key — kept in
+  // the host's state file. The folded set rather than the open one, so the
+  // first flip of the setting shows every notebook open instead of every
+  // notebook gone.
+  property var folded: []
+
+  function notebookRows(nb, level, fixed) {
+    var rows = []
+    for (var i = 0; i < root.notes.length; i++) {
+      var n = root.notes[i]
+      if (n.key !== nb.key) continue
+      rows.push({ kind: "note", path: n.path, title: n.title, preview: n.preview, level: level, fixed: fixed, version: n.version || "" })
     }
-    root.sections = out
+    rows.push({ kind: "new", path: "section:" + nb.key, level: level })
+    return rows
+  }
+  // Two shapes, one setting (notebookTabs): a binder tab per notebook
+  // folder, or one "Notes" tab holding the folders as fold-out trees. In the
+  // single tab the note rows are fixed: a drag across trees would be a move
+  // between notebooks, which is a different feature, not a reorder.
+  function rebuild() {
+    if (root.notebookTabs) {
+      var out = []
+      for (var b = 0; b < root.notebooks.length; b++) {
+        var nb = root.notebooks[b]
+        // No colour: a notebook takes its own from its name, so Work and
+        // Personal never look alike.
+        out.push({ key: nb.key, name: nb.name, rows: notebookRows(nb, 0, false) })
+      }
+      root.sections = out
+    } else {
+      var rows = []
+      for (var t = 0; t < root.notebooks.length; t++) {
+        var book = root.notebooks[t], open = root.folded.indexOf(book.key) < 0
+        rows.push({ kind: "tree", path: "book:" + book.key, title: book.name, level: 0, expanded: open })
+        if (open) rows = rows.concat(notebookRows(book, 1, true))
+      }
+      // Folded trees hide note rows, so the tab's count and the searchable
+      // list are given whole (`count` and `notes` in PROVIDERS.md).
+      root.sections = [{ key: "notes", name: "Notes", count: root.notes.length,
+                         notes: root.notes.map(function(n) { return { path: n.path, title: n.title, preview: n.preview } }),
+                         rows: rows }]
+    }
     root.updated()
   }
 
   function crumb(path) { var n = noteAt(path); return n ? nameOf(n.key) : root.name }
   function createTargetFor(path) { var n = noteAt(path); return n ? "section:" + n.key : (root.notebooks.length ? "section:" + root.notebooks[root.notebooks.length - 1].key : "") }
-  function restoreState(obj) {}
-  function saveState() { return {} }
+  function restoreState(obj) { if (obj && Array.isArray(obj.folded)) root.folded = obj.folded }
+  function saveState() { return { folded: root.folded } }
   function action(id) {}
-  function toggleTree(id) {}
+  function toggleTree(id) {
+    if (id.indexOf("book:") !== 0) return
+    var key = id.substring(5), at = root.folded.indexOf(key), next = root.folded.slice()
+    if (at >= 0) next.splice(at, 1); else next.push(key)
+    root.folded = next
+    rebuild()
+    root.persistRequested()
+  }
+  // A note inside a folded notebook has no row; unfold it so the host can
+  // scroll to the row — asked for when a search ends on such a note.
+  function revealPath(path) {
+    var n = noteAt(path)
+    if (!n || root.folded.indexOf(n.key) < 0) return
+    root.folded = root.folded.filter(function(k) { return k !== n.key })
+    rebuild()
+    root.persistRequested()
+  }
 
   function refresh() { listProc.running = true }
 
@@ -136,7 +194,7 @@ Item {
   }
   function runSearch() {
     if (root.searchPending === "") return
-    searchProc.command = ["python3", root.searchScript, root.notesDir, root.searchPending, String(root.maxNoteBytes)]
+    searchProc.command = ["python3", root.searchScript, root.notesRoot, root.searchPending, String(root.maxNoteBytes)]
     root.searchPending = ""
     searchProc.running = true
   }
@@ -278,7 +336,7 @@ Item {
     root.staging[path] = true
     root.lastOwnWrite = Date.now()
     var proc = imageStager.createObject(root, {
-      command: ["python3", root.imagesScript, root.notesDir, fileOf(path)],
+      command: ["python3", root.imagesScript, root.notesRoot, fileOf(path)],
       callback: function(result) {
         var ok = result && result.body !== undefined
         delete root.staging[path]
@@ -318,6 +376,9 @@ Item {
 
   function create(target, cb) {
     var key = target.indexOf("section:") === 0 ? target.substring(8) : ""
+    // A note made into a folded notebook must land on a visible row, so the
+    // fold opens — the same courtesy OneNote's create() extends.
+    if (root.folded.indexOf(key) >= 0) { root.folded = root.folded.filter(function(k) { return k !== key }); root.persistRequested() }
     var file = dirOf(key) + "/note-" + Date.now() + ".md"
     root.lastOwnWrite = Date.now()
     writeFile.path = file
@@ -386,7 +447,7 @@ Item {
   Timer { id: relistDebounce; interval: 400; onTriggered: listProc.running = true }
   Process {
     id: watchProc
-    command: ["inotifywait", "-m", "-r", "-q", "-e", "create,delete,move,close_write", "--format", "%e %w%f", "--", root.notesDir]
+    command: ["inotifywait", "-m", "-r", "-q", "-e", "create,delete,move,close_write", "--format", "%e %w%f", "--", root.notesRoot]
     stdout: SplitParser {
       onRead: function(line) {
         if (Date.now() - root.lastOwnWrite < 1500) return       // our own saves
@@ -404,7 +465,7 @@ Item {
   }
   function persistNotebookOrder() {
     root.lastOwnWrite = Date.now()
-    orderFile.path = root.notesDir + "/.notebooks"
+    orderFile.path = root.notesRoot + "/.notebooks"
     orderFile.setText(root.notebooks.filter(function(b) { return b.key }).map(function(b) { return b.key }).join("\n") + "\n")
   }
 
@@ -422,7 +483,10 @@ Item {
         root.persistNotebookOrder()
       }
       root.rebuild()
-      if (cb) cb({ key: key, target: "section:" + key })
+      // The tab this opens as: the new folder's own when each notebook is a
+      // tab, the one "Notes" tab that holds it when they fold — the host
+      // opens whichever key is answered (PROVIDERS.md).
+      if (cb) cb({ key: root.notebookTabs ? key : "notes", target: "section:" + key })
     }
   }
 
@@ -431,7 +495,7 @@ Item {
   // through readfile.py; symlinked notes and notebooks are not listed).
   Process {
     id: listProc
-    command: ["python3", root.listScript, root.notesDir, String(root.maxListBytes)]
+    command: ["python3", root.listScript, root.notesRoot, String(root.maxListBytes)]
     stdout: StdioCollector { onStreamFinished: root.loadList(this.text) }
   }
 }

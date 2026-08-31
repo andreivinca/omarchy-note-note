@@ -454,3 +454,38 @@ only writer-made, so they have no typed form to drift from. Vertical margins
 never reach the note (the reader recognises quotes and indents by the
 horizontal ones), so this changes rendering, not storage; measured offscreen,
 a rebuilt note now sits on the same 130%-line rhythm as a typed one.
+
+---
+
+### A tab per notebook is a setting, not the local provider's privilege
+
+The rail's shape used to be two hardcoded facts: local folders spread into a
+tab each, every other source kept one tab. Now it is one per-provider
+setting, `providers.<id>.notebookTabs` — local true by default, OneNote
+false, either flippable in Settings. Sticky Notes and Notion do not offer
+it: a flat list has no notebooks to spread, and a setting that changes
+nothing would be a lie in a self-documenting config file.
+
+*Considered:* fanning out in the host — providers keep their one `sections`
+shape and the host splits the trees into tabs. *Rejected:* the host cannot
+know which tree rows are notebooks; only the provider knows its own
+hierarchy (OneNote's trees are notebooks *and* sections, one level inside
+the other). So the provider builds its `sections` for the shape asked of
+it, and the host stays a thing that renders sections.
+
+The setting travels as a property the host assigns at creation, by a
+general rule: every key of a provider's config entry that names a declared
+property is handed over, `enabled` excepted — which is also how `notesDir`
+arrives now, so nothing about "local" is left in the host's tab pipeline.
+The rail's old `local` flag became "ships no logo", which is the rule
+PROVIDERS.md had promised all along.
+
+Details that follow from the shapes: the local single tab keeps its note
+rows fixed, because a drag across fold-out trees would be a move between
+notebooks — a different feature, not a reorder. Local remembers what the
+user *folded* where OneNote remembers what they *expanded*, so flipping
+local's setting opens with every folder showing while an account of
+hundreds of pages opens closed. The sign-out row rides on every OneNote
+notebook tab, since any of them is equally the account's. And older config
+files need no migration: mergeConfigDefaults fills the new key in on read,
+which is that function's whole reason to exist.

@@ -4,9 +4,10 @@ import QtQuick
 import qs.Commons
 import qs.Ui
 
-// OneNote: one section holding the whole tree — notebooks → sections →
-// pages, expandable in place. Pages are fetched on demand as Markdown
-// (onenote.py + onenote_md.py) and written back as OneNote HTML.
+// OneNote: notebooks → sections → pages. One tab holding the whole tree by
+// default, or — the host's notebookTabs setting — a binder tab per
+// notebook, the way the local folders show. Pages are fetched on demand as
+// Markdown (onenote.py + onenote_md.py) and written back as OneNote HTML.
 Item {
   id: root
 
@@ -26,6 +27,10 @@ Item {
 
   property var host: null
   property var services: null
+  // Assigned by the host from config.providers.onenote.notebookTabs
+  // (~/.config/notenote/config.json): each notebook a binder tab of its own
+  // when true; the whole tree in one OneNote tab when false, the default.
+  property bool notebookTabs: false
   // This provider's own Microsoft sign-in: own token file, own scope.
   property var ms: null
   // And its own request lane, keyed to its own Graph budget: everything below
@@ -79,47 +84,81 @@ Item {
     return s ? "OneNote › " + (s.notebook ? s.notebook + " › " : "") + s.name : "OneNote"
   }
 
-  function rebuild() {
-    var rows = []
-    if (!ms || !ms.configured) rows.push({ kind: "action", path: "unavailable", title: "Not available in this build", icon: "󰒓" })
-    else if (!ms.signedIn) rows.push({ kind: "action", path: "login", title: ms.loggingIn ? "Cancel signing in…" : "Sign in to Microsoft…", icon: ms.loggingIn ? "󰅖" : "󰊻" })
-    else if (!ms.hasScope("Notes.ReadWrite")) rows.push({ kind: "action", path: "relogin", title: ms.loggingIn ? "Cancel signing in…" : "Sign in again to enable OneNote…", icon: ms.loggingIn ? "󰅖" : "󰊻" })
-    else {
-      var books = [], seen = {}
-      for (var i = 0; i < root.onSections.length; i++) {
-        var s = root.onSections[i]
-        if (!seen[s.notebookId]) { seen[s.notebookId] = true; books.push({ id: s.notebookId, name: s.notebook || "Notebook" }) }
+  // The account rows every shape starts from: null when the tree can show,
+  // the one action row that says why it cannot otherwise.
+  function accountRows() {
+    if (!ms || !ms.configured) return [{ kind: "action", path: "unavailable", title: "Not available in this build", icon: "󰒓" }]
+    if (!ms.signedIn) return [{ kind: "action", path: "login", title: ms.loggingIn ? "Cancel signing in…" : "Sign in to Microsoft…", icon: ms.loggingIn ? "󰅖" : "󰊻" }]
+    if (!ms.hasScope("Notes.ReadWrite")) return [{ kind: "action", path: "relogin", title: ms.loggingIn ? "Cancel signing in…" : "Sign in again to enable OneNote…", icon: ms.loggingIn ? "󰅖" : "󰊻" }]
+    return null
+  }
+  function bookList() {
+    var books = [], seen = {}
+    for (var i = 0; i < root.onSections.length; i++) {
+      var s = root.onSections[i]
+      if (!seen[s.notebookId]) { seen[s.notebookId] = true; books.push({ id: s.notebookId, name: s.notebook || "Notebook" }) }
+    }
+    books.sort(function(a, b) { return a.name.localeCompare(b.name) })
+    return books
+  }
+  // One notebook's rows — "New section…", then each section as a tree with
+  // its pages when open — starting at `level`: 0 when the notebook is a tab
+  // of its own, 1 when it sits under its own tree row.
+  function bookRows(bookId, level) {
+    var rows = [{ kind: "action", path: "newsection:" + bookId, title: "New section…", icon: "+", level: level }]
+    for (var k = 0; k < root.onSections.length; k++) {
+      var sec = root.onSections[k]
+      if (sec.notebookId !== bookId) continue
+      var secOpen = root.expanded.indexOf(sec.id) >= 0
+      rows.push({ kind: "tree", path: sec.id, title: sec.name, level: level, expanded: secOpen })
+      if (!secOpen) continue
+      for (var p = 0; p < root.pages.length; p++) {
+        var pg = root.pages[p]
+        if (pg.sectionId !== sec.id) continue
+        rows.push({ kind: "note", path: pathOf(pg.id), title: pg.title, preview: "", level: level + 1, fixed: true, version: pg.modified || "" })
       }
-      books.sort(function(a, b) { return a.name.localeCompare(b.name) })
+      rows.push({ kind: "new", path: "section:" + sec.id, level: level + 1 })
+    }
+    return rows
+  }
+  function noteList(pgs) { return pgs.map(function(p) { return { path: pathOf(p.id), title: p.title, preview: "" } }) }
+  function logoutRow() { return { kind: "action", path: "logout", title: "Sign out" + (ms.account ? " (" + ms.account + ")" : ""), icon: "󰍃" } }
+
+  // `notes` on a section is its searchable whole, fold state ignored: rows
+  // only carry the pages of expanded sections, and a search (and the hit
+  // count on the tab) must see the closed ones too.
+  function rebuild() {
+    var account = accountRows(), books = account ? [] : bookList()
+    if (root.notebookTabs && books.length > 0) {
+      // A tab per notebook. No colour: each takes a pastel from its own
+      // name, which is what tells Work from Personal apart (the logo keeps
+      // them OneNote's); the sign-out row rides on every tab, since any of
+      // them is equally the account's.
+      root.sections = books.map(function(b) {
+        var pgs = root.pages.filter(function(p) { var sec = root.sectionAt(p.sectionId); return sec && sec.notebookId === b.id })
+        return { key: b.id, name: b.name, count: pgs.length, notes: noteList(pgs),
+                 rows: bookRows(b.id, 0).concat([logoutRow()]) }
+      })
+      root.updated()
+      return
+    }
+    // One OneNote tab: the sign-in states, or the notebooks as trees. The
+    // empty listing lands here too, whatever the setting says — no notebooks
+    // means nothing to spread, and the tab must exist to say so.
+    var rows = []
+    if (account) rows = account
+    else {
       for (var b = 0; b < books.length; b++) {
         var open = root.expanded.indexOf(books[b].id) >= 0
         rows.push({ kind: "tree", path: books[b].id, title: books[b].name, level: 0, expanded: open })
-        if (!open) continue
-        rows.push({ kind: "action", path: "newsection:" + books[b].id, title: "New section…", icon: "+", level: 1 })
-        for (var k = 0; k < root.onSections.length; k++) {
-          var sec = root.onSections[k]
-          if (sec.notebookId !== books[b].id) continue
-          var secOpen = root.expanded.indexOf(sec.id) >= 0
-          rows.push({ kind: "tree", path: sec.id, title: sec.name, level: 1, expanded: secOpen })
-          if (!secOpen) continue
-          for (var p = 0; p < root.pages.length; p++) {
-            var pg = root.pages[p]
-            if (pg.sectionId !== sec.id) continue
-            rows.push({ kind: "note", path: pathOf(pg.id), title: pg.title, preview: "", level: 2, fixed: true, version: pg.modified || "" })
-          }
-          rows.push({ kind: "new", path: "section:" + sec.id, level: 2 })
-        }
+        if (open) rows = rows.concat(bookRows(books[b].id, 1))
       }
       if (books.length === 0) rows.push(root.listing
         ? { kind: "action", path: "refresh", title: "Loading notebooks…", icon: "󰑐" }
         : { kind: "action", path: "refresh", title: "No notebooks found — refresh", icon: "󰑐" })
-      rows.push({ kind: "action", path: "logout", title: "Sign out" + (ms.account ? " (" + ms.account + ")" : ""), icon: "󰍃" })
+      rows.push(logoutRow())
     }
-    // `notes` is every page, fold state ignored: rows only carry the pages of
-    // expanded sections, and a search (and the hit count on the tab) must see
-    // the closed ones too.
-    var all = root.pages.map(function(p) { return { path: pathOf(p.id), title: p.title, preview: "" } })
-    root.sections = [{ key: "onenote", name: "OneNote", color: "#7719AA", count: root.pages.length, notes: all, rows: rows }]
+    root.sections = [{ key: "onenote", name: "OneNote", color: "#7719AA", count: root.pages.length, notes: noteList(root.pages), rows: rows }]
     root.updated()
   }
 

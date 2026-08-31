@@ -3,9 +3,10 @@ import qs.Commons
 import qs.Ui
 import "TabColors.js" as TabColors
 
-// A quiet activity rail: one simple button per source. The icon keeps provider
-// identity and the vertical name distinguishes local notebooks, while the
-// surrounding control stays neutral and consistent with the desktop chrome.
+// A quiet activity rail: one simple button per tab. A provider's logo keeps
+// its identity on every tab it has; a tab without one (the local notebooks —
+// a folder is not a brand) is just its vertical name, while the surrounding
+// control stays neutral and consistent with the desktop chrome.
 Item {
   id: root
 
@@ -70,9 +71,13 @@ Item {
           readonly property bool dimmed: root.filtering && hits === 0
           readonly property int shownCount: root.filtering ? hits : (modelData.count || 0)
           readonly property color base: TabColors.baseFor(modelData.color || "", modelData.name || "")
-          readonly property bool localNotebook: modelData.local === true
+          // A provider that ships a logo has a mark on every one of its
+          // tabs; one that does not gets no icon block at all — a logo-less
+          // tab is simply the name, whichever provider's it is
+          // (PROVIDERS.md promises exactly that).
+          readonly property bool branded: String(modelData.logo || "").length > 0
           readonly property string displayName: modelData.name || "Notes"
-          readonly property real iconBlock: localNotebook ? 0 : Style.font.icon + root.iconLabelGap
+          readonly property real iconBlock: branded ? Style.font.icon + root.iconLabelGap : 0
           width: buttons.width
           height: Math.min(root.maxButtonHeight,
                            labelMetrics.width + iconBlock + root.buttonPadding * 2)
@@ -97,7 +102,7 @@ Item {
 
           Image {
             id: logo
-            visible: !tab.localNotebook && status === Image.Ready
+            visible: tab.branded && status === Image.Ready
             source: tab.modelData.logo || ""
             anchors.top: parent.top
             anchors.topMargin: root.buttonPadding
@@ -112,7 +117,7 @@ Item {
           }
 
           Text {
-            visible: !tab.localNotebook && !logo.visible
+            visible: tab.branded && !logo.visible
             anchors.top: parent.top
             anchors.topMargin: root.buttonPadding
             anchors.horizontalCenter: parent.horizontalCenter

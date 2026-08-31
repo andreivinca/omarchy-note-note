@@ -28,7 +28,7 @@ Item {
   // so instead of a premature "No match" (see the host's searchBusy).
   property bool searchBusy: false
   // The rail's tabs, as the host builds them:
-  // { key, local, name, color, logo, count }.
+  // { key, name, color, logo, count }.
   property var sections: []
   // Search hits per tab key; kept beside `sections` so a keystroke moves the
   // numbers without touching the tabs (see the host's rebuildRows).
