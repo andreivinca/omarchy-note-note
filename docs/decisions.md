@@ -258,6 +258,52 @@ public HTTPS endpoint. *Chosen:* an `inotifywait` process for local files
 cheapest check, with the expensive listings behind a cache age. Nothing runs
 while the window is hidden.
 
+### Pacing lives in two layers, because a request and a job are not the same thing
+
+*Considered:* one pacer, in the scripts. *Rejected:* a script is a process
+that does not outlive its own run, so it can order requests but not jobs, and
+the wait it would have to sleep out during a real throttle — tens of minutes —
+is a process the host cannot answer for and the user cannot cancel.
+*Considered:* one queue, in the host. *Rejected:* the host cannot see
+individual requests at all; one job is one script run, which can be forty of
+them. *Chosen:* both. `lib/ratelimit.py` paces requests across every process
+(flock'd sliding-window counters) and sleeps short waits only; anything longer
+becomes `{"kind":"throttled","retryAfter":N}` and `services/requests/` parks
+that provider's lane. Neither layer waits out what the other already waited.
+
+### A rate key per provider, not one budget for the host
+
+*Considered:* one shared `graph.microsoft.com` budget, since OneNote and
+Sticky Notes talk to the same host with the same app registration.
+*Rejected:* it couples them — a OneNote throttle would stop sticky notes
+saving, and the limits are nothing alike (OneNote 120/min and 400/hr; a
+mailbox far more). *Chosen:* a key each, with its own window, its own cooldown
+and its own lane. The cost is that a user who later splits the app
+registrations gets no benefit from it; the benefit is that one throttled
+backend never becomes three broken ones.
+
+### Admission by rolling count, not by a gap between requests
+
+*Considered:* the obvious pacer — sleep so that requests are never closer
+together than budget allows (which is what Notion's `MIN_GAP` was).
+*Rejected:* it taxes the common case to protect the rare one. A cold OneNote
+listing is ~40 requests that fit inside one minute's budget with room to
+spare, and a fixed gap would make it four times slower every single time.
+*Chosen:* count the last 60 s and the last 3600 s and admit freely while both
+are under budget. Speed is unchanged in normal use and the budget only bites
+during a genuinely heavy hour.
+
+### A save already accepted finishes, even after the window closes
+
+The app is otherwise silent while hidden, and that rule is worth keeping: no
+timers, no watchers, no reads. But a save is not a read. The user typed the
+text and the app took it; discarding it because the overlay was dismissed a
+moment later loses work the app had already promised to keep. *Chosen:*
+queued **writes** keep draining while hidden, reads and polls stop as they
+always did, and a write that fails terminally meanwhile is reported once on
+the next open(). Still not an offline queue: it is in memory, this session
+only, and quitting the shell ends it.
+
 ### Sticky Notes: plain text, no title, no reordering
 
 The backend stores the subject as a copy of the first body line and offers no

@@ -161,9 +161,17 @@ replying to the reviewer.
 - [ ] Any new subprocess has `timeout=`, resource limits, and arguments passed
       as argv (never string interpolation).
 - [ ] New caches are pruned by count and bytes.
+- [ ] Any new rate/pacing state under `~/.cache/omarchy/note-note-rate/` keeps
+      the same shape as the rest: 0700 dir, 0600 files, `mkstemp` + `replace`,
+      and read with a byte ceiling (`ratelimit.MAX_STATE_BYTES`) — a budget
+      that cannot be read must fail *open*, never block the request.
 - [ ] `omarchy plugin validate .` passes; `README` "Limits" and this file are
       updated if the numbers changed.
-- [ ] Nothing new runs while the window is hidden.
+- [ ] Nothing new runs while the window is hidden — with the one sanctioned
+      exception, a queued **write** draining (see
+      [business-requirements.md](business-requirements.md)). Reads, polls and
+      listings still stop. A new *read* that survives a hide is a regression;
+      a save that does not is also a regression.
 
 ## Threat model, briefly
 

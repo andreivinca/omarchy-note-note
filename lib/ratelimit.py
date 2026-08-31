@@ -67,6 +67,10 @@ CONCURRENCY_POLL = 0.1
 # The state file is bounded like everything else here: stamps outside the
 # widest window are dropped on every admission, and this is the hard stop.
 MAX_STAMPS = 5000
+# And bounded on the way in, at the moment of reading (docs/security.md rule
+# 1). MAX_STAMPS timestamps is about 100 KB of JSON, so anything past this is
+# not a state file we wrote and is not worth parsing to find out.
+MAX_STATE_BYTES = 256 * 1024
 
 
 class Throttled(Exception):
@@ -112,10 +116,21 @@ class _State(dict):
 
 def _load(key):
     st = _State(stamps=[], holders=[], cooldownUntil=0.0)
+    # Read cap+1 bytes once and use *those* bytes — never a size check followed
+    # by a separate open, which is not a bound (docs/security.md rule 1). A
+    # budget that cannot be read is a budget of nothing spent, which is the
+    # safe way round: the request goes through, and the next 429 records a
+    # cooldown the same as ever.
     try:
-        with open(state_path(key)) as f:
-            raw = json.load(f)
-    except (OSError, ValueError):
+        with open(state_path(key), "rb") as f:
+            blob = f.read(MAX_STATE_BYTES + 1)
+    except OSError:
+        return st
+    if len(blob) > MAX_STATE_BYTES:
+        return st
+    try:
+        raw = json.loads(blob)
+    except ValueError:
         return st
     if not isinstance(raw, dict):
         return st
