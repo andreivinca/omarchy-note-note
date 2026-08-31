@@ -65,6 +65,10 @@ is open (and it has no unsaved edits), the host reloads it.
   the editor resolves the links against it and the converter measures the
   files through it. Leave it out when every image is an absolute file:// URL.
 - `save(path, title, body, cb)` → `cb({ error, warning })`
+  Call `cb` exactly once, always — including when the save was superseded by a
+  newer one (answer `{}`: the newer save contains this one's intent) and when
+  it was cancelled. The host counts saves in flight per note, and a save that
+  is never answered is one that looks unfinished for ever.
   A `body` from a provider with `canImages` may contain `![alt](file:///…)`
   pointing either at a file the provider itself cached on `load()` (the same
   picture, already on the backend) or at a freshly pasted file staged in
@@ -172,6 +176,103 @@ no symlink following, regular files only, capped, with a deadline), as the
 local provider and the host's own state file do.
 
 ## Services
+
+### `services.requests` — the request queue
+
+Everything a provider asks of a network backend goes through a **lane**: a
+queue that orders the requests, coalesces the ones that make each other
+pointless, runs a few at a time, and parks the whole lane when the backend
+says it has had enough. One lane per *rate key*; the host owns them, so a lane
+outlives the provider that asked for it (a provider is destroyed and rebuilt
+when its settings change, and a backend's cooldown must survive that).
+
+```qml
+property var rq: null
+Component.onCompleted: { if (services && services.requests) root.rq = services.requests.queueFor("my-api", root) }
+Component.onDestruction: { if (services && services.requests) services.requests.cancelOwner(root) }
+```
+
+- `services.requests.queueFor(key, provider)` → the lane for `key`, made on
+  first ask. `provider` is optional and only used to name it in a status
+  message ("OneNote is rate-limited — retrying in 40s").
+- `services.requests.cancelOwner(owner)` → drop everything queued for that
+  owner across every lane. Call it on destruction and on sign-out.
+
+A lane exposes `depth`, `cooling`, `cooldownRemaining`, `paused` (the host
+sets it while the window is hidden) and the signal `updated()`, plus:
+
+```qml
+var handle = rq.enqueue(opts, start, settled)   // handle.cancel()
+rq.cancelOwner(owner)
+```
+
+| `opts` | meaning |
+|---|---|
+| `key` | what may not overlap itself. Jobs sharing a key run strictly in order, oldest first, whatever their priority — a page's save and its delete share one, so a delete can never overtake the save it supersedes |
+| `mode` | what a newcomer does to a **queued** job of the same key. `append` (default) nothing; `replace` supersedes it, because the newer job contains its intent (a newer save of one page); `dedupe` joins it, so three asks for one listing are one request |
+| `priority` | `0` interactive, `1` background. 0 dispatches first, and a background job never takes the lane's last slot, so a keystroke never waits behind a poll |
+| `owner` | your provider, for `cancelOwner` and for the round-robin that stops one provider starving another |
+| `flush` | this is a **write**. Writes keep draining while the window is hidden; reads do not |
+| `label` | a word for warnings |
+
+`start(ctx)` begins the work and calls `ctx.done(result)` **exactly once** — a
+second call is ignored, so a script that answers twice cannot double-deliver.
+`ctx` also carries `key`, `label` and `attempts`.
+
+`settled(result, info)` is the answer, with
+`info = { superseded, cancelled, attempts }`. **Every enqueue is answered
+exactly once** — delivered, superseded, or cancelled. `result` is `null` when
+the job never ran (superseded or cancelled); handle that case, because a
+provider that never hears back is a note that silently did not save.
+
+**The result decides what happens next.** `ctx.done()` is given whatever the
+script printed, and the lane reads one field of it:
+
+| `kind` | what the lane does |
+|---|---|
+| `"throttled"` | park **the whole lane** until `retryAfter` seconds have passed (10s → 20s → 40s → 60s when the field is absent), then re-run this job at the head of the queue. Retried for as long as the app is open |
+| `"transient"` | re-run **this job only**, after 2.5s, 5s, 10s; the third answer is delivered whatever it says |
+| anything else | delivered as it stands — including a plain `{ "error": … }`, which is what every script answered before this existed |
+
+### Rate keys
+
+Each provider paces against its own key, and shares none: a OneNote throttle
+parks OneNote while Sticky Notes keeps listing. Pick your own key; these are
+the built-ins'.
+
+| key | used by | windows |
+|---|---|---|
+| `graph-onenote` | `onenote.py`, images included | (60s, 100) and (3600s, 350) — Microsoft allows 120/min and 400/hr per app+user |
+| `graph-mail` | `sticky.py` | (60s, 240) — politeness; mailbox limits are far higher |
+| `notion` | `notion.py` | (1s, 3) — Notion's published average |
+| *(none)* | `login.microsoftonline.com` | unpaced: signing in must never wait behind a Graph cooldown |
+
+### `lib/ratelimit.py` — the other half
+
+The lane orders *jobs*; one job is one script run, which can be forty HTTP
+requests the lane cannot see. `lib/ratelimit.py` paces those, across every
+process at once (`flock`'d sliding-window counters under
+`~/.cache/omarchy/note-note-rate/`), and an external provider may import it:
+
+```python
+import ratelimit
+with ratelimit.slot("my-api", [(60, 100)]):
+    ...one request...
+```
+
+It admits by rolling **count**, not by a fixed gap, so a burst under budget
+runs at full speed; it caps concurrent requests per key at 4 across all
+processes; and it sleeps only **short** waits (up to `PACE_TIMEOUT`, 20s).
+Anything longer is not slept out in a script the user cannot cancel — it
+raises `Throttled`, which your `main()` reports as the JSON above and the lane
+waits out instead. Two layers, one wait, never both.
+
+```python
+except ratelimit.Throttled as t:
+    fail("rate limited", kind="throttled", retry_after=t.retry_after)
+```
+
+### `services.microsoft`
 
 `services.microsoft.create(providerId, scopes)` returns an account of the
 provider's own (see `services/microsoft/Account.qml`): its own token file

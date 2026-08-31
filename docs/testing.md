@@ -15,7 +15,8 @@ omarchy plugin enable io.github.andreivinca.note-note
 - **Python changed** → nothing; the next call picks it up. That includes the
   editor's converters, which run as a process per conversion.
 - Always lint first: `qmllint -I /usr/share/omarchy/shell Notes.qml ui/*.qml
-  providers/*/Provider.qml`, and `python3 -m py_compile` the scripts.
+  providers/*/Provider.qml services/*/*.qml`, and `python3 -m py_compile` the
+  scripts.
 - Always check the log after a restart:
   ```bash
   journalctl --user --since "20 sec ago" --no-pager -o cat | grep -iE "Notes\.qml|Provider|NoteEditor"
@@ -92,6 +93,36 @@ disk. It is three lines of work and it is why the awkward cases (a rule alone
 in a note, an empty checkbox, a table after a quote, `2 * 3`,
 `user_name_field`) stay fixed.
 
+## Testing the request queue and the pacer
+
+Both run without the shell, a display or an account, and both are fast.
+
+```bash
+python3 lib/ratelimit_selftest.py            # the cross-process pacer
+python3 services/requests/selftest.py        # the queue (offscreen qml6)
+```
+
+`ratelimit_selftest.py` runs the window and cooldown maths on a **fake clock**
+— `slot()` takes its `now` and `sleep` from the caller, so a sixty-second park
+costs nothing and every case is exact — and then starts **eight real
+processes** on one key to check the two things a fake clock cannot: the rolling
+window count was never exceeded, and no more than `MAX_CONCURRENT` holders
+existed at once. It also pins the stale-holder reaper (a dead pid, and a slot
+older than 90 s), because a process killed mid-request would otherwise hold its
+slot for ever.
+
+`services/requests/selftest.py` runs `selftest.qml` under offscreen `qml6`.
+Its scheduler half calls `scheduler.js` with the clock as an argument (per-key
+FIFO, priority, the round-robin, replace/dedupe, the throttle park and its
+backoff, transient retries, pause, `cancelOwner`); its queue half drives a real
+`RequestQueue` with real timers, which is the only way to check the property
+that matters: **every enqueue is answered exactly once**, including when the
+job is superseded, cancelled, answers twice, throws from `start`, or throws
+from `settled`.
+
+**Add a case for every queueing bug.** A lost callback is a note that silently
+did not save, and it will not show up in any other test.
+
 ## Testing the provider converters
 
 Pure Python, no shell involved — the best place to add regression cases:
@@ -159,14 +190,48 @@ Rules when a real account is involved:
   fail (and a page with images then correctly refuses to save), and a page
   *created* during the throttle can come back 201 with an id whose content
   404s **forever** — a service-side casualty, not a bug here. Wait it out and
-  create a fresh page rather than debugging a poisoned one.
+  create a fresh page rather than debugging a poisoned one. (Creating is now
+  refused outright during a recorded cooldown, which is what stops that.)
+- A throttle can be **simulated without one**, which is how the queue's
+  behaviour is checked against a real account without earning a real 429:
+
+  ```bash
+  python3 -c "import sys; sys.path.insert(0,'lib'); import ratelimit; \
+              ratelimit.report_throttle('graph-onenote', 120)"
+  python3 providers/onenote/onenote.py page "<id>"   # throttled JSON, well under a second
+  python3 -c "import sys; sys.path.insert(0,'lib'); import ratelimit; \
+              ratelimit.clear_throttle('graph-onenote')"
+  ```
+
+### The manual checklist for pacing
+
+With the shell running, and the OneNote tab open:
+
+1. `onenote.py list` twice in a row — the second is paced, and
+   `$RATE/graph-onenote.json` has a stamp per request.
+2. Write a `cooldownUntil` as above, then `onenote.py page <id>`: structured
+   throttled JSON, no network touched, under a second.
+3. In the app, type through the debounce: **one** save sequence per settle,
+   and `$C debugState ""` shows `saving` returning to false.
+4. Delete the open page while a save is queued — the delete supersedes the
+   save, no resurrection, and both callbacks are answered.
+5. Close the overlay during a synthetic cooldown and reopen it: the write is
+   still draining, the countdown resumed where it was (it is wall-clock), and
+   a save that failed while hidden is reported once on reopen.
+6. Disable and re-enable OneNote in Settings mid-queue: no warnings in the
+   log, and the cooldown is still there afterwards.
+7. Sticky Notes lists instantly while OneNote is cold-listing — separate keys,
+   separate lanes.
+8. `$C debugState ""` reports `queues` with each lane's depth and cooldown.
 - Writes are **eventually consistent**: a GET right after a PATCH can return
   the old content. Wait ~15 s before verifying, and never poll in a tight
   loop — that is what triggers the throttle.
 
 ## Checklist for a UI change
 
-1. `qmllint` clean, `py_compile` clean, `qthtml/selftest.py` green.
+1. `qmllint` clean, `py_compile` clean, `qthtml/selftest.py` green — and, if
+   anything touched requests, `ratelimit_selftest.py` and
+   `services/requests/selftest.py` too.
 2. Restart the shell; log clean.
 3. Screenshot the window (`grim -o <output>` then crop with `magick`) and
    actually look at it.

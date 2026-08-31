@@ -42,7 +42,10 @@ community marketplace at <https://omarchyplugins.com>.
 ## Non-goals
 
 - **Not a sync engine.** No offline queue, no conflict resolution, no merge.
-  If a save fails, the user is told; the note is not queued for later.
+  If a save fails, the user is told; the note is not queued for later. The one
+  thing that is promised: a save the app has already accepted is finished — or
+  fails out loud — even if the window closes meanwhile. That lives in memory,
+  for this session only; quitting the shell ends it.
 - **Not an Obsidian/Notion replacement.** No backlinks, graph view, tags,
   databases, templates or plugins-inside-the-plugin.
 - **Not a rich-text word processor.** Fonts, colours, text size and
@@ -64,7 +67,7 @@ community marketplace at <https://omarchyplugins.com>.
 | One notebook open at a time, picked from a tab rail; the user's own files open first | a flat list of every source is unreadable past a few hundred rows, and a tab is a place you go to, not a fold you undo |
 | Highlight is shown as `==text==` markers | the editor cannot round-trip a background colour; markers survive editing, colour would not |
 | Every provider signs in separately | signing out of OneNote must not sign out of Sticky Notes |
-| The app is silent while hidden | no timers, no watchers, no requests unless the window is open |
+| The app is silent while hidden, except a write still draining | no timers, no watchers, no reads unless the window is open — but a save already accepted keeps trying until it lands, because losing it is worse |
 
 ## Success criteria
 

@@ -290,9 +290,23 @@ class is set: extended property `String 0x001A` = `IPM.StickyNote`.
   refuses accounts with many sections (see above) — so it cannot stand in.
   The provider has no `search()`; the sidebar matches OneNote titles only,
   the same as Notion.
-- Throttling (HTTP 429, often **without** a `Retry-After`) arrives quickly if
-  you re-list repeatedly while testing. Back off, cache, and reduce
-  parallelism.
+- **Throttling, measured.** Delegated OneNote allows **120 requests/minute**,
+  **400/hour** and **5 concurrent** per app+user. Going over earns HTTP 429,
+  usually **without** a `Retry-After` — and a throttled account stays
+  throttled for tens of minutes, not seconds. So a missing header is read as a
+  real cooldown (`ratelimit.DEFAULT_COOLDOWN`, 60 s) rather than a short
+  backoff: three quick retries only spend budget to be told the same thing.
+  The cooldown is recorded on disk, so the next process fails fast without
+  touching the network, and it **survives signing out and back in** — Microsoft
+  throttles the app *and* the user, and a new token does not lift it.
+- The account-wide `GET /me/onenote/pages` fails with HTTP 400, error 20266
+  ("the number of maximum sections is exceeded") — observed at 39 sections. So
+  pages are listed per section and there is no bulk endpoint to fall back on;
+  what makes that affordable is diffing each section's own
+  `lastModifiedDateTime` (returned by the one request that lists all sections)
+  and fetching pages only where it moved. A quiet account re-lists for one
+  request instead of forty. The caveat is Graph's eventual consistency: a
+  change made elsewhere seconds ago can be a refresh cycle late.
 - Page images need the bearer token and are only ever fetched from the
   resource endpoint — see [security.md](security.md) rule 4.
 
@@ -332,7 +346,46 @@ documentation disagrees with the service in three places.
 
 **No usable change notifications.** Graph webhooks (and Notion's) need a
 public HTTPS endpoint; a desktop plugin cannot have one. Polling cheaply is
-the answer.
+the answer — and *cheaply* is load-bearing: the OneNote poll used to re-list
+every expanded section every minute, up to 11 requests a minute, which is 660
+an hour against a budget of 400. Polling alone could exhaust the account. It
+now checks the open page and the section that page is in, and leaves the rest
+to the periodic listing above.
+
+---
+
+## Pacing requests — two layers, one wait
+
+Every HTTP request happens inside a short-lived `python3` process; the QML
+host is the only long-lived one. One QML job is one script run, which can be
+forty requests the host cannot see. So the pacing is split, and the split is
+the whole design:
+
+| | owns | waits |
+|---|---|---|
+| `services/requests/` (QML) | ordering: per-key FIFO, coalescing, priority, concurrency | the **long** ones — a throttle cooldown, a transient backoff |
+| `lib/ratelimit.py` | pacing individual requests across every process (`flock`'d sliding-window counters) | the **short** ones only, up to `PACE_TIMEOUT` (20 s) |
+
+Anything longer than `PACE_TIMEOUT` is never slept out inside a script — a
+process blocked for ten minutes is one the host cannot answer for and the user
+cannot cancel. It comes back as `{"kind":"throttled","retryAfter":N}`, and the
+QML lane parks until it is over. Neither layer waits out what the other
+already waited.
+
+Admission is by rolling **count**, not by a fixed gap between requests: while
+the window counts are under budget everything goes straight through, so a cold
+listing is exactly as fast as it was and only a genuinely heavy hour is paced.
+
+**`flock` on an exotic filesystem** (an NFS home) can degrade to no locking at
+all. That means over-admission, never a deadlock — two processes may both
+think there is room — and the QML lane bounds the damage, since it is what
+actually stops after a 429.
+
+**A slot holder that dies** — killed mid-request, crashed — would hold its
+concurrency slot for ever. Holders are stamped with a pid and a time and
+reaped on the next acquire, by `os.kill(pid, 0)` and by an age (90 s, longer
+than any request here). `lib/ratelimit_selftest.py` pins both, and runs eight
+real processes at one key to check the counters actually hold.
 
 ---
 
@@ -342,8 +395,11 @@ the answer.
   pages must additionally be shared with the integration ("Connections").
 - The API **cannot create a top-level page** — a new page needs a parent page
   id.
-- Rate limit ≈ 3 requests/second (we pace at 0.34 s) and children are appended
-  in batches of 100 blocks.
+- Rate limit ≈ 3 requests/second, paced by `lib/ratelimit.py` against the
+  `notion` key. This used to be a 0.34 s sleep between requests inside one
+  process, which said nothing about the other processes the host had running
+  at that moment; the pacer counts them all. Children are appended in batches
+  of 100 blocks.
 - `/v1/search` matches **page titles only** — the reference page is literally
   titled "Search by title". There is no full-text search in the public API,
   so the provider deliberately has no `search()`: content search would mean

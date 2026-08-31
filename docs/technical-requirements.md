@@ -18,6 +18,7 @@
 ```
 manifest.json               plugin id, kinds: ["overlay"], entry point, keepLoaded
 Notes.qml                   the host
+lib/ratelimit.py            cross-process request pacing (+ its selftest)
 ui/NoteList.qml             sidebar (rows, drag, scrolling, the coloured page)
 ui/NotebookTabs.qml         the binder rail down the left edge
 ui/TabColors.js             the tab palette, and the wash both it and the page use
@@ -33,6 +34,8 @@ providers/onenote/          OneNote                 (onenote.py, onenote_md.py)
 providers/notion/           Notion                  (notion.py, notion_md.py)
 services/clipboard/         the clipboard's image    (Clipboard.qml, clipboard.py)
 services/microsoft/         shared Graph sign-in    (Account.qml, msgraph.py)
+services/requests/          the per-provider request queue: ordering, coalescing,
+                            throttle parks (RequestQueue.qml, scheduler.js, selftest)
 services/markdown/          vendored mistune + parse.py (one Markdown parser)
                             qthtml/ — Markdown <-> the editor's rich text, and its selftest
                             Markdown.qml — the QML side of that conversion
@@ -53,7 +56,9 @@ device-code sign-in screen for accounts a provider created.
 **The host must not** know any backend, path format, credential or API. Every
 branch of the form `if (provider.id === "…")` is a design failure; the two
 that exist (`local` for the default "new note" target and the autosave
-debounce) are the exceptions to remove first if a third appears.
+debounce) are the exceptions to remove first if a third appears. The request
+queues are host-owned but backend-agnostic: the host knows a *rate key* is a
+string a provider chose, and nothing else about it.
 
 **A provider owns** its sections and rows, `load`/`save`/`create`/`remove`,
 its capability flags, its own setup UI and credential storage, its caches, its
@@ -88,6 +93,7 @@ people write against: change it additively, never silently.
 | Microsoft tokens | `~/.local/state/omarchy/note-note-ms-<provider>.json`, 0600, one per provider |
 | Notion secret | `~/.local/state/omarchy/note-note-notion.json`, 0600 |
 | Caches | `~/.cache/omarchy/note-note-{sticky,onenote,notion}.json`, images in `note-note-onenote-img/` (0700, files 0600) |
+| Rate state | `~/.cache/omarchy/note-note-rate/<key>.json` + `<key>.lock` (0700, files 0600); override with `NOTE_NOTE_RATE_DIR` |
 
 Nothing is written outside these paths, and nothing at all is written to a
 shared temp directory (see [security.md](security.md)).
@@ -101,10 +107,18 @@ shared temp directory (see [security.md](security.md)).
   ignoring our own writes.
 - Online providers get a `poll(currentPath)` every **20 s** while visible and
   must do the cheapest possible check: Sticky Notes one listing request;
-  OneNote re-lists only expanded sections and re-reads the open page, every
-  third tick; Notion one search, every third tick.
+  OneNote the open page and that page's section only, every third tick, plus a
+  whole-account listing every fifteenth; Notion one search, every third tick.
 - Expensive listings are cached with an age (OneNote 10 min, Notion 5 min) and
-  only bypassed by an explicit *Refresh* row.
+  only bypassed by an explicit *Refresh* row. A OneNote re-listing diffs each
+  section's `lastModifiedDateTime` and fetches pages only where it moved: one
+  request for a quiet account instead of ~40. An interrupted listing is
+  checkpointed into the cache and resumes at its tail.
+- **Every remote request goes through its provider's queue**
+  (`services/requests/`) and is paced against its rate key
+  (`lib/ratelimit.py`). Nothing talks to a network backend outside one; a read
+  of a local cache file is not a request and deliberately does not queue, which
+  is what keeps the sidebar filling while a provider is throttled.
 - The sidebar model is a plain JS array replaced wholesale, with the scroll
   offset preserved across rebuilds. Never clear-and-refill a `ListModel`.
 
@@ -116,7 +130,12 @@ shared temp directory (see [security.md](security.md)).
 | Local listing | 4 MiB (`maxListBytes`) |
 | Host state file | 1 MiB (`maxStateBytes`) |
 | Graph response | 8 MiB default, 4 MiB per listing/page |
-| Notion response | 4 MiB; 3 requests/s pacing |
+| Notion response | 4 MiB |
+| OneNote requests | key `graph-onenote`: 100/min and 350/hr (Microsoft allows 120 and 400 per app+user) |
+| Sticky Notes requests | key `graph-mail`: 240/min — politeness; mailbox limits are far higher |
+| Notion requests | key `notion`: 3/s, Notion's published average |
+| Concurrent requests | 4 per rate key across every process (Microsoft allows 5 per app+user) |
+| In-script wait | 20 s (`PACE_TIMEOUT`); anything longer parks the provider's queue in the host instead |
 | Sticky Notes | 500 notes, 256 KiB per note body |
 | OneNote | 500 sections, 3000 pages; images: 20 MiB each, 40 per page, 45 s wall-clock budget, cache pruned to 400 files / 200 MiB |
 | Notion | 1000 pages, 300 blocks per page |
