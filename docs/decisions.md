@@ -385,3 +385,72 @@ previews its own size, on the same scale the dialect writes headings at
 one by one and the menu shows only the rows the provider can store — so
 `tools` lists in PROVIDERS.md, `$C editorTool h1`, and every provider are
 untouched. The menu stands down entirely when no row survives the gate.
+
+It also stands down while the caret is inside a list — restyling a list item
+strips its marker and splits the list, a heading mid-list is not a thing the
+note can say — the same way the table alteration tools exist only inside a
+table. The probe reads the character *before* the caret: the one at the caret
+already belongs to the next block at a block edge, which called the last line
+of a paragraph a list whenever a list followed it (verified against Qt
+offscreen, position by position).
+
+### A tool's edit is one transaction
+
+*Considered:* reordering each tool's strokes so undo at least stops in
+sensible-looking states.
+*Rejected:* the strokes exist for document reasons (insert-before-remove keeps
+a list item's block format; the block tools rebuild the whole note), and no
+ordering makes two undo entries feel like one action.
+
+*Chosen:* Qt's own transaction. The native inspector exposes the document's
+edit block (`beginEditBlock`/`endEditBlock`, the same mechanism its joined
+format writes already used), and `NoteEditor.atomic()` fences every
+multi-stroke tool with it — highlight, inline code, link, plain paste, image
+paste, and the whole-document rebuild behind every block tool. One ctrl+z
+undoes one tool, one ctrl+shift+z replays it, verified offscreen stroke by
+stroke. The brackets write nothing; a depth guard ignores a stray end, and
+the QML side pairs them in try/finally. QML cannot open an edit block itself,
+so when the optional module is not built, undo falls back to walking the
+strokes — the fallback's one degradation.
+
+### The paste reads the clipboard itself, because Qt cannot paste its own lists
+
+Qt's copy writes `<!--StartFragment-->` inside a list's first item, and Qt's
+paste — the same parser fed the same HTML — fails on exactly that comment to
+rebuild the list: a pasted checkbox list arrived flat, every box gone,
+bullets alike (engine-notes.md). Stripped of the markers the identical HTML
+round-trips whole, so the editor's paste asks `clipboard.py` for the
+clipboard's HTML flavour, strips the markers the way the save path always
+has, and inserts through the same parser inside one `atomic()` step. A
+clipboard with no HTML on offer falls back to Qt's own paste, and the plain
+paste (ctrl+shift+v) is untouched.
+
+### A separator line is never an item
+
+The block tools rewrite selected Markdown lines, and selected paragraphs
+arrive with blank separator lines between them; restyled, each separator
+became an empty item — the extra checkbox after every row. Under a list
+style a separator is now never restyled: it is dropped when both of its
+neighbours come out as items (the selection reads back as one list), and
+kept blank otherwise — before a table or a fence, or beside a line toggling
+off. The toggle's other direction gets the mirror rule: two adjacent items
+freed of their markers are two paragraphs, and a separator is put between
+them where the tight list had none, or Markdown would lazily read them as
+one line. Separators own no document block, so the caret never counted them
+and neither edit moves it.
+
+### Paragraphs are written tight; a blank line is the air
+
+A block typed into a fresh note carries no vertical margins, but the writer's
+bare `<p>` took Qt's default 12px — so the first block tool's rebuild (or a
+reload) re-spaced the whole note, Enter-made lines a third further apart than
+the author left them. The writer now states `margin-top:0; margin-bottom:0`
+on every paragraph, indent and blank line it writes, the same rule the
+line-height already followed: state the form, or Qt's default drifts the
+typed and the re-rendered note apart. One line is one Enter; the air between
+thoughts is the author's own blank line, which the dialect keeps. Lists keep
+Qt's canonical 12px outer margins and headings their default air — both exist
+only writer-made, so they have no typed form to drift from. Vertical margins
+never reach the note (the reader recognises quotes and indents by the
+horizontal ones), so this changes rendering, not storage; measured offscreen,
+a rebuilt note now sits on the same 130%-line rhythm as a typed one.

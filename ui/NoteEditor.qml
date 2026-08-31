@@ -163,10 +163,12 @@ Item {
     // The restyled copy goes in after the selection and the original comes
     // out second: inserted at a block's start instead, Qt hands the block
     // the fragment's own paragraph format, and a list item stops being one.
-    area.insert(to, lit ? unhighlight(fragment)
-                        : '<span style="background-color:' + root.highlightColour
-                          + "; color:" + root.highlightInk + ';">' + fragment + "</span>")
-    area.remove(from, to)
+    atomic(function() {
+      area.insert(to, lit ? unhighlight(fragment)
+                          : '<span style="background-color:' + root.highlightColour
+                            + "; color:" + root.highlightInk + ';">' + fragment + "</span>")
+      area.remove(from, to)
+    })
     area.select(from, to)
     root.edited()
   }
@@ -222,13 +224,40 @@ Item {
       // looks like the app is broken.
       root.clipboard.hasImage(function(isImage) {
         if (isImage) root.statusRequestedText = "This notebook cannot store images"
-        else area.paste()
+        else pasteRich()
       })
       return
     }
     root.clipboard.takeImage(function(image) {
       if (image) root.insertImage(image.path)
-      else area.paste()
+      else pasteRich()
+    })
+  }
+
+  // The clipboard's own HTML, inserted by the editor rather than by Qt.
+  // Qt's paste feeds the identical HTML to the identical parser, but leaves
+  // in the <!--StartFragment--> comment its own copy puts inside a list's
+  // first item — and on that comment the parser fails to rebuild the list,
+  // so a pasted checkbox list arrived flat, every box gone (bullets alike;
+  // measured offscreen, cpp/build stripped-fragment probes). With the
+  // markers stripped the same HTML round-trips whole; the save path already
+  // strips them for the same reason (dialect.strip_fragment_markers).
+  // Insert at the selection's end and remove second — pastePlain's order,
+  // same block-start reason. A clipboard with no HTML flavour is Qt's own
+  // paste after all.
+  function pasteRich() {
+    root.clipboard.takeHtml(function(html) {
+      if (!html) { area.paste(); return }
+      var from = Math.min(area.selectionStart, area.selectionEnd)
+      var to = Math.max(area.selectionStart, area.selectionEnd)
+      var before = area.length, added = 0
+      atomic(function() {
+        area.insert(to, html.replace(/<!--(Start|End)Fragment-->/g, ""))
+        added = area.length - before
+        if (from !== to) area.remove(from, to)
+      })
+      area.cursorPosition = from + added
+      root.edited()
     })
   }
 
@@ -248,10 +277,12 @@ Item {
       var to = Math.max(area.selectionStart, area.selectionEnd)
       var esc = text.replace(/\r\n?/g, "\n").replace(/&/g, "&amp;").replace(/</g, "&lt;")
                     .replace(/\n/g, "<br />")
-      var before = area.length
-      area.insert(to, '<span style="white-space:pre;">' + esc + "</span>")
-      var added = area.length - before
-      if (from !== to) area.remove(from, to)
+      var before = area.length, added = 0
+      atomic(function() {
+        area.insert(to, '<span style="white-space:pre;">' + esc + "</span>")
+        added = area.length - before
+        if (from !== to) area.remove(from, to)
+      })
       area.cursorPosition = from + added
       root.edited()
     })
@@ -263,8 +294,12 @@ Item {
     // On its own line: a picture is a block of its own in every backend, and
     // the save can only leave it untouched if the text is not wrapped around
     // it (providers/onenote/onenote_md.py).
-    area.insert(at, '<p><img src="file://' + encodeURI(path).replace(/"/g, "%22") + '" alt="" /></p>')
-    guardImageAt(at)
+    atomic(function() {
+      area.insert(at, '<p><img src="file://' + encodeURI(path).replace(/"/g, "%22") + '" alt="" /></p>')
+      guardImageAt(at)
+    })
+    // fitImageAt stays outside: its width write joins the closed block
+    // (setImageWidth's `join`), so one ctrl+z still takes the whole paste.
     fitImageAt(at)
     root.edited()
     root.statusRequestedText = "Image pasted"
@@ -302,6 +337,24 @@ Item {
   function undo() { if (area.canUndo) { area.undo(); root.edited() } }
   function redo() { if (area.canRedo) { area.redo(); root.edited() } }
 
+  // One tool, one undo step. A tool edits in strokes — highlight inserts
+  // the restyled copy and then removes the original, a block tool removes
+  // the whole document and inserts the rewrite — and Qt's undo stack
+  // records every stroke on its own, so ctrl+z used to surface the
+  // in-between states: both copies of the word, or an empty note. The
+  // brackets are QTextCursor's edit block (cpp/textblocks.h), Qt's own
+  // transaction — everything inside lands in one undo step, and the
+  // normalize passes that join the edit join the same step. Without the
+  // native helper there is nothing to bracket with and undo walks the
+  // strokes again — the one degradation of the fallback.
+  function atomic(edit) {
+    var nb = nativeBlocks.item
+    if (!nb) { edit(); return }
+    if (!nb.document) nb.document = area.textDocument
+    nb.beginEditBlock()
+    try { edit() } finally { nb.endEditBlock() }
+  }
+
   // ── formatting tools ────────────────────────────────────────────────
   // Inline styles use the selection's font. Block styles cannot be set from
   // QML, so they go through the Markdown: a marker is put at the end of each
@@ -320,7 +373,8 @@ Item {
   // is how the caret finds its line.
   //
   // Putting it back is remove()+insert(), never `text = …`: both are ordinary
-  // edits, so ctrl+z still walks back through toolbar actions.
+  // edits, so ctrl+z still walks back through toolbar actions — and the pair
+  // is fenced by atomic(), so it walks them one whole action at a time.
   function withMarkdown(edit) {
     if (root.readOnly || root.plain || !root.markdown) return
     root.markdown.toMarkdown(documentHtml(), function(md, map) {
@@ -355,8 +409,10 @@ Item {
   function replaceDoc(md, caret, then) {
     var pos = caret === undefined ? area.cursorPosition : (caret < 0 ? Number.MAX_VALUE : caret)
     root.markdown.toHtml(md, function(html) {
-      area.remove(0, area.length)
-      area.insert(0, html)
+      atomic(function() {
+        area.remove(0, area.length)
+        area.insert(0, html)
+      })
       area.cursorPosition = Math.max(0, Math.min(pos, area.length))
       root.edited()
       focusEditor()
@@ -369,19 +425,46 @@ Item {
       var first = lineAt(map, Math.min(area.selectionStart, area.selectionEnd))
       var last = lineAt(map, Math.max(area.selectionStart, area.selectionEnd))
       var caret = area.cursorPosition, changed = false, inFence = false
+      var isList = style === "ul" || style === "ol" || style === "todo"
+      // Selected paragraphs arrive with Markdown's blank separator lines
+      // between them, and a separator restyled is an empty item — the extra
+      // checkbox after every row. Under a list style a separator is never
+      // restyled: dropped when the lines on both sides come out as items
+      // (restyleLine toggles, so a click can also *strip* markers — a freed
+      // paragraph needs its separator back or the two would lazily merge),
+      // kept blank otherwise — before a table or a fence, or beside a line
+      // toggling off. Separators own no document block, so the caret's
+      // position never counted them and dropping them moves nothing.
+      var itemRx = /^\s*([-*+]|\d+[.)])[ \t]/
+      var out = [], prevItem = false, prevFreed = false
       for (var i = 0; i < lines.length; i++) {
-        if (/^\s*```/.test(lines[i])) { inFence = !inFence; continue }
-        if (i < first || i > last) continue
+        if (/^\s*```/.test(lines[i])) { inFence = !inFence; out.push(lines[i]); prevItem = false; prevFreed = false; continue }
         // table rows and fenced code are never restyled: it would corrupt them
-        if (inFence || /^\s*\|/.test(lines[i])) continue
+        if (i < first || i > last || inFence || /^\s*\|/.test(lines[i])) { out.push(lines[i]); prevItem = false; prevFreed = false; continue }
+        if (isList && lines[i] === "") {
+          var j = i + 1
+          while (j <= last && j < lines.length && lines[j] === "") j++
+          if (prevItem && j <= last && j < lines.length && !/^\s*(```|\|)/.test(lines[j])
+              && itemRx.test(restyleLine(lines[j], style))) { changed = true; continue }
+          out.push(lines[i]); prevItem = false; prevFreed = false; continue
+        }
         var next = restyleLine(lines[i], style)
-        if (next !== lines[i]) { lines[i] = next; changed = true }
+        if (next !== lines[i]) changed = true
+        // The toggle's other direction: two adjacent items freed of their
+        // markers are two paragraphs, and paragraphs need the separator a
+        // tight list never had — without it Markdown lazily reads them as
+        // one line.
+        var freed = isList && itemRx.test(lines[i]) && !itemRx.test(next)
+        if (freed && prevFreed) out.push("")
+        out.push(next)
+        prevItem = isList && itemRx.test(next)
+        prevFreed = freed
       }
       if (!changed) {
         if (style === "indent") root.statusRequestedText = "A nested list item needs one above it"
         return
       }
-      replaceDoc(lines.join("\n"), caret)
+      replaceDoc(out.join("\n"), caret)
     })
   }
 
@@ -395,7 +478,7 @@ Item {
   property bool inTable: false
   readonly property string cellSep: "\uFDD0"
   readonly property string tableEnd: "\uFDD1"
-  Timer { id: inTableTimer; interval: 120; onTriggered: root.updateInTable() }
+  Timer { id: inTableTimer; interval: 120; onTriggered: { root.updateInTable(); root.updateInList() } }
   function scheduleInTable() { inTableTimer.restart() }
   function updateInTable() {
     // getText() ranges are table-granular (a range touching a table returns
@@ -411,6 +494,21 @@ Item {
       if (j >= 0 && j < after) { after = j; afterChar = seps[i] }
     }
     root.inTable = beforeChar === root.cellSep && (afterChar === root.cellSep || afterChar === root.tableEnd)
+  }
+
+  // ── the caret's list, on the same timer ─────────────────────────────
+  // The style menu stands down inside a list: restyling a list item strips
+  // its marker and splits the list (restyleLine), so a heading mid-list is
+  // not a thing the note can say — the tool hides instead, the way the
+  // table alteration tools exist only inside a table. The probe reads the
+  // character before the caret, which is the one that shares its block: at
+  // a block edge the character *at* the caret already belongs to the next
+  // block, so probing it calls the last line of a paragraph a list when a
+  // list follows, and disowns the last line of a list when one doesn't.
+  property bool inList: false
+  function updateInList() {
+    var pos = area.cursorPosition
+    root.inList = inListItem(pos > 0 ? pos - 1 : pos)
   }
 
   // ── block decorations: quote bars and code slabs ────────────────────
@@ -861,10 +959,12 @@ Item {
     if (from === to) return
     var fragment = inlineFragment(area.getFormattedText(from, to))
     var mono = /font-family:[^;"]*mono/i.test(fragment)
-    area.insert(to, mono ? uncode(fragment)
-                         : "<span style=\"font-family:'monospace'; background-color:"
-                           + root.codeChipColour + ';">' + fragment + "</span>")
-    area.remove(from, to)
+    atomic(function() {
+      area.insert(to, mono ? uncode(fragment)
+                           : "<span style=\"font-family:'monospace'; background-color:"
+                             + root.codeChipColour + ';">' + fragment + "</span>")
+      area.remove(from, to)
+    })
     area.select(from, to)
     root.edited()
   }
@@ -919,11 +1019,13 @@ Item {
     root.linkBarOpen = false
     if (!url) { focusEditor(); return }
     var s = area.selectionStart, e = area.selectionEnd
-    if (s !== e) area.remove(Math.min(s, e), Math.max(s, e))
-    // Same colour the converter gives a link, so one typed here and one that
-    // came from the note look alike before any reload.
-    area.insert(Math.min(s, e), '<a href="' + url.replace(/"/g, "%22") + '" style="color:'
-                + root.linkColour + ';">' + text.replace(/</g, "&lt;") + "</a>")
+    atomic(function() {
+      if (s !== e) area.remove(Math.min(s, e), Math.max(s, e))
+      // Same colour the converter gives a link, so one typed here and one
+      // that came from the note look alike before any reload.
+      area.insert(Math.min(s, e), '<a href="' + url.replace(/"/g, "%22") + '" style="color:'
+                  + root.linkColour + ';">' + text.replace(/</g, "&lt;") + "</a>")
+    })
     focusEditor()
     root.edited()
   }
@@ -1135,7 +1237,10 @@ Item {
           readonly property bool allowed: modelData.id === "sep"
             || (modelData.id === "style" ? toolbar.styleMenuRows.length > 0
                                          : root.toolEnabled(tableOnly ? "table" : modelData.id))
-          visible: allowed && (tableOnly ? root.inTable : (modelData.id === "table" ? !root.inTable : true))
+          visible: allowed && (tableOnly ? root.inTable
+                             : modelData.id === "table" ? !root.inTable
+                             : modelData.id === "style" ? !root.inList
+                             : true)
           onLoaded: if (modelData.id !== "sep") { item.iconText = modelData.icon; item.tooltipText = modelData.tip; item.toolId = modelData.id }
         }
       }

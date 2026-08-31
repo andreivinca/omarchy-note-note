@@ -35,6 +35,13 @@ Item {
     run(["text"], function(result) { callback(result && result.text ? result.text : "") })
   }
 
+  // The clipboard's HTML flavour, for the editor's own paste (see
+  // clipboard.py, clipboard_html).  callback(string) — "" when none is on
+  // offer, which sends the paste down Qt's own path.
+  function takeHtml(callback) {
+    run(["html"], function(result) { callback(result && result.html ? result.html : "") })
+  }
+
   function run(args, callback) {
     var proc = reader.createObject(root, { command: ["python3", root.script].concat(args), callback: callback })
     proc.running = true

@@ -22,7 +22,9 @@ LINE_HEIGHT = "line-height:%d%%;" % dialect.LINE_HEIGHT_PCT
 # would be drawn twice as tall as one. A single non-breaking space is one
 # line, one character — the same length as the break, so the caret map is
 # unchanged — and `reader` reads it back as a blank line either way.
-BLANK = '<p style="%s">%s</p>' % (LINE_HEIGHT, dialect.BLANK_PARAGRAPH)
+# Margins zeroed like every paragraph's (block_style): a blank line is one
+# line of air, not one line plus Qt's default 12px above and below it.
+BLANK = '<p style="margin-top:0px; margin-bottom:0px; %s">%s</p>' % (LINE_HEIGHT, dialect.BLANK_PARAGRAPH)
 
 # An image opening a list item is mispainted whether or not a link wraps it
 # (measured on 6.11), so the guard below must see through the anchor.
@@ -124,8 +126,9 @@ class _Renderer:
         is the marker, passed in near-invisible by the app.
 
         Vertical margins are zeroed or Qt's default 12px would split the
-        block between lines; the neighbours' own margins keep it clear of
-        them (Qt spaces blocks by the larger of the two facing margins). The
+        block between lines; since every paragraph is written tight now
+        (block_style), the block sits on the same line rhythm as the text
+        around it, and a blank line is the author's way to give it air. The
         left margin is the text's padding inside the slab the editor draws
         reaching CODE_PAD_PX back over it; `reader` ignores a code line's
         margins, so it never reads back as an indent."""
@@ -139,17 +142,26 @@ class _Renderer:
                 for line in lines]
 
     def block_style(self, indent, quote):
+        # Vertical margins are stated on every paragraph, and stated as zero:
+        # a block typed into a fresh note carries none, and a bare <p> takes
+        # Qt's default 12px — so the first block tool's rebuild used to
+        # re-space the whole note (Enter-made lines at the line-height's
+        # rhythm, the rewrite a third wider). One line is one Enter; the air
+        # between thoughts is the author's own blank line, which the dialect
+        # already keeps (BLANK_PARAGRAPH). Same rule the line-height follows:
+        # state the form, or Qt's default drifts the typed and the re-rendered
+        # note apart.
         if quote:
-            # Zeroed vertical margins so neighbouring quote paragraphs read
-            # as one quote — the bar the editor draws over them (NoteEditor,
-            # quote bars) spans the run without a gap; the neighbours' own
-            # margins keep the block clear of everything else.
+            # Zeroed also so neighbouring quote paragraphs read as one
+            # quote — the bar the editor draws over them (NoteEditor, quote
+            # bars) spans the run without a gap.
             return (' style="margin-top:0px; margin-bottom:0px;'
                     ' margin-left:%dpx; margin-right:%dpx; %s"'
                     % (dialect.QUOTE_PX, dialect.QUOTE_PX, LINE_HEIGHT))
         if indent > 0:
-            return ' style="margin-left:%dpx; %s"' % (indent * dialect.INDENT_PX, LINE_HEIGHT)
-        return ' style="%s"' % LINE_HEIGHT
+            return (' style="margin-top:0px; margin-bottom:0px; margin-left:%dpx; %s"'
+                    % (indent * dialect.INDENT_PX, LINE_HEIGHT))
+        return ' style="margin-top:0px; margin-bottom:0px; %s"' % LINE_HEIGHT
 
     # ---- lists ----------------------------------------------------------
 

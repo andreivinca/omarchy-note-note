@@ -203,9 +203,29 @@ mirrors the dialect constant). A link around the image changes nothing —
 `<li><a…><img …/></a>` is mispainted identically (measured offscreen, same
 rows) — so the writer's guard looks through an anchor too.
 
+**Qt cannot paste its own lists.** The copy serialises the selection with a
+`<!--StartFragment-->` comment *inside* the first `<li>`, and on that comment
+Qt's HTML parser fails to rebuild the `QTextList`: every pasted list arrived
+flat — bullets and checkboxes alike, the boxes not painted because the marker
+survives only as a block format on a non-list block (measured offscreen,
+position by position). The identical HTML with the comments stripped
+round-trips whole, so the editor's paste takes the clipboard's HTML itself
+(`clipboard.py html`, wl-paste's text/html), strips the markers — the same
+strip the save path always did (`dialect.strip_fragment_markers`) — and
+inserts it through the same parser (`NoteEditor.pasteRich`). Qt's own
+qrichtext meta rides in the HTML head, so the parse mode matches Qt's paste
+exactly.
+
 **`insert()` parses HTML** in this mode, and `remove()` + `insert()` are
 ordinary edits, so ctrl+z still walks back through toolbar actions. Assigning
-`text` would wipe the undo stack.
+`text` would wipe the undo stack. On their own the two edits are two undo
+steps, and ctrl+z surfaced a tool's intermediate states (both copies of a
+highlighted word; an empty note under a block tool) — so every multi-stroke
+tool runs inside `NoteEditor.atomic()`, a `QTextCursor` edit block exposed by
+the native inspector (`beginEditBlock`/`endEditBlock`, cpp/textblocks.h):
+one transaction, one undo step, and the normalize passes that join the edit
+join the same step. QML alone cannot open an edit block, so without the
+built module undo degrades to walking the strokes again.
 
 **Verify offscreen** rather than guessing — it takes seconds:
 

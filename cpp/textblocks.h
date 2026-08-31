@@ -11,7 +11,9 @@
 // corner-handle resize), both format-only, and one blank filler character
 // into a block Qt would otherwise hide (fillEmptyBlocksBeforeTables) — none
 // can remove text, so the worst a bug here can do is mis-draw a block,
-// never lose a character.
+// never lose a character. The edit-block brackets (beginEditBlock/
+// endEditBlock) write nothing at all: they fence the editor's own strokes
+// into one undo step.
 //
 // The module is OPTIONAL. It is built locally (`sh cpp/build.sh`) against
 // the system Qt and loaded by a directory import (ui/NativeBlocks.qml);
@@ -52,7 +54,38 @@ public:
         if (document == m_document)
             return;
         m_document = document;
+        // A depth carried across documents would end blocks the new
+        // document never began.
+        m_editDepth = 0;
         emit documentChanged();
+    }
+
+    // The editor's tools edit in strokes — highlight inserts the restyled
+    // copy and then removes the original; a block tool removes the whole
+    // document and inserts the rewrite — and Qt's undo stack records every
+    // stroke on its own, so ctrl+z used to surface a tool's intermediate
+    // states. These brackets make the strokes one transaction: each edit
+    // between them, whoever makes it (the QML insert/remove and the
+    // normalize joins alike), lands in a single undo step. It is the same
+    // QTextCursor edit block setImageWidth uses, document-global, so a
+    // throwaway cursor is enough. The depth guard keeps a stray end from
+    // underflowing Qt's counter — the QML side brackets in try/finally
+    // (NoteEditor.atomic), so depth here never outlives a tool.
+    Q_INVOKABLE void beginEditBlock()
+    {
+        QTextDocument *doc = m_document ? m_document->textDocument() : nullptr;
+        if (!doc)
+            return;
+        QTextCursor(doc).beginEditBlock();
+        ++m_editDepth;
+    }
+    Q_INVOKABLE void endEditBlock()
+    {
+        QTextDocument *doc = m_document ? m_document->textDocument() : nullptr;
+        if (!doc || m_editDepth <= 0)
+            return;
+        QTextCursor(doc).endEditBlock();
+        --m_editDepth;
     }
 
     // Every block in document order — paragraphs, list items and table
@@ -292,4 +325,5 @@ private:
     }
 
     QQuickTextDocument *m_document = nullptr;
+    int m_editDepth = 0;
 };

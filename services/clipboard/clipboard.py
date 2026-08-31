@@ -4,6 +4,7 @@ show it, its text for the plain paste.
     python3 clipboard.py types              -> {"types": ["image/png", …]}
     python3 clipboard.py image <dir>        -> {"path": …, "mime": …, "bytes": n}
     python3 clipboard.py text               -> {"text": "…"}
+    python3 clipboard.py html               -> {"html": "…"}
 
 Wayland keeps the clipboard in the compositor, so this shells out to
 `wl-paste`. Only real image types are accepted, the read is bounded, and an
@@ -136,6 +137,26 @@ def clipboard_text():
     return {"text": proc.stdout.decode("utf-8", "replace")}
 
 
+def clipboard_html():
+    """The clipboard's rich flavour, for the editor's own paste. Qt's paste
+    reads the same text/html, but chokes on the <!--StartFragment--> comment
+    its own copy puts inside a list's first item — every pasted list arrived
+    flat, checkboxes and bullets alike — so the editor takes the HTML here,
+    strips the markers and inserts it through the same parser
+    (NoteEditor.pasteRich). No HTML on offer answers empty — the ordinary
+    case, not a failure — and the paste falls back to Qt's own."""
+    if "text/html" not in types():
+        return {"html": ""}
+    try:
+        proc = subprocess.run(["wl-paste", "--no-newline", "--type", "text/html"],
+                              capture_output=True, timeout=10)
+    except (OSError, subprocess.SubprocessError) as error:
+        return {"error": "could not read the clipboard: %s" % error}
+    if len(proc.stdout) > MAX_TEXT:
+        return {"error": "the clipboard text is too large"}
+    return {"html": proc.stdout.decode("utf-8", "replace")}
+
+
 def main(argv):
     command = argv[1] if len(argv) > 1 else ""
     if command == "types":
@@ -144,8 +165,10 @@ def main(argv):
         out(save_image(argv[2]))
     elif command == "text":
         out(clipboard_text())
+    elif command == "html":
+        out(clipboard_html())
     else:
-        out({"error": "usage: clipboard.py types | image <dir> | text"})
+        out({"error": "usage: clipboard.py types | image <dir> | text | html"})
         return 2
     return 0
 
