@@ -368,3 +368,20 @@ A OneNote page with images or more than the block/section caps, a Notion page
 with unsupported blocks, a local file over 2 MiB: all open **read-only with a
 visible reason**. Saving would silently destroy content we cannot represent,
 which breaks the first rule of the project.
+
+### The four block-style buttons fold into one text-style menu
+
+*Considered:* subscript and superscript as two more rows in the menu.
+*Rejected:* the dialect's Markdown has no syntax for them. The parser enables
+`task_lists`, `strikethrough`, `table`, `mark` and the underline plugin
+(services/markdown/parse.py) — mistune's `~sub~`/`^sup^` extensions are not
+CommonMark, OneNote and Notion could not round-trip them, and a style the
+save would silently drop breaks the first rule of the project the quiet way.
+
+*Chosen:* one dropdown (`md-format_size`, with a chevron so it reads as a
+menu among buttons that act) in place of the h1/h2/h3/p buttons; each row
+previews its own size, on the same scale the dialect writes headings at
+(`HEADING_FONT_SIZE`). The tool ids stay `h1 h2 h3 p`: providers gate them
+one by one and the menu shows only the rows the provider can store — so
+`tools` lists in PROVIDERS.md, `$C editorTool h1`, and every provider are
+untouched. The menu stands down entirely when no row survives the gate.

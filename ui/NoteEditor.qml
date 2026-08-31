@@ -1,4 +1,5 @@
 import QtQuick
+import QtQuick.Controls as QQC
 import qs.Commons
 import qs.Ui
 import "QuoteBars.js" as QuoteBars
@@ -1075,6 +1076,20 @@ Item {
       width: parent.width
       spacing: Style.spacing.sm
 
+      // The rows of the text-style menu, the toolbar's one dropdown: each
+      // previews its own size, on the same scale the dialect writes headings
+      // at (HEADING_FONT_SIZE in services/markdown/qthtml/dialect.py —
+      // xx-large, x-large, large). Sub- and superscript stayed out: the
+      // dialect's Markdown has no syntax for them, so the round trip through
+      // save would drop them (docs/decisions.md). Providers gate the ids one
+      // by one, so the menu carries only the rows the provider can store.
+      readonly property var styleMenuRows: [
+        { id: "h1", label: "Heading 1", scale: 2.0, bold: true },
+        { id: "h2", label: "Heading 2", scale: 1.5, bold: true },
+        { id: "h3", label: "Heading 3", scale: 1.17, bold: true },
+        { id: "p", label: "Normal text", scale: 1.0, bold: false }
+      ].filter(function(o) { return root.toolEnabled(o.id) })
+
       Repeater {
         // Material Design glyphs from the shell's Nerd Font, by name:
         // md-format_bold, md-format_italic, … (see PROVIDERS.md for tool ids).
@@ -1083,13 +1098,16 @@ Item {
           { id: "italic", icon: "󰉷", tip: "Italic (ctrl+i)" },
           { id: "underline", icon: "󰊇", tip: "Underline (ctrl+u)" },
           { id: "strikeout", icon: "󰊁", tip: "Strikethrough (ctrl+s)" },
+          { id: "sep" },
+          // The dressing-up group: what a run of text *is* (highlight, code,
+          // heading), apart from the toggles of how it is drawn. The style
+          // entry is one dropdown, not four buttons — the block styles read
+          // as a choice of one, the way bold/italic never could. Its rows
+          // keep the ids h1 h2 h3 p (toolbar.styleMenuRows), so providers
+          // and `editorTool` see nothing new.
           { id: "highlight", icon: "󰙒", tip: "Highlight (ctrl+shift+h)" },
           { id: "code", icon: "󰅴", tip: "Inline code" },
-          { id: "sep" },
-          { id: "h1", icon: "󰉫", tip: "Heading 1" },
-          { id: "h2", icon: "󰉬", tip: "Heading 2" },
-          { id: "h3", icon: "󰉭", tip: "Heading 3" },
-          { id: "p", icon: "󰉽", tip: "Normal text" },
+          { id: "style", icon: "󰉿", tip: "Text style" },
           { id: "sep" },
           { id: "ul", icon: "󰉹", tip: "Bullet list" },
           { id: "ol", icon: "󰉻", tip: "Numbered list" },
@@ -1110,9 +1128,13 @@ Item {
         ]
         delegate: Loader {
           required property var modelData
-          sourceComponent: modelData.id === "sep" ? sepComp : buttonComp
+          sourceComponent: modelData.id === "sep" ? sepComp : (modelData.id === "style" ? styleComp : buttonComp)
           readonly property bool tableOnly: ["addRow", "addCol", "delRow", "delCol"].indexOf(modelData.id) >= 0
-          readonly property bool allowed: modelData.id === "sep" || root.toolEnabled(tableOnly ? "table" : modelData.id)
+          // The style menu stands for its rows: it stays as long as any of
+          // them survives the provider's gate.
+          readonly property bool allowed: modelData.id === "sep"
+            || (modelData.id === "style" ? toolbar.styleMenuRows.length > 0
+                                         : root.toolEnabled(tableOnly ? "table" : modelData.id))
           visible: allowed && (tableOnly ? root.inTable : (modelData.id === "table" ? !root.inTable : true))
           onLoaded: if (modelData.id !== "sep") { item.iconText = modelData.icon; item.tooltipText = modelData.tip; item.toolId = modelData.id }
         }
@@ -1132,6 +1154,83 @@ Item {
           verticalPadding: Style.spacing.xxs
           onHovered: function(isHovered) { hovering = isHovered }
           onClicked: root.tool(toolId)
+        }
+      }
+      Component {
+        id: styleComp
+        Button {
+          id: styleButton
+          property string toolId: ""
+          property bool hovering: false
+          // Held open reads as held down: the outline stays while the menu is up.
+          bordered: hovering || styleMenu.opened
+          foreground: root.foreground
+          accent: root.accent
+          iconSize: Style.font.icon
+          // A chevron after the glyph — this button opens a menu, the others act.
+          text: "󰅀"
+          fontSize: Style.font.caption
+          horizontalPadding: Style.spacing.sm
+          verticalPadding: Style.spacing.xxs
+          onHovered: function(isHovered) { hovering = isHovered }
+          onClicked: styleMenu.opened ? styleMenu.close() : styleMenu.open()
+          // The toolbar can vanish under the menu (a provider switch, a
+          // notice); the menu must not outlive it.
+          onVisibleChanged: if (!visible) styleMenu.close()
+
+          // The two candidate widest rows, measured at their menu size, so
+          // every row takes the same width and the hover fill is not ragged.
+          TextMetrics { id: widestHeading; text: "Heading 1"; font.family: root.fontFamily; font.bold: true; font.pixelSize: Math.round(Style.font.body * 2) }
+          TextMetrics { id: widestNormal; text: "Normal text"; font.family: root.fontFamily; font.pixelSize: Style.font.body }
+
+          QQC.Popup {
+            id: styleMenu
+            y: styleButton.height + Style.spacing.xxs
+            readonly property var borderSpec: Border.localOrSurfaceSpec("popups", "border", Color.popups.border, Color.popups.border, Style.normalBorderWidth)
+            readonly property real rowWidth: Math.ceil(Math.max(widestHeading.width, widestNormal.width)) + 2 * Style.spacing.controlPaddingX
+            padding: Style.spacing.xxs
+            leftPadding: Border.left(borderSpec) + Style.spacing.xxs
+            rightPadding: Border.right(borderSpec) + Style.spacing.xxs
+            topPadding: Border.top(borderSpec) + Style.spacing.xxs
+            bottomPadding: Border.bottom(borderSpec) + Style.spacing.xxs
+            background: BorderSurface {
+              color: Color.popups.background
+              borderSpec: styleMenu.borderSpec
+              radius: Style.cornerRadius
+            }
+            contentItem: Column {
+              spacing: Style.spacing.labelGap
+              Repeater {
+                model: toolbar.styleMenuRows
+                delegate: Rectangle {
+                  id: styleRow
+                  required property var modelData
+                  width: styleMenu.rowWidth
+                  height: rowLabel.implicitHeight + Style.spacing.sm
+                  radius: Style.cornerRadius
+                  color: rowMouse.containsMouse ? Style.hoverFillFor(Color.popups.text, root.accent) : "transparent"
+                  Text {
+                    id: rowLabel
+                    anchors.left: parent.left
+                    anchors.leftMargin: Style.spacing.controlPaddingX
+                    anchors.verticalCenter: parent.verticalCenter
+                    text: styleRow.modelData.label
+                    color: rowMouse.containsMouse ? Style.hoverStateColor(Color.popups.text, root.accent) : Color.popups.text
+                    font.family: root.fontFamily
+                    font.pixelSize: Math.round(Style.font.body * styleRow.modelData.scale)
+                    font.bold: styleRow.modelData.bold
+                  }
+                  MouseArea {
+                    id: rowMouse
+                    anchors.fill: parent
+                    hoverEnabled: true
+                    cursorShape: Qt.PointingHandCursor
+                    onClicked: { styleMenu.close(); root.tool(styleRow.modelData.id) }
+                  }
+                }
+              }
+            }
+          }
         }
       }
     }
