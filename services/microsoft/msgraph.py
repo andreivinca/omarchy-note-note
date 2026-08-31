@@ -17,6 +17,10 @@ overrides it, for people who prefer their own registration.
 """
 import json, os, sys, time, urllib.request, urllib.parse, urllib.error
 
+HERE = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, os.path.join(HERE, "..", "..", "lib"))
+import ratelimit  # noqa: E402
+
 HOME = os.path.expanduser("~")
 CONFIG = os.path.join(os.environ.get("XDG_CONFIG_HOME", HOME + "/.config"), "omarchy/note-note.json")
 STATE_DIR = os.path.join(os.environ.get("XDG_STATE_HOME", HOME + "/.local/state"), "omarchy")
@@ -42,9 +46,28 @@ def out(obj):
     sys.stdout.flush()
 
 
-def fail(msg, code=1):
-    out({"error": msg})
+def fail(msg, code=1, kind=None, retry_after=None):
+    """The one error shape every provider script answers with.
+
+    `kind` is what the queue in the host reads (providers/PROVIDERS.md):
+    "throttled" parks that provider's lane until `retryAfter` seconds have
+    passed and then re-runs the job, "transient" re-runs the job a few times
+    on its own, and anything else — including no kind at all, which is every
+    error this plugin had before — is shown to the user as it stands.
+    """
+    payload = {"error": msg}
+    if kind:
+        payload["kind"] = kind
+    if retry_after is not None:
+        payload["retryAfter"] = round(float(retry_after), 3)
+    out(payload)
     sys.exit(code)
+
+
+def fail_throttled(error):
+    """A `ratelimit.Throttled` as the queue expects to read it."""
+    fail("rate limited — retrying in %ds" % max(1, round(error.retry_after)),
+         kind="throttled", retry_after=error.retry_after)
 
 
 def load_json(path, default):
@@ -105,7 +128,48 @@ def read_bounded(resp, max_bytes):
     return raw
 
 
+# Pacing. An importer sets these two before it makes any request — sticky.py
+# and onenote.py each name their own key, so a throttle on one never parks the
+# other (providers/PROVIDERS.md, the rate-key table). Left unset, nothing here
+# is paced at all, which is what an unaware caller of msgraph.py gets.
+RATE_KEY = None
+RATE_WINDOWS = []
+GRAPH_ORIGIN = "https://graph.microsoft.com/"
+
+
+def rate_key_for(url):
+    """The key a URL is paced against, or None for one that must not be.
+
+    Only Graph counts against a provider's budget. The sign-in endpoints are
+    deliberately unpaced: a token refresh that waited behind a Graph cooldown
+    would turn "OneNote is busy" into "you are signed out".
+    """
+    return RATE_KEY if (RATE_KEY and url.startswith(GRAPH_ORIGIN)) else None
+
+
+def wait_asked_by(error):
+    """How long a 429/503 wants us to wait.
+
+    Graph's OneNote throttles usually carry no `Retry-After` at all, and a
+    throttled account stays that way for tens of minutes — so a missing
+    header on a 429 means a real cooldown, not a guess at a short one. A 503
+    is a blip and is worth one short retry in place.
+    """
+    wait = ratelimit.retry_after_of(error.headers)
+    if wait is not None:
+        return wait
+    return ratelimit.SHORT_RETRY if error.code == 503 else ratelimit.DEFAULT_COOLDOWN
+
+
 def http(method, url, data=None, headers=None, form=False, max_bytes=MAX_BODY):
+    """One Graph request, paced and retried.
+
+    The retry loop is `ratelimit.attempt_loop`: short waits are slept here,
+    and anything longer becomes a `Throttled` the caller reports upwards
+    rather than a process sitting blocked for ten minutes. (The hand-rolled
+    loop this replaced fell off its own end and returned None when all three
+    attempts were throttled, which reached the caller as a TypeError.)
+    """
     body = None
     hdrs = dict(headers or {})
     if data is not None:
@@ -116,7 +180,8 @@ def http(method, url, data=None, headers=None, form=False, max_bytes=MAX_BODY):
             body = json.dumps(data).encode()
             hdrs["Content-Type"] = "application/json"
     req = urllib.request.Request(url, data=body, method=method, headers=hdrs)
-    for attempt in range(3):
+
+    def once():
         try:
             with urllib.request.urlopen(req, timeout=30) as r:
                 raw = read_bounded(r, max_bytes)
@@ -125,20 +190,16 @@ def http(method, url, data=None, headers=None, form=False, max_bytes=MAX_BODY):
             fail(str(e))
         except urllib.error.HTTPError as e:
             raw = e.read(max_bytes + 1)[:max_bytes]
-            # Throttled: Graph says how long to wait. Honour it (bounded) and retry.
-            if e.code in (429, 503) and attempt < 2:
-                try:
-                    wait = float(e.headers.get("Retry-After", "3"))
-                except ValueError:
-                    wait = 3.0
-                time.sleep(min(max(wait, 1.0), 15.0))
-                continue
+            if e.code in (429, 503):
+                raise ratelimit.Retry(wait_asked_by(e))
             try:
                 return e.code, json.loads(raw)
             except ValueError:
                 return e.code, {"error": raw.decode(errors="replace")}
         except urllib.error.URLError as e:
             fail("network error: %s" % e.reason)
+
+    return ratelimit.attempt_loop(rate_key_for(url), RATE_WINDOWS, once)
 
 
 # ---------------------------------------------------------------- tokens
@@ -258,5 +319,7 @@ if __name__ == "__main__":
         main(sys.argv)
     except SystemExit:
         raise
+    except ratelimit.Throttled as t:
+        fail_throttled(t)
     except Exception as e:  # never leave the caller without JSON
         fail("%s: %s" % (type(e).__name__, e))

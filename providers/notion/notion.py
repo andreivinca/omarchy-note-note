@@ -19,7 +19,9 @@ integration in Notion ("Connections") to be visible.
 import json, os, sys, time, urllib.request, urllib.error
 
 HERE = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, os.path.join(HERE, "..", "..", "lib"))
 sys.path.insert(0, HERE)
+import ratelimit  # noqa: E402
 import notion_md  # noqa: E402
 
 HOME = os.path.expanduser("~")
@@ -34,8 +36,12 @@ VERSION = "2022-06-28"
 MAX_PAGES = 1000
 MAX_BLOCKS = 300            # per page; more opens read-only
 MAX_BODY = 4 * 1024 * 1024  # one API response
-MIN_GAP = 0.34              # seconds between requests (3 req/s)
-_last = [0.0]
+# Notion's published limit is an average of three requests a second. It used
+# to be kept by sleeping 0.34 s between requests inside one process, which
+# said nothing about the other processes the host may have running at the same
+# moment; the pacer counts them all (lib/ratelimit.py).
+RATE_KEY = "notion"
+RATE_WINDOWS = [(1, 3)]
 
 
 def out(obj):
@@ -43,8 +49,15 @@ def out(obj):
     sys.stdout.flush()
 
 
-def fail(msg, code=1):
-    out({"error": msg})
+def fail(msg, code=1, kind=None, retry_after=None):
+    """The one error shape a provider script answers with; `kind` is what the
+    queue in the host reads (providers/PROVIDERS.md)."""
+    payload = {"error": msg}
+    if kind:
+        payload["kind"] = kind
+    if retry_after is not None:
+        payload["retryAfter"] = round(float(retry_after), 3)
+    out(payload)
     sys.exit(code)
 
 
@@ -95,13 +108,16 @@ def token():
 
 
 def api(method, path, data=None, tok=None):
-    gap = MIN_GAP - (time.time() - _last[0])
-    if gap > 0:
-        time.sleep(gap)
-    _last[0] = time.time()
+    """One Notion request, paced across processes and retried.
+
+    Notion answers a 429 with a `Retry-After`, and its limit is per second
+    rather than a long lockout, so a missing header means a short wait rather
+    than a real cooldown.
+    """
     headers = {"Authorization": "Bearer " + (tok or token()), "Notion-Version": VERSION, "Content-Type": "application/json"}
     req = urllib.request.Request(API + path, data=json.dumps(data).encode() if data is not None else None, method=method, headers=headers)
-    for attempt in range(3):
+
+    def once():
         try:
             with urllib.request.urlopen(req, timeout=30) as r:
                 raw = r.read(MAX_BODY + 1)
@@ -110,19 +126,17 @@ def api(method, path, data=None, tok=None):
                 return r.status, (json.loads(raw) if raw else {})
         except urllib.error.HTTPError as e:
             raw = e.read(MAX_BODY + 1)[:MAX_BODY]
-            if e.code in (429, 502, 503) and attempt < 2:
-                try:
-                    wait = float(e.headers.get("Retry-After", "2"))
-                except ValueError:
-                    wait = 2.0
-                time.sleep(min(max(wait, 1.0), 15.0))
-                continue
+            if e.code in (429, 502, 503):
+                wait = ratelimit.retry_after_of(e.headers)
+                raise ratelimit.Retry(wait if wait is not None else ratelimit.SHORT_RETRY)
             try:
                 return e.code, json.loads(raw)
             except ValueError:
                 return e.code, {"message": raw.decode(errors="replace")[:200]}
         except urllib.error.URLError as e:
             fail("network error: %s" % e.reason)
+
+    return ratelimit.attempt_loop(RATE_KEY, RATE_WINDOWS, once)
 
 
 def err(res, status):
@@ -322,5 +336,8 @@ if __name__ == "__main__":
         main(sys.argv)
     except SystemExit:
         raise
+    except ratelimit.Throttled as t:
+        fail("rate limited — retrying in %ds" % max(1, round(t.retry_after)),
+             kind="throttled", retry_after=t.retry_after)
     except Exception as e:
         fail("%s: %s" % (type(e).__name__, e))

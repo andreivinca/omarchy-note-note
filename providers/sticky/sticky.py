@@ -11,8 +11,19 @@ Graph exposes as a well-known mail folder.
 """
 import json, os, sys, time, urllib.parse
 
-sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "services", "microsoft"))
-from msgraph import graph, fail, out, load_json, save_private, read_payload, CACHE_DIR  # noqa: E402
+HERE = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, os.path.join(HERE, "..", "..", "services", "microsoft"))
+sys.path.insert(0, os.path.join(HERE, "..", "..", "lib"))
+import msgraph  # noqa: E402
+import ratelimit  # noqa: E402
+from msgraph import graph, fail, fail_throttled, out, load_json, save_private, read_payload, CACHE_DIR  # noqa: E402
+
+# Sticky Notes' own budget, separate from OneNote's: a OneNote throttle must
+# never stop a sticky note being saved. Mailbox limits are far higher than
+# OneNote's, so this window is politeness rather than a real ceiling — it only
+# stops a runaway loop from being the thing that gets the mailbox throttled.
+msgraph.RATE_KEY = "graph-mail"
+msgraph.RATE_WINDOWS = [(60, 240)]
 
 CACHE = os.path.join(CACHE_DIR, "note-note-sticky.json")
 # This provider's limits: what it will read from Graph and keep around.
@@ -132,5 +143,7 @@ if __name__ == "__main__":
         main(sys.argv)
     except SystemExit:
         raise
+    except ratelimit.Throttled as t:
+        fail_throttled(t)
     except Exception as e:
         fail("%s: %s" % (type(e).__name__, e))

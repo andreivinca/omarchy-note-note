@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 """OneNote provider script for Note Note (needs the Notes.ReadWrite scope).
 
-  onenote.py list [--cached|--max-age S] -> {"sections":[{id,name,notebook,notebookId}],
+  onenote.py list [--cached|--max-age S|--force] -> {"sections":[{id,name,notebook,notebookId,modified}],
                                            "pages":[{id,sectionId,title,modified}]}
-                                           --cached: cache only; --max-age S: cache if younger than S seconds
+                                           --cached: cache only; --max-age S: cache if younger than S seconds;
+                                           --force: fetch every section, ignoring the per-section timestamps
   onenote.py page <id>                  -> {"title","body"(markdown),"editable"}
   onenote.py update <id> <file>         -> reads {"title","originalTitle","body"}
   onenote.py create <sectionId> <file>  -> {"ok":true,"page":{...}}
@@ -15,9 +16,20 @@ import json, os, re, sys, time, urllib.parse, urllib.request, urllib.error, uuid
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(HERE, "..", "..", "services", "microsoft"))
+sys.path.insert(0, os.path.join(HERE, "..", "..", "lib"))
 sys.path.insert(0, HERE)
-from msgraph import graph, http, fail, out, load_json, save_private, read_payload, access_token, CACHE_DIR, GRAPH  # noqa: E402
+import msgraph  # noqa: E402
+import ratelimit  # noqa: E402
+from msgraph import graph, http, fail, fail_throttled, out, load_json, save_private, read_payload, access_token, CACHE_DIR, GRAPH  # noqa: E402
 import onenote_md  # noqa: E402
+
+# OneNote's own Graph budget, shared with no other provider: a throttle here
+# parks OneNote and leaves Sticky Notes listing. Microsoft's delegated OneNote
+# limits are 120 requests/minute *and* 400/hour per app+user (and 5 concurrent,
+# which lib/ratelimit.py caps at 4); these windows stay under both with room
+# for the other things the account may be doing.
+msgraph.RATE_KEY = "graph-onenote"
+msgraph.RATE_WINDOWS = [(60, 100), (3600, 350)]
 
 ONENOTE_CACHE = os.path.join(CACHE_DIR, "note-note-onenote.json")
 ONENOTE_IMG_DIR = os.path.join(CACHE_DIR, "note-note-onenote-img")
@@ -40,14 +52,19 @@ MAX_NEW_IMAGES = 4
 
 
 def graph_raw(method, path, data=None, content_type=None, extra_headers=None, max_bytes=MAX_PAGE_HTML):
-    """Graph call with a non-JSON body (OneNote HTML) and a text response."""
+    """Graph call with a non-JSON body (OneNote HTML) and a text response.
+
+    Paced and retried by the same loop as `msgraph.http()` — this used to be
+    a second copy of it, and the two drifted.
+    """
     headers = {"Authorization": "Bearer " + access_token()}
     if content_type:
         headers["Content-Type"] = content_type
     headers.update(extra_headers or {})
     url = path if path.startswith("http") else GRAPH + path
     req = urllib.request.Request(url, data=data, method=method, headers=headers)
-    for attempt in range(3):
+
+    def once():
         try:
             with urllib.request.urlopen(req, timeout=60) as r:
                 raw = r.read(max_bytes + 1)
@@ -56,16 +73,13 @@ def graph_raw(method, path, data=None, content_type=None, extra_headers=None, ma
                 return r.status, raw.decode(errors="replace")
         except urllib.error.HTTPError as e:
             body = e.read(max_bytes + 1)[:max_bytes].decode(errors="replace")
-            if e.code in (429, 503) and attempt < 2:
-                try:
-                    wait = float(e.headers.get("Retry-After", "3"))
-                except ValueError:
-                    wait = 3.0
-                time.sleep(min(max(wait, 1.0), 15.0))
-                continue
+            if e.code in (429, 503):
+                raise ratelimit.Retry(msgraph.wait_asked_by(e))
             return e.code, body
         except urllib.error.URLError as e:
             fail("network error: %s" % e.reason)
+
+    return ratelimit.attempt_loop(msgraph.rate_key_for(url), msgraph.RATE_WINDOWS, once)
 
 
 def graph_err(res, status):
@@ -77,14 +91,101 @@ def graph_err(res, status):
     return str(err or res or "") or "Graph error %s" % status
 
 
-def cmd_onenote_list(cached, max_age=0):
+# A cold listing is one request per section, so it is also the thing most
+# likely to be cut short by a throttle. Sections are written into the cache as
+# they arrive, at most this often — a bounded number of writes, and a run that
+# stops half way still leaves everything it fetched behind.
+CHECKPOINT_SECONDS = 1.5
+
+
+def section_pages_url(section_id):
+    """The pages of one section, in the order the OneNote app shows them.
+
+    `$orderby=order` is the order the user set by dragging page tabs, and the
+    sidebar's job is to show a section the way its owner arranged it, not the
+    way it was last touched. Graph sorts by `order` but does not return it: it
+    is absent from the page resource in v1.0 and in beta, and asking for it in
+    `$select` gives null. So the sequence Graph answers in *is* the order, and
+    it is kept from here to the sidebar — `pages` stays a list, never a set,
+    and the provider walks it as given (Provider.qml, rebuild). Nothing here
+    can re-sort it, because there is no key left to sort by.
+    """
+    return ("/me/onenote/sections/%s/pages?$select=id,title,lastModifiedDateTime&$orderby=order&$top=100"
+            % urllib.parse.quote(section_id, safe=""))
+
+
+class Listing:
+    """The listing cache, and what a re-listing may skip.
+
+    Two things are folded in here, and both exist to spend fewer requests on
+    an account that has not changed:
+
+    **Continue, never restart.** Each section's pages are written into the
+    cache as its request comes back, with the section's own
+    `lastModifiedDateTime` beside them. A listing cut short by a throttle
+    keeps everything it fetched, and the next run picks up the tail.
+
+    **Diff by timestamp.** The single request that lists all sections already
+    says when each was last modified, so a re-listing fetches pages only for
+    the sections whose stamp moved (and ones it has never seen). A quiet
+    account re-lists for one request instead of forty. `--force` — the
+    Refresh row — ignores the stamps and fetches everything.
+    """
+
+    def __init__(self, cache, sections):
+        self.sections = sections
+        self.by_section = {}
+        for pg in (cache.get("pages") or []):
+            self.by_section.setdefault(pg.get("sectionId", ""), []).append(pg)
+        seen = cache.get("sectionPages")
+        self.seen = dict(seen) if isinstance(seen, dict) else {}
+        # `fetched` means "the whole account was listed", which is what
+        # --max-age is measured against; a partial save must not start it.
+        self.fetched = cache.get("fetched", 0) if isinstance(cache.get("fetched"), (int, float)) else 0
+        self.last_write = 0.0
+
+    def stale(self, sct, force):
+        if force:
+            return True
+        was = self.seen.get(sct["id"])
+        # A section we have never finished has no entry at all, which is how
+        # an interrupted run knows its own tail.
+        return not isinstance(was, dict) or was.get("modified") != sct.get("modified", "")
+
+    def record(self, sct, pages):
+        self.by_section[sct["id"]] = pages
+        self.seen[sct["id"]] = {"modified": sct.get("modified", ""), "at": time.time()}
+
+    def pages(self):
+        found = []
+        for sct in self.sections:
+            found.extend(self.by_section.get(sct["id"], []))
+        return found[:MAX_PAGES]
+
+    def save(self, complete):
+        live = set(sct["id"] for sct in self.sections)
+        self.seen = dict((k, v) for k, v in self.seen.items() if k in live)
+        if complete:
+            self.fetched = time.time()
+        os.makedirs(CACHE_DIR, exist_ok=True)
+        save_private(ONENOTE_CACHE, {"sections": self.sections, "pages": self.pages(),
+                                     "sectionPages": self.seen, "fetched": self.fetched})
+        self.last_write = time.monotonic()
+
+    def checkpoint(self):
+        if time.monotonic() - self.last_write >= CHECKPOINT_SECONDS:
+            self.save(False)
+
+
+def cmd_onenote_list(cached, max_age=0, force=False):
     c = load_json(ONENOTE_CACHE, None)
     if cached or (max_age and c and time.time() - c.get("fetched", 0) < max_age):
         c = c or {"sections": [], "pages": []}
         out({"sections": c.get("sections", []), "pages": c.get("pages", []), "cached": True})
         return
     sections = []
-    url = "/me/onenote/sections?$select=id,displayName,parentNotebook&$expand=parentNotebook($select=id,displayName)&$top=100"
+    url = ("/me/onenote/sections?$select=id,displayName,lastModifiedDateTime,parentNotebook"
+           "&$expand=parentNotebook($select=id,displayName)&$top=100")
     while url and len(sections) < MAX_SECTIONS:
         status, res = graph("GET", url, max_bytes=MAX_LIST_BODY)
         if status != 200:
@@ -92,30 +193,25 @@ def cmd_onenote_list(cached, max_age=0):
         for sct in res.get("value", []):
             sections.append({"id": sct["id"], "name": sct.get("displayName", ""),
                              "notebook": (sct.get("parentNotebook") or {}).get("displayName", ""),
-                             "notebookId": (sct.get("parentNotebook") or {}).get("id", "")})
+                             "notebookId": (sct.get("parentNotebook") or {}).get("id", ""),
+                             "modified": sct.get("lastModifiedDateTime", "")})
         url = res.get("@odata.nextLink")
     sections = sections[:MAX_SECTIONS]
-    # Pages are listed per section: the account-wide /me/onenote/pages call
-    # refuses accounts with many sections. Each call takes a couple of
-    # seconds, so sections are fetched in parallel.
-    #
-    # `$orderby=order` is the page order the OneNote app shows — the one the
-    # user set by dragging page tabs — and the sidebar's job is to show a
-    # section the way its owner arranged it, not the way it was last touched.
-    # Graph sorts by `order` but does not return it: it is absent from the
-    # page resource in v1.0 and in beta, and asking for it in `$select` gives
-    # null. So the sequence Graph answers in *is* the order, and it is kept
-    # from here to the sidebar — `pages` stays a list, never a set, and the
-    # provider walks it as given (Provider.qml, rebuild). Nothing here can
-    # re-sort it, because there is no key left to sort by.
-    from concurrent.futures import ThreadPoolExecutor
 
-    token = access_token()  # refresh once, not from eight threads at a time
+    listing = Listing(c if isinstance(c, dict) else {}, sections)
+    todo = [sct for sct in sections if listing.stale(sct, force)]
+
+    # Pages are listed per section: the account-wide /me/onenote/pages call
+    # refuses accounts with many sections (docs/engine-notes.md). Each call
+    # takes a couple of seconds, so the stale ones are fetched in parallel —
+    # the pacer holds the total to four requests in flight.
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+
+    token = access_token()  # refresh once, not from four threads at a time
 
     def section_pages(sct):
         found = []
-        url = ("/me/onenote/sections/%s/pages?$select=id,title,lastModifiedDateTime&$orderby=order&$top=100"
-               % urllib.parse.quote(sct["id"], safe=""))
+        url = section_pages_url(sct["id"])
         while url and len(found) < MAX_PAGES:
             status, res = http("GET", url if url.startswith("http") else GRAPH + url, headers={
                 "Authorization": "Bearer " + token, "Accept": "application/json"}, max_bytes=MAX_LIST_BODY)
@@ -127,16 +223,30 @@ def cmd_onenote_list(cached, max_age=0):
             url = res.get("@odata.nextLink")
         return found
 
-    pages = []
-    with ThreadPoolExecutor(max_workers=4) as pool:
-        for result in pool.map(section_pages, sections):
-            if isinstance(result, dict):
-                fail(result["error"])
-            pages.extend(result)
-    pages = pages[:MAX_PAGES]
-    os.makedirs(CACHE_DIR, exist_ok=True)
-    save_private(ONENOTE_CACHE, {"sections": sections, "pages": pages, "fetched": time.time()})
-    out({"sections": sections, "pages": pages, "cached": False})
+    if todo:
+        error = ""
+        try:
+            with ThreadPoolExecutor(max_workers=4) as pool:
+                futures = dict((pool.submit(section_pages, sct), sct) for sct in todo)
+                for future in as_completed(futures):
+                    result = future.result()
+                    if isinstance(result, dict):
+                        error = result["error"]
+                        break
+                    listing.record(futures[future], result)
+                    listing.checkpoint()
+        except ratelimit.Throttled:
+            # Keep what did arrive: the sections stored here are skipped by
+            # their own stamp next time, so the run after the cooldown fetches
+            # only the tail instead of spending the budget again from scratch.
+            listing.save(False)
+            raise
+        if error:
+            listing.save(False)
+            fail(error)
+
+    listing.save(True)
+    out({"sections": sections, "pages": listing.pages(), "cached": False})
 
 
 # Page images are only ever fetched from Graph's own resource endpoint, with
@@ -312,33 +422,50 @@ def cached_image(src, width=0):
         pass
     req = urllib.request.Request(src, headers={"Authorization": "Bearer " + access_token()})
     fd, tmp = tempfile.mkstemp(prefix=".", suffix=".tmp", dir=ONENOTE_IMG_DIR)   # fresh, 0600, never a symlink
+    pause = 0.0        # a throttle met here, recorded once the slot is released
     try:
         deadline = _image_budget[0] or (time.monotonic() + IMAGE_BUDGET_SECONDS)
-        with _image_opener.open(req, timeout=20) as r, os.fdopen(fd, "wb") as f:
-            data = read_with_deadline(r, MAX_IMAGE, deadline)
-            if not data:
-                # Graph serves a just-written resource as 200 with an empty
-                # body; caching that would poison the page for good.
-                raise OverflowError("empty image response")
-            f.write(data)
+        # An image is a Graph request like any other and is paced like one:
+        # forty of them is what a picture-heavy page costs, and that is most
+        # of a minute's budget on its own.
+        with os.fdopen(fd, "wb") as f:
+            with ratelimit.slot(msgraph.RATE_KEY, msgraph.RATE_WINDOWS):
+                with _image_opener.open(req, timeout=20) as r:
+                    data = read_with_deadline(r, MAX_IMAGE, deadline)
+                    if not data:
+                        # Graph serves a just-written resource as 200 with an
+                        # empty body; caching that would poison the page for good.
+                        raise OverflowError("empty image response")
+                    f.write(data)
         _image_budget[1] += 1
         os.replace(tmp, path)
         prune_image_cache()
         return "file://" + path
+    except ratelimit.Throttled:
+        pass                       # the pacer already knows; nothing to record
+    except urllib.error.HTTPError as e:
+        if e.code in (429, 503):
+            pause = msgraph.wait_asked_by(e)
     except (urllib.error.URLError, OSError, OverflowError):
-        try:
-            os.remove(tmp)
-        except OSError:
-            pass
-        return None
+        pass
+    try:
+        os.remove(tmp)
+    except OSError:
+        pass
+    if pause:
+        # The rest of this page's images would earn the same answer, and so
+        # would the next process: record it once and let them all fail fast.
+        # The page still loads — it shows the alt text — and the incomplete
+        # image list keeps a save from writing it back (remember_images).
+        ratelimit.report_throttle(msgraph.RATE_KEY, pause)
+    return None
 
 
 def cmd_onenote_pages(section_ids):
     """Pages of a few sections (one request each) — for cheap refreshes."""
     found = []
     for sid in section_ids[:10]:
-        url = ("/me/onenote/sections/%s/pages?$select=id,title,lastModifiedDateTime&$orderby=order&$top=100"
-               % urllib.parse.quote(sid, safe=""))
+        url = section_pages_url(sid)
         while url and len(found) < MAX_PAGES:
             status, res = graph("GET", url, max_bytes=MAX_LIST_BODY)
             if status != 200:
@@ -740,7 +867,7 @@ def main(argv):
                 age = int(argv[argv.index("--max-age") + 1])
             except (IndexError, ValueError):
                 age = 0
-        cmd_onenote_list("--cached" in argv[2:], age)
+        cmd_onenote_list("--cached" in argv[2:], age, "--force" in argv[2:])
     elif cmd == "pages" and len(argv) >= 3:
         cmd_onenote_pages(argv[2:])
     elif cmd == "page" and len(argv) >= 3:
@@ -760,7 +887,7 @@ def main(argv):
             pass
         out({"ok": True})
     else:
-        fail("usage: onenote.py list [--cached]|page <id>|update <id> <file>|create <sectionId> <file>|delete <id>|create-section <notebookId> <file>|clear-cache", 2)
+        fail("usage: onenote.py list [--cached|--max-age S|--force]|page <id>|update <id> <file>|create <sectionId> <file>|delete <id>|create-section <notebookId> <file>|clear-cache", 2)
 
 
 if __name__ == "__main__":
@@ -768,5 +895,7 @@ if __name__ == "__main__":
         main(sys.argv)
     except SystemExit:
         raise
+    except ratelimit.Throttled as t:
+        fail_throttled(t)
     except Exception as e:
         fail("%s: %s" % (type(e).__name__, e))
