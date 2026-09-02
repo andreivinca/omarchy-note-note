@@ -4,9 +4,11 @@ import qs.Commons
 import qs.Ui
 import "QuoteBars.js" as QuoteBars
 
-// The right-hand pane, in the shape of Toolroll's workspace: an editable
-// title with a description line beneath, header buttons on the title's line,
-// and a labelled, bordered content pane below.
+// The note pane: an editable title, the formatting toolbar, and the note
+// itself on one sheet — plus the notices and provider views that stand in
+// for a note when there is something to say instead. Where the note lives
+// and how many words it holds are the view bar's to show (ViewBar.qml);
+// this pane is the page alone.
 Item {
   id: root
 
@@ -21,8 +23,6 @@ Item {
   // Tool ids the current provider supports (see PROVIDERS.md); null = all.
   property var enabledTools: null
   function toolEnabled(id) { return root.enabledTools === null || root.enabledTools.indexOf(id) >= 0 }
-  property string fileName: ""
-  property string notebookName: ""
   property string placeholder: ""
   property color foreground: Color.menu.text
   property color accent: Color.accent
@@ -1048,6 +1048,7 @@ Item {
   function setCursorPosition(pos) { area.cursorPosition = Math.max(0, Math.min(pos, area.length)) }
   function focusTitle() { titleField.forceActiveFocus() }
 
+  // Counted here, where the text lives; the host's view bar shows it.
   readonly property int wordCount: {
     var t = area.getText(0, area.length).replace(/[\u2029\uFDD0\uFDD1]/g, " ").trim()
     return t ? t.split(/\s+/).length : 0
@@ -1713,22 +1714,5 @@ Item {
       color: Util.alpha(root.foreground, flick.moving ? 0.45 : 0.2)
       Behavior on color { ColorAnimation { duration: 150 } }
     }
-  }
-
-  // Word count sits in the corner of the note's own surface.
-  Text {
-    id: counter
-    visible: root.hasNote && !root.showingNotice
-    textFormat: Text.PlainText
-    anchors.right: parent.right
-    anchors.bottom: parent.bottom
-    // Lined up with the sheet's own right edge, not tucked into the corner:
-    // it reads as the last line of the page rather than a badge on it.
-    anchors.rightMargin: parent.width - sheet.x - sheet.width
-    anchors.bottomMargin: Style.spacing.panelPadding
-    text: root.wordCount + (root.wordCount === 1 ? " word" : " words")
-    color: Util.alpha(root.foreground, 0.35)
-    font.family: root.fontFamily
-    font.pixelSize: Style.font.caption
   }
 }

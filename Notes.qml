@@ -11,10 +11,16 @@ import "services/markdown" as Markdown
 import "services/microsoft" as Microsoft
 import "services/requests" as Requests
 
-// Note Note — notes for the Omarchy shell, laid out like Toolroll: a header
-// with search and key hints, a sidebar of notebooks, and the note itself on
-// the right, always editable. Summoned as an overlay, or detached into an
-// ordinary window.
+// Note Note — notes for the Omarchy shell, laid out the way a desktop IDE
+// is: a title bar in a browser's shape (the binder's tabs from the left, the
+// search and the window actions at the right), a workspace row (the sidebar
+// and the note itself, always editable), and a view bar along the bottom
+// (whose notes, where they live, the save state, the word count). Summoned
+// as an overlay, or detached into an ordinary window.
+//
+// The host owns state and wiring; the chrome is components (ui/TitleBar.qml,
+// ui/TabStrip.qml, ui/ViewBar.qml, ui/NoteList.qml, ui/NoteEditor.qml), each
+// presentation only, fed by bindings and answering with signals.
 //
 // Where notes come from is the providers' business (see
 // providers/PROVIDERS.md): built-in ones under providers/, external ones
@@ -47,16 +53,16 @@ Item {
   property string filterText: ""
   property string statusText: ""
 
-  // The header titles the provider whose tab is open — the provider's own
-  // `name`, its logo when it ships one, in the open tab's ink. Set in
-  // rebuildRows beside the tabs themselves, so the header and the rail
-  // cannot disagree about which tab that is. Before any provider has
+  // The view bar's source chip names the provider whose tab is open — the
+  // provider's own `name`, its logo when it ships one, in the open tab's
+  // ink. Set in rebuildRows beside the tabs themselves, so the chip and the
+  // rail cannot disagree about which tab that is. Before any provider has
   // listed, the app's own name stands in.
-  property string headerName: "Note Note"
-  property url headerLogo: ""
-  property color headerBase: "transparent"
-  readonly property color headerInk: headerBase.a > 0
-    ? Qt.tint(foreground, Util.alpha(headerBase, TabColors.inkAlpha())) : foreground
+  property string sourceName: "Note Note"
+  property url sourceLogo: ""
+  property color sourceBase: "transparent"
+  readonly property color sourceInk: sourceBase.a > 0
+    ? Qt.tint(foreground, Util.alpha(sourceBase, TabColors.inkAlpha())) : foreground
 
   // Current note. `loadingNote` guards against editor change signals firing
   // a save while a note is being swapped in.
@@ -77,9 +83,6 @@ Item {
   property color borderColor: Color.menu.border
   property var borderSpec: Border.surfaceSpec("menu", "border", borderColor, Math.max(1, Style.space(2)))
 
-  // The frame hugs the notes: the app keeps a hair of padding inside its
-  // border, so the navigation and note surface run cleanly to the edge.
-  readonly property real appPadding: Math.max(1, Style.space(2))
   property color scrim: Color.menu.scrim
   property color accent: Color.accent
   property color selectedBackground: Color.menu.selectedBackground
@@ -127,12 +130,12 @@ Item {
   }
 
   function goBack() {
-    if (searchField.activeFocus) {
+    if (titleBar.searchFocused) {
       if (root.filterText.length > 0) { root.clearSearch() }
       else if (!root.detached) root.dismiss()
       return
     }
-    if (root.detached) searchField.forceActiveFocus()
+    if (root.detached) titleBar.focusSearch()
     else root.dismiss()
   }
 
@@ -757,17 +760,17 @@ Item {
     if (JSON.stringify(newTabs) !== JSON.stringify(root.tabs)) root.tabs = newTabs
     root.tabMatches = hits
     root.rows = out
-    // The header follows the open tab: its provider's name and logo, and the
-    // tab's own colour — read from newTabs, where decollide has just settled
-    // the colours the rail will wear.
-    var provId = active.split("/")[0], headerProv = null, headerTab = null
+    // The view bar's source chip follows the open tab: its provider's name
+    // and logo, and the tab's own colour — read from newTabs, where decollide
+    // has just settled the colours the rail will wear.
+    var provId = active.split("/")[0], sourceProv = null, sourceTab = null
     for (var pi = 0; pi < root.providers.length; pi++)
-      if (root.providers[pi].id === provId) { headerProv = root.providers[pi]; break }
+      if (root.providers[pi].id === provId) { sourceProv = root.providers[pi]; break }
     for (var ti = 0; ti < newTabs.length; ti++)
-      if (newTabs[ti].key === active) { headerTab = newTabs[ti]; break }
-    root.headerName = headerProv ? headerProv.name : "Note Note"
-    root.headerLogo = headerProv ? (headerProv.logo || "") : ""
-    root.headerBase = headerTab ? TabColors.baseFor(headerTab.color || "", headerTab.name || "") : "transparent"
+      if (newTabs[ti].key === active) { sourceTab = newTabs[ti]; break }
+    root.sourceName = sourceProv ? sourceProv.name : "Note Note"
+    root.sourceLogo = sourceProv ? (sourceProv.logo || "") : ""
+    root.sourceBase = sourceTab ? TabColors.baseFor(sourceTab.color || "", sourceTab.name || "") : "transparent"
     if (keep > 0) Qt.callLater(function() { list.setScrollOffset(keep) })
     // First open: land on the most recent note of the tab that opened —
     // whichever provider's tab that is. A tab whose notes have not listed yet
@@ -832,9 +835,9 @@ Item {
   // alone: it is the one you found, and it is what you want to be looking at
   // once the full list comes back.
   function clearSearch() {
-    searchField.text = ""
+    titleBar.setSearchText("")
     setFilter("")
-    searchField.forceActiveFocus()
+    titleBar.focusSearch()
   }
   function setFilter(text) {
     var searchEnded = root.filterText.length > 0 && text.length === 0
@@ -984,7 +987,7 @@ Item {
   // ── create / delete ─────────────────────────────────────────────────
   function newNote(providerId, target) {
     root.flushSave()
-    if (root.filterText) { searchField.text = ""; setFilter("") }
+    if (root.filterText) { titleBar.setSearchText(""); setFilter("") }
     var p = providerId ? providerById(providerId) : providerOf(root.currentPath)
     if (p && target === undefined) target = p.createTargetFor(root.currentPath)
     if (!p || !target) { p = providerById("local"); target = p ? p.createTargetFor("") : "" }
@@ -1071,7 +1074,7 @@ Item {
     if (root.settingsOpen) return settingsDialog.handleKey(event)
     var ctrl = event.modifiers & Qt.ControlModifier
     if (event.key === Qt.Key_Escape) { root.goBack(); return true }
-    if (ctrl && (event.key === Qt.Key_K || event.key === Qt.Key_L)) { searchField.forceActiveFocus(); searchField.selectAll(); return true }
+    if (ctrl && (event.key === Qt.Key_K || event.key === Qt.Key_L)) { titleBar.focusSearch(); return true }
     if (ctrl && event.key === Qt.Key_N) { if (event.modifiers & Qt.ShiftModifier) root.startNewNotebook(); else root.newNote(); return true }
     if (ctrl && event.key === Qt.Key_D) { root.requestDelete(root.currentPath); return true }
     if (ctrl && (event.key === Qt.Key_Down || event.key === Qt.Key_J)) { root.moveSelection(1); return true }
@@ -1117,6 +1120,10 @@ Item {
   // requested during another one from writing the *wrong note's* text.
   property var saveEpoch: ({})       // path -> seq: drops a stale conversion
   property var savesPending: ({})    // path -> count: what saveInFlight() reads
+  // Bumped with every savesPending move: a plain JS object is invisible to a
+  // binding, and the view bar's unsaved dot watches saves through this — the
+  // queues' queueRevision, said again for saves.
+  property int saveRevision: 0
   // A save that failed while the window was hidden, held until it reopens.
   // In memory only: this is not an offline queue (business-requirements.md).
   property string missedSaveNotice: ""
@@ -1141,8 +1148,10 @@ Item {
     editor.requestMarkdown(function(body) {
       if (root.saveEpoch[path] !== seq) return     // a newer snapshot of this note exists
       root.savesPending[path] = (root.savesPending[path] || 0) + 1
+      root.saveRevision++
       p.save(path, title, body, function(r) {
         root.savesPending[path] = Math.max(0, (root.savesPending[path] || 1) - 1)
+        root.saveRevision++
         var message = ""
         if (r && r.error) message = p.name + ": " + r.error
         else if (r && r.warning) message = p.name + ": " + r.warning
@@ -1218,266 +1227,36 @@ Item {
       anchors.fill: parent
       spacing: 0
 
-      // ---- header
-      Item {
+      // ---- title bar
+      TitleBar {
+        id: titleBar
         width: parent.width
-        height: Style.space(44)
-
-        Rectangle {
-          anchors.fill: parent
-          color: Qt.tint(root.background, Util.alpha(root.foreground, 0.015))
-        }
-
-        Rectangle {
-          anchors.bottom: parent.bottom
-          width: parent.width
-          height: Style.spacing.hairline
-          color: Util.alpha(root.foreground, 0.1)
-        }
-
-        // A stable desktop toolbar: provider at the left, search in the
-        // visual centre, window controls at the right.
-        Item {
-          id: headerInner
-          anchors.left: parent.left
-          anchors.right: parent.right
-          anchors.verticalCenter: parent.verticalCenter
-          anchors.leftMargin: Style.spacing.lg
-          anchors.rightMargin: Style.spacing.lg
-          height: searchField.height
-
-          // The masthead is the open tab said large: the provider's mark, its
-          // name, in the tab's own ink — so the header always answers "whose
-          // notes am I looking at". Same reserved width whatever the name, so
-          // the search field does not slide when tabs change.
-          Row {
-            id: titleRow
-            anchors.left: parent.left
-            anchors.leftMargin: Style.spacing.md
-            anchors.verticalCenter: parent.verticalCenter
-            width: Style.space(180)
-            spacing: Style.spacing.sm
-
-            Image {
-              id: titleLogo
-              visible: status === Image.Ready
-              source: root.headerLogo
-              anchors.verticalCenter: parent.verticalCenter
-              width: Style.font.icon
-              height: Style.font.icon
-              sourceSize.width: Style.font.icon * 2
-              sourceSize.height: Style.font.icon * 2
-              fillMode: Image.PreserveAspectFit
-              smooth: true
-            }
-
-            Text {
-              id: titleText
-              textFormat: Text.PlainText
-              anchors.verticalCenter: parent.verticalCenter
-              width: titleRow.width - (titleLogo.visible ? titleLogo.width + titleRow.spacing : 0)
-              text: root.headerName
-              color: root.headerInk
-              Behavior on color { ColorAnimation { duration: 150 } }
-              font.family: root.interfaceFont
-              font.pixelSize: Style.font.title
-              elide: Text.ElideRight
-            }
-          }
-
-          // The search sits in the middle of the band, the way a command bar
-          // does — pushed right only when a narrow window would run it into
-          // the masthead. It names its own shortcut: a keycap in the field
-          // where the clear button will stand once there is something to
-          // clear, so the right edge always says the one thing you can do.
-          TextField {
-            id: searchField
-            x: Math.max(titleRow.width + Style.spacing.lg,
-                        Math.min((parent.width - width) / 2,
-                                 settingsButton.x - Style.spacing.lg - width))
-            anchors.verticalCenter: parent.verticalCenter
-            width: Style.space(360)
-            placeholderText: "Search notes…"
-            foreground: root.foreground
-            accent: root.accent
-            font.family: root.interfaceFont
-            verticalPadding: Style.spacing.sm
-            onTextEdited: root.setFilter(text)
-            rightPadding: root.filterText.length > 0
-              ? clearSearchButton.width + Style.spacing.xs
-              : searchKeycap.width + (searchField.height - searchKeycap.height) / 2 + Style.spacing.xs
-            leftPadding: searchGlyph.width + Style.spacing.xxl + Style.spacing.xs
-
-            Rectangle {
-              id: searchKeycap
-              visible: root.filterText.length === 0
-              anchors.right: parent.right
-              // The same air to the right edge as above and below it, so the
-              // keycap sits centered in the field's corner.
-              anchors.rightMargin: (searchField.height - height) / 2
-              anchors.verticalCenter: parent.verticalCenter
-              width: searchKeycapText.width + Style.spacing.sm * 2
-              height: searchKeycapText.height + Style.spacing.xxs * 2
-              // A square theme keeps its corners; a round one is capped where
-              // a keycap stops looking like a key.
-              radius: Math.min(Style.cornerRadius, height / 3)
-              color: Util.alpha(root.foreground, 0.06)
-              border.width: 1
-              border.color: Util.alpha(root.foreground, 0.22)
-
-              Text {
-                id: searchKeycapText
-                textFormat: Text.PlainText
-                anchors.centerIn: parent
-                text: "ctrl+k"
-                color: Util.alpha(root.foreground, 0.6)
-                font.family: root.interfaceFont
-                font.pixelSize: Style.font.caption
-              }
-            }
-
-            // The magnifier says what the field is for, and stays while you
-            // type — dimmed the standard way, a fade toward any background.
-            Text {
-              id: searchGlyph
-              textFormat: Text.PlainText
-              anchors.left: parent.left
-              // In step with the taller field: the magnifier keeps its
-              // distance from the rounded edge (leftPadding above follows).
-              anchors.leftMargin: Style.spacing.xxl
-              anchors.verticalCenter: parent.verticalCenter
-              text: "󰍉"
-              color: Util.alpha(root.foreground, 0.55)
-              font.family: Style.fontFamily
-              font.pixelSize: Style.font.iconSmall
-            }
-
-            Button {
-              id: clearSearchButton
-              visible: root.filterText.length > 0
-              anchors.right: parent.right
-              anchors.rightMargin: Style.spacing.xxs
-              anchors.verticalCenter: parent.verticalCenter
-              iconText: "󰅖"
-              tooltipText: "Clear the search (esc)"
-              foreground: root.foreground
-              accent: root.accent
-              iconSize: Style.font.iconSmall
-              horizontalPadding: Style.spacing.xs
-              verticalPadding: Style.spacing.xxs
-              onClicked: root.clearSearch()
-            }
-
-            Keys.priority: Keys.BeforeItem
-            Keys.onPressed: function(event) {
-              if (event.key === Qt.Key_Down) { root.moveSelection(1); event.accepted = true }
-              else if (event.key === Qt.Key_Up) { root.moveSelection(-1); event.accepted = true }
-              else if (event.key === Qt.Key_Return || event.key === Qt.Key_Enter
-                       || (event.key === Qt.Key_Tab && !(event.modifiers & Qt.ControlModifier))) { editor.focusEditor(); event.accepted = true }
-              else if (root.handleShortcut(event)) event.accepted = true
-            }
-          }
-
-          Button {
-            id: shapeButton
-            anchors.right: parent.right
-            anchors.verticalCenter: parent.verticalCenter
-            text: root.detached ? "Overlay" : "Detach"
-            iconText: root.detached ? "󰨟" : "󰏌"
-            tooltipText: root.detached ? "Back to the overlay: summoned over your work, gone on Escape"
-                                       : "Detach into an ordinary window you can keep open beside your work"
-            bordered: true
-            selected: root.detached
-            foreground: root.foreground
-            accent: root.accent
-            fontFamily: root.interfaceFont
-            iconSize: Style.font.iconSmall
-            // Wider than the default control padding: a labelled pill wants
-            // air around its word.
-            horizontalPadding: Style.spacing.lg
-            verticalPadding: Style.spacing.xxs
-            onClicked: root.setDetached(!root.detached)
-          }
-
-          Button {
-            id: settingsButton
-            anchors.right: shapeButton.left
-            anchors.rightMargin: Style.spacing.sm
-            anchors.verticalCenter: parent.verticalCenter
-            tooltipText: "Settings — edit note-note's config as JSON (for now: which providers show up)"
-            bordered: true
-            selected: root.settingsOpen
-            foreground: root.foreground
-            accent: root.accent
-            // A circle, as tall as the pill beside it. The gear is drawn as
-            // an OpticalGlyph rather than the button's own icon: an icon
-            // glyph's ink is not centered in its advance width, and inside a
-            // tight circle that reads as off-center.
-            width: shapeButton.height
-            height: shapeButton.height
-            radius: height / 2
-            onClicked: root.settingsOpen = true
-
-            // Centered on the glyph's painted ink, both axes. The kit's
-            // OpticalGlyph corrects only horizontally — it keeps a shared
-            // baseline for rows of glyphs — but a lone glyph in a circle
-            // has no neighbours, and its line box's own centering reads as
-            // vertical drift.
-            TextMetrics {
-              id: gearMetrics
-              font.family: Style.fontFamily
-              font.pixelSize: Math.max(1, Math.round(Style.font.iconSmall))
-              text: gearGlyph.text
-            }
-            Text {
-              id: gearGlyph
-              anchors.centerIn: parent
-              anchors.horizontalCenterOffset: implicitWidth / 2
-                - (gearMetrics.tightBoundingRect.x + gearMetrics.tightBoundingRect.width / 2)
-              anchors.verticalCenterOffset: implicitHeight / 2
-                - (baselineOffset + gearMetrics.tightBoundingRect.y + gearMetrics.tightBoundingRect.height / 2)
-              text: "󰒓"
-              font.family: Style.fontFamily
-              font.pixelSize: gearMetrics.font.pixelSize
-              renderType: Text.NativeRendering
-              color: settingsButton.selected ? Style.selectedStateColor(root.foreground, root.accent) : root.foreground
-            }
-          }
-
-          // The band between the search and the buttons belongs to status
-          // messages; it sits empty otherwise. (It used to wear the key
-          // shortcuts as hint chips — removed as noise: the shortcuts live
-          // in the README, and the search field names its own.)
-          Item {
-            anchors.left: searchField.right
-            anchors.leftMargin: Style.spacing.lg
-            anchors.right: settingsButton.left
-            anchors.rightMargin: Style.spacing.md
-            height: parent.height
-            clip: true
-
-            Text {
-              textFormat: Text.PlainText
-              visible: root.statusText.length > 0
-              anchors.left: parent.left
-              anchors.right: parent.right
-              anchors.verticalCenter: parent.verticalCenter
-              text: root.statusText
-              color: Qt.tint(root.foreground, Util.alpha(root.accent, 0.6))
-              font.family: root.interfaceFont
-              font.pixelSize: Style.font.caption
-              elide: Text.ElideRight
-              horizontalAlignment: Text.AlignRight
-            }
-          }
-        }
+        filterText: root.filterText
+        sections: root.tabs
+        matchCounts: root.tabMatches
+        activeKey: root.revision < 0 ? "" : root.activeKey()
+        detached: root.detached
+        settingsOpen: root.settingsOpen
+        background: root.background
+        foreground: root.foreground
+        accent: root.accent
+        fontFamily: root.interfaceFont
+        shortcutHandler: root.handleShortcut
+        onFilterEdited: function(text) { root.setFilter(text) }
+        onClearRequested: root.clearSearch()
+        onMoveRequested: function(delta) { root.moveSelection(delta) }
+        onAcceptRequested: editor.focusEditor()
+        onSectionActivated: function(key) { root.setActiveSection(key) }
+        onSettingsRequested: root.settingsOpen = true
+        onDetachToggled: root.setDetached(!root.detached)
       }
 
-      // ---- body
+
+      // ---- workspace: the binder rail and sidebar, the splitter, the note
       Row {
         id: body
         width: parent.width
-        height: parent.height - y
+        height: parent.height - titleBar.height - viewBar.height
         spacing: 0
 
         NoteList {
@@ -1486,8 +1265,8 @@ Item {
           // otherwise — clamped either way, so neither the list nor the note
           // can be squeezed out of use by a drag or a narrow window.
           width: {
-            var w = root.listWidth > 0 ? root.listWidth : Style.space(210) + list.railWidth
-            return Math.max(list.railWidth + Style.space(140), Math.min(w, body.width - Style.space(320)))
+            var w = root.listWidth > 0 ? root.listWidth : Style.space(230)
+            return Math.max(Style.space(150), Math.min(w, body.width - Style.space(320)))
           }
           height: parent.height
           model: root.rows
@@ -1495,7 +1274,6 @@ Item {
           filtering: root.filterText.length > 0
           searchBusy: root.searchBusy
           sections: root.tabs
-          matchCounts: root.tabMatches
           activeKey: root.revision < 0 ? "" : root.activeKey()
           canCreateNotebook: root.revision < 0 ? false : root.canCreateNotebook()
           foreground: root.foreground
@@ -1511,7 +1289,6 @@ Item {
           onNewNotebookRequested: function(name) { root.newNotebook(name) }
           onActionRequested: function(id) { root.runAction(id) }
           onTreeToggled: function(id) { root.treeToggle(id) }
-          onSectionActivated: function(key) { root.setActiveSection(key) }
           onDeleteRequested: function(path) { root.requestDelete(path) }
           onMoveRequested: function(from, to) {
             var mf = root.rowIndexOf(from), mt = root.rowIndexOf(to)
@@ -1573,14 +1350,6 @@ Item {
           plain: { var p = root.providerOf(root.currentPath); return p ? !p.markdown : false }
           hasTitle: { var p = root.providerOf(root.currentPath); return p ? p.hasTitle : true }
           enabledTools: { var p = root.providerOf(root.currentPath); return (p && p.tools !== undefined) ? p.tools : null }
-          notebookName: root.currentCrumb
-          fileName: {
-            if (!root.currentPath) return ""
-            if (root.loadingPath === root.currentPath) return "loading…"
-            if (editor.readOnly) return "read-only here"
-            var p = root.providerOf(root.currentPath)
-            return p && p.id === "local" ? root.currentPath.substring(root.currentPath.lastIndexOf("/") + 1) : "synced online"
-          }
           placeholder: root.loadingPath && root.loadingPath === root.currentPath ? "Loading…"
             : (root.rows.length === 0 && !root.filterText ? "No notes yet — press ctrl+n to create one." : "")
           foreground: root.foreground
@@ -1592,6 +1361,35 @@ Item {
           onEdited: root.onEdited()
           onStatusRequestedTextChanged: if (statusRequestedText) { root.showStatus(statusRequestedText); statusRequestedText = "" }
         }
+      }
+
+      // ---- view bar
+      ViewBar {
+        id: viewBar
+        width: parent.width
+        sourceName: root.sourceName
+        sourceLogo: root.sourceLogo
+        sourceInk: root.sourceInk
+        sourceBase: root.sourceBase
+        crumb: root.currentCrumb
+        // The storage word: what the open note is, on the host's authority —
+        // a local note is its file, a remote one is "synced online", and the
+        // two transient states name themselves.
+        storage: {
+          if (!root.currentPath) return ""
+          if (root.loadingPath === root.currentPath) return "loading…"
+          if (editor.readOnly) return "read-only here"
+          var p = root.providerOf(root.currentPath)
+          return p && p.id === "local" ? root.currentPath.substring(root.currentPath.lastIndexOf("/") + 1) : "synced online"
+        }
+        unsaved: root.dirty || (root.saveRevision >= 0 && root.saveInFlight(root.currentPath))
+        statusText: root.statusText
+        wordCount: editor.wordCount
+        countVisible: root.currentPath !== "" && !editor.showingNotice
+        background: root.background
+        foreground: root.foreground
+        accent: root.accent
+        fontFamily: root.interfaceFont
       }
     }
 
@@ -1655,7 +1453,6 @@ Item {
       radius: Style.cornerRadius
       color: root.background
       borderSpec: root.borderSpec
-      padding: root.appPadding
 
       MouseArea { anchors.fill: parent; onClicked: {} }
 
@@ -1687,7 +1484,6 @@ Item {
       Item {
         id: floatingHost
         anchors.fill: parent
-        anchors.margins: root.appPadding
       }
     }
   }

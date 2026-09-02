@@ -19,8 +19,12 @@
 manifest.json               plugin id, kinds: ["overlay"], entry point, keepLoaded
 Notes.qml                   the host
 lib/ratelimit.py            cross-process request pacing (+ its selftest)
+ui/TitleBar.qml             the title bar, browser-shaped: the binder's tabs
+                            from the left, search and window actions at the right
+ui/TabStrip.qml             the binder's tabs across the title bar
+ui/ViewBar.qml              the view bar along the bottom: source segment, crumb,
+                            save state, status messages, word count
 ui/NoteList.qml             sidebar (rows, drag, scrolling, the coloured page)
-ui/NotebookTabs.qml         the binder rail down the left edge
 ui/TabColors.js             the tab palette, and the wash both it and the page use
 ui/NoteEditor.qml           title, toolbar, editor, notices and provider views
 ui/QuoteBars.js             where the quote bars go (native blocks or HTML scan)
@@ -48,10 +52,14 @@ External providers are loaded from
 
 ## Responsibilities
 
-**The host (`Notes.qml`) owns** the overlay/detached window, the header
-(search, key hints, Detach), the sidebar model, selection, the editor, the
-autosave state machine, keyboard shortcuts, the state file, and rendering the
-device-code sign-in screen for accounts a provider created.
+**The host (`Notes.qml`) owns** the overlay/detached window, the title bar
+(search, the binder's tabs, Detach), the view bar (whose notes, where they
+live, save state, status, word count), the sidebar model, selection, the
+editor, the autosave state machine, keyboard shortcuts, the state file, and
+rendering the device-code sign-in screen for accounts a provider created. The
+bars are presentation components (`ui/TitleBar.qml`, `ui/TabStrip.qml`,
+`ui/ViewBar.qml`): fed by bindings, answering with signals, holding no state
+of their own.
 
 **The host must not** know any backend, path format, credential or API. Every
 branch of the form `if (provider.id === "…")` is a design failure; the two

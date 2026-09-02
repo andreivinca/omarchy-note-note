@@ -3,9 +3,10 @@ import qs.Commons
 import qs.Ui
 import "TabColors.js" as TabColors
 
-// The left-hand navigation: a compact source rail beside the current source's
-// note tree. Provider colour stays present as a restrained surface tint and
-// selection accent; note titles remain the visual focus.
+// The left-hand navigation: the open tab's note tree. The tabs themselves
+// live across the title bar now (TabStrip.qml); what remains here keeps the
+// provider's colour as a restrained surface tint and selection accent, so
+// note titles remain the visual focus.
 //
 // Model rows carry { kind, notebook, path, title, preview }:
 //   kind "note"        a note (fixed: true → not draggable)
@@ -27,12 +28,11 @@ Item {
   // Providers are still answering the content search; the search panel says
   // so instead of a premature "No match" (see the host's searchBusy).
   property bool searchBusy: false
-  // The rail's tabs, as the host builds them:
-  // { key, name, color, logo, count }.
+  // The binder's tabs, as the host builds them: { key, name, color, logo,
+  // count }. The strip in the title bar renders them; this panel reads only
+  // the open one — its colour for the page wash, its name for the search
+  // panel's label.
   property var sections: []
-  // Search hits per tab key; kept beside `sections` so a keystroke moves the
-  // numbers without touching the tabs (see the host's rebuildRows).
-  property var matchCounts: ({})
   property string activeKey: ""
   // Only a provider that can make notebooks offers the row that makes them.
   property bool canCreateNotebook: false
@@ -40,6 +40,14 @@ Item {
     for (var i = 0; i < root.sections.length; i++)
       if (root.sections[i].key === root.activeKey) return root.sections[i].name || ""
     return ""
+  }
+  // The open tab's colour, resolved the way the strip resolves it, so the
+  // page wash below and the tab above cannot disagree.
+  readonly property color activeBase: {
+    for (var i = 0; i < root.sections.length; i++)
+      if (root.sections[i].key === root.activeKey)
+        return TabColors.baseFor(root.sections[i].color || "", root.sections[i].name || "")
+    return Color.menu.background
   }
   property color foreground: Color.menu.text
   property color accent: Color.accent
@@ -63,12 +71,10 @@ Item {
   signal actionRequested(string id)
   signal newNotebookRequested(string name)
   signal deleteRequested(string path)
-  signal sectionActivated(string key)
   signal moveRequested(string fromPath, string toPath)
   signal reorderFinished(string notebook)
 
   readonly property int rowHeight: Style.spacing.controlHeight
-  readonly property real railWidth: Style.space(40)
   // The page's own margin. The rows sit inside it, so a title never starts on
   // the panel's edge and the list has air above and below it.
   readonly property real pagePadding: Style.spacing.lg
@@ -84,8 +90,8 @@ Item {
   readonly property real pageWashAlpha: 0.075
   readonly property real selectionWashAlpha: 0.14
   readonly property color page: Qt.tint(Color.menu.background,
-                                        Util.alpha(rail.activeBase, pageWashAlpha))
-  readonly property color selectionFill: Qt.tint(page, Util.alpha(rail.activeBase, selectionWashAlpha))
+                                        Util.alpha(root.activeBase, pageWashAlpha))
+  readonly property color selectionFill: Qt.tint(page, Util.alpha(root.activeBase, selectionWashAlpha))
 
   // Whichever list is on screen: the search panel replaces the main list
   // while a filter is on, and a keyboard move must scroll the one visible.
@@ -112,27 +118,9 @@ Item {
     notebookField.forceActiveFocus()
   }
 
-  Row {
+  Item {
+    id: panel
     anchors.fill: parent
-    spacing: 0
-
-    NotebookTabs {
-      id: rail
-      width: root.railWidth
-      height: parent.height
-      sections: root.sections
-      matchCounts: root.matchCounts
-      activeKey: root.activeKey
-      filtering: root.filtering
-      foreground: root.foreground
-      fontFamily: root.fontFamily
-      onActivated: function(key) { root.sectionActivated(key) }
-    }
-
-    Item {
-      id: panel
-      width: parent.width - root.railWidth
-      height: parent.height
 
       // The open source's panel, in its restrained wash. Opaque rather than a
       // translucent colour, so the scroll fades below have something definite
@@ -158,7 +146,7 @@ Item {
       notebook: root.activeName
       foreground: root.foreground
       accent: root.accent
-      selectionAccent: rail.activeBase
+      selectionAccent: root.activeBase
       selectedBackground: root.selectionFill
       selectedText: root.foreground
       fontFamily: root.fontFamily
@@ -461,7 +449,6 @@ Item {
           onClicked: root.startNewNotebook()
         }
       }
-    }
     }
   }
 }
