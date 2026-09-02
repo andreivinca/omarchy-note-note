@@ -1290,17 +1290,36 @@ Item {
           onActionRequested: function(id) { root.runAction(id) }
           onTreeToggled: function(id) { root.treeToggle(id) }
           onDeleteRequested: function(path) { root.requestDelete(path) }
-          onMoveRequested: function(from, to) {
-            var mf = root.rowIndexOf(from), mt = root.rowIndexOf(to)
-            if (mf < 0 || mt < 0 || root.rows[mf].notebook !== root.rows[mt].notebook) return
-            var rr = root.rows.slice(), it = rr.splice(mf, 1)[0]
-            rr.splice(mt, 0, it)
+          onReorderFinished: function(key, paths) {
+            // The drag reordered delegates, not rows (see the list's
+            // visualModel): mirror the on-screen order into the model, then
+            // hand the provider the list to persist. The notebook's note rows
+            // keep their slots; only which note sits in which slot changes.
+            if (!paths.length) {
+              return
+            }
+            var rr = root.rows.slice(), slots = [], byPath = {}
+            for (var i = 0; i < rr.length; i++) {
+              if (rr[i].kind === "note" && rr[i].notebook === key) {
+                slots.push(i)
+                byPath[rr[i].path] = rr[i]
+              }
+            }
+            if (slots.length !== paths.length) {
+              return
+            }
+            for (var j = 0; j < slots.length; j++) {
+              var r = byPath[paths[j]]
+              if (!r) {
+                return
+              }
+              rr[slots[j]] = r
+            }
             root.rows = rr
-          }
-          onReorderFinished: function(key) {
-            var paths = root.rows.filter(function(r) { return r.kind === "note" && r.notebook === key }).map(function(r) { return r.path })
-            var p = paths.length ? root.providerOf(paths[0]) : null
-            if (p && p.canReorder) p.setOrder(key.substring(p.id.length + 1), paths)
+            var p = root.providerOf(paths[0])
+            if (p && p.canReorder) {
+              p.setOrder(key.substring(p.id.length + 1), paths)
+            }
           }
         }
 

@@ -1,4 +1,5 @@
 import QtQuick
+import QtQml.Models
 import qs.Commons
 import qs.Ui
 import "TabColors.js" as TabColors
@@ -71,8 +72,9 @@ Item {
   signal actionRequested(string id)
   signal newNotebookRequested(string name)
   signal deleteRequested(string path)
-  signal moveRequested(string fromPath, string toPath)
-  signal reorderFinished(string notebook)
+  // `paths` is the notebook's notes in the order the drag left them on
+  // screen — the model has not heard about the moves yet (see visualModel).
+  signal reorderFinished(string notebook, var paths)
 
   readonly property int rowHeight: Style.spacing.controlHeight
   // The page's own margin. The rows sit inside it, so a title never starts on
@@ -110,6 +112,20 @@ Item {
   }
   function debugInfo() {
     return "contentY=" + listView.contentY + " originY=" + listView.originY + " contentHeight=" + listView.contentHeight + " height=" + listView.height + " count=" + listView.count
+  }
+
+  // The notebook's notes in the order now on screen. A drag moves delegates
+  // while the model stands still, so until the host writes the order back
+  // this walk of the visual items is the only record of it.
+  function orderedPaths(notebook) {
+    var paths = []
+    for (var i = 0; i < visualModel.items.count; i++) {
+      var d = visualModel.items.get(i).model.modelData
+      if (d.kind === "note" && d.notebook === notebook) {
+        paths.push(d.path)
+      }
+    }
+    return paths
   }
 
   function startNewNotebook() {
@@ -167,16 +183,15 @@ Item {
         width: parent.width
         height: parent.height - newNotebookRow.height
 
-        ListView {
-          id: listView
-          anchors.fill: parent
-          clip: true
-          spacing: 0
-          boundsBehavior: Flickable.StopAtBounds
+        // The rows live behind a DelegateModel so a drag can reorder them
+        // without touching the model: a model write mid-drag rebuilds every
+        // delegate and destroys the one under the mouse, ending the drag at
+        // the first swap. Instead the drag shuffles the visual order
+        // (items.move) as rows are crossed, and the model hears about it
+        // once, on release (reorderFinished).
+        DelegateModel {
+          id: visualModel
           model: root.filtering ? [] : root.model
-          displaced: Transition { NumberAnimation { properties: "y"; duration: 120; easing.type: Easing.OutQuad } }
-
-          ListWheel { flick: listView }
 
           // ---- rows
           delegate: Item {
@@ -194,6 +209,9 @@ Item {
             readonly property int indent: (modelData.level || 0)
               * (Style.font.icon + Style.space(2) + Style.spacing.md - Style.spacing.sm)
             readonly property bool draggable: isNote && !modelData.fixed
+            // Where this row sits on screen right now — diverges from `index`
+            // while a drag is shuffling the visual order.
+            readonly property int visualIndex: slot.DelegateModel.itemsIndex
             width: listView.width
             height: root.rowHeight
 
@@ -201,8 +219,12 @@ Item {
               anchors.fill: parent
               enabled: !root.filtering && slot.draggable
               onEntered: function(drag) {
-                if (drag.source.notebook !== slot.modelData.notebook) return
-                if (drag.source.path !== slot.modelData.path) root.moveRequested(drag.source.path, slot.modelData.path)
+                if (drag.source.modelData.notebook !== slot.modelData.notebook) {
+                  return
+                }
+                if (drag.source.visualIndex !== slot.visualIndex) {
+                  visualModel.items.move(drag.source.visualIndex, slot.visualIndex)
+                }
               }
             }
 
@@ -267,19 +289,26 @@ Item {
                 id: dragArea
                 anchors.fill: parent
                 cursorShape: Qt.PointingHandCursor
-                property string path: slot.modelData.path
-                property string notebook: slot.modelData.notebook
                 drag.target: (root.filtering || !slot.draggable) ? null : row
                 drag.axis: Drag.YAxis
                 drag.threshold: Style.space(6)
                 onClicked: {
-                  if (slot.isNew) root.newRequested(slot.modelData.path || slot.modelData.notebook)
-                  else if (slot.isAction) root.actionRequested(slot.modelData.path)
-                  else if (slot.isTree) root.treeToggled(slot.modelData.path)
-                  else root.activated(slot.modelData.path)
+                  if (slot.isNew) {
+                    root.newRequested(slot.modelData.path || slot.modelData.notebook)
+                  } else if (slot.isAction) {
+                    root.actionRequested(slot.modelData.path)
+                  } else if (slot.isTree) {
+                    root.treeToggled(slot.modelData.path)
+                  } else {
+                    root.activated(slot.modelData.path)
+                  }
                 }
                 onReleased: {
-                  if (row.Drag.active) { row.Drag.drop(); root.reorderFinished(slot.modelData.notebook) }
+                  if (!row.Drag.active) {
+                    return
+                  }
+                  row.Drag.drop()
+                  root.reorderFinished(slot.modelData.notebook, root.orderedPaths(slot.modelData.notebook))
                 }
               }
 
@@ -306,17 +335,36 @@ Item {
               }
 
               Drag.active: dragArea.drag.active
-              Drag.source: dragArea
+              // The delegate root, so a DropArea can read the dragged row's
+              // modelData and visualIndex without copies of either.
+              Drag.source: slot
               Drag.hotSpot.x: width / 2
               Drag.hotSpot.y: height / 2
 
               states: State {
                 when: dragArea.drag.active
                 ParentChange { target: row; parent: listView }
+                // The pill is centred in its slot by an anchor, and an anchor
+                // outranks the drag's writes to y — reparented, it would pin
+                // the row to the middle of the list. Released here, restored
+                // when the drag ends and the state reverts.
+                AnchorChanges { target: row; anchors.verticalCenter: undefined }
                 PropertyChanges { target: row; z: 10 }
               }
             }
           }
+        }
+
+        ListView {
+          id: listView
+          anchors.fill: parent
+          clip: true
+          spacing: 0
+          boundsBehavior: Flickable.StopAtBounds
+          model: visualModel
+          displaced: Transition { NumberAnimation { properties: "y"; duration: 120; easing.type: Easing.OutQuad } }
+
+          ListWheel { flick: listView }
         }
 
         // ---- there is more: fades and a thin track, as in Toolroll
