@@ -68,7 +68,9 @@ Window {
         native: QuoteBars.runsFromBlocks(tb.blocks()),
         scanned: QuoteBars.runs(e.getFormattedText(0, e.length), e.getText(0, e.length)),
         boxesNative: QuoteBars.boxesFromBlocks(tb.blocks()),
-        boxesScanned: QuoteBars.boxes(e.getFormattedText(0, e.length), e.getText(0, e.length))
+        boxesScanned: QuoteBars.boxes(e.getFormattedText(0, e.length), e.getText(0, e.length)),
+        kindsNative: tb.blocks().map(function(b) { return QuoteBars.kindOfBlock(b) }),
+        kindsScanned: QuoteBars.kinds(e.getFormattedText(0, e.length))
       }
     }
     // The image phase reads on a second tick, giving the document's
@@ -145,6 +147,39 @@ def has_quote(markdown):
 def has_code(markdown):
     """Whether the note holds a fenced code block."""
     return "```" in markdown
+
+
+def has_rule(markdown):
+    """Whether the note holds a horizontal rule — fences skipped, and a
+    table's `|---|` separator row is not one."""
+    fence = False
+    for line in markdown.split("\n"):
+        if line.strip().startswith("```"):
+            fence = not fence
+        elif not fence and line.strip() == "---":
+            return True
+    return False
+
+
+def kinds_agree(native, scanned):
+    """Whether the two kind lists tell the same story. Qt's native walk sees
+    hidden empty blocks beside a table that never serialise to HTML (the
+    same blocks fillEmptyBlocksBeforeTables exists for), so the native list
+    may carry extra kindless entries anywhere a table sits. What must agree
+    is the sequence of *kinded* blocks, in order, on both sides."""
+    if native is None or scanned is None:
+        return False
+    i = j = 0
+    while i < len(native) and j < len(scanned):
+        if native[i] == scanned[j]:
+            i += 1
+            j += 1
+        elif native[i] == "":
+            i += 1              # a hidden table-side block: in the walk, not the HTML
+        else:
+            return False
+    return (all(k == "" for k in native[i:])
+            and all(k == "" for k in scanned[j:]))
 
 
 def box_states(markdown):
@@ -224,6 +259,15 @@ def main():
             failures += 1
             print("  FAIL  %-24s markdown holds boxes %r, found %r"
                   % (name, box_states(markdown), boxes_native))
+        elif not kinds_agree(result.get("kindsNative"), result.get("kindsScanned")):
+            failures += 1
+            print("  FAIL  %-24s native kinds %r != scanned %r"
+                  % (name, result.get("kindsNative"), result.get("kindsScanned")))
+        elif has_rule(markdown) != ("rule" in (result.get("kindsNative") or [])):
+            failures += 1
+            print("  FAIL  %-24s markdown %s a rule, kinds say %r"
+                  % (name, "holds" if has_rule(markdown) else "holds no",
+                     result.get("kindsNative")))
         elif args.verbose and (native["quote"] or native["code"] or boxes_native):
             print("  ok    %-24s %r %r" % (name, native, boxes_native))
     print("  %d/%d cases" % (len(CASES) - failures, len(CASES)))

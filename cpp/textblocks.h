@@ -116,6 +116,11 @@ public:
             entry.insert(QStringLiteral("marginRight"), format.rightMargin());
             entry.insert(QStringLiteral("background"), format.background().style() != Qt::NoBrush);
             entry.insert(QStringLiteral("list"), block.textList() != nullptr);
+            // A horizontal rule: Qt keeps it as an empty block wearing this
+            // property, and the editor needs to know — a rule that ends the
+            // note leaves the caret no position after it (escapeForward).
+            entry.insert(QStringLiteral("rule"),
+                         format.hasProperty(QTextFormat::BlockTrailingHorizontalRulerWidth));
             const QTextBlockFormat::MarkerType marker = format.marker();
             entry.insert(QStringLiteral("marker"),
                          marker == QTextBlockFormat::MarkerType::Checked         ? 2

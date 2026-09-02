@@ -28,6 +28,7 @@ function kindOfStyle(style) {
 }
 
 function kindOfBlock(block) {
+  if (block.rule) return "rule"
   if (block.marginLeft >= QUOTE_PX && block.marginRight >= QUOTE_PX) return "quote"
   if (block.background) return "code"
   return ""
@@ -50,10 +51,13 @@ function _openTags(html) {
 
 // The kind of every document block. Headings count even though they are
 // never decorated — missing one shifts every entry after it
-// (cpp/selftest.py is what caught exactly that).
+// (cpp/selftest.py is what caught exactly that). A rule is its own kind:
+// not for decoration, but for the caret's sake — the editor treats a rule
+// block specially (NoteEditor's escapeForward and returnLeavesBlock).
 function kinds(html) {
   var tags = _openTags(html), out = []
   for (var i = 0; i < tags.length; i++) {
+    if (tags[i].tag === "hr") { out.push("rule"); continue }
     var style = /style="([^"]*)"/.exec(tags[i].open)
     out.push(tags[i].tag === "p" && style ? kindOfStyle(style[1]) : "")
   }
@@ -81,6 +85,9 @@ function _collect(kindAt, count, fromOf, toOf) {
   var open = "", from = -1, to = -1
   for (var i = 0; i <= count; i++) {
     var kind = i < count ? kindAt(i) : ""
+    // Only these two kinds draw anything; every other kind ("rule") is a
+    // run-breaker here, not a run.
+    if (kind !== "quote" && kind !== "code") kind = ""
     if (kind === open) {
       if (open) to = toOf(i)
       continue

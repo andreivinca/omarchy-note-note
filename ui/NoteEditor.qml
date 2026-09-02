@@ -4,11 +4,12 @@ import qs.Commons
 import qs.Ui
 import "QuoteBars.js" as QuoteBars
 
-// The note pane: an editable title, the formatting toolbar, and the note
-// itself on one sheet — plus the notices and provider views that stand in
-// for a note when there is something to say instead. Where the note lives
-// and how many words it holds are the view bar's to show (ViewBar.qml);
-// this pane is the page alone.
+// The note pane: the formatting tools pinned across its top the way an IDE
+// pins a toolbar, then an editable title and the note on one sheet — plus
+// the notices and provider views that stand in for a note when there is
+// something to say instead. Where the note lives and how many words it
+// holds are the view bar's to show (ViewBar.qml); this pane is the page
+// and its tools alone.
 Item {
   id: root
 
@@ -71,9 +72,16 @@ Item {
   }
 
   // The note as it belongs on disk.  callback(markdown)
+  // The blank landing paragraph the editor parks after a trailing rule or
+  // table (insertSnippet, leaveBlock) is its own furniture, not the note's:
+  // one still holding nothing but its filler at save time stays out of the
+  // file. Reloading such a note ends it with the rule again, and
+  // escapeForward is what steps past it.
   function requestMarkdown(callback) {
     if (root.plain || !root.markdown) { callback(plainText()); return }
-    root.markdown.toMarkdown(documentHtml(), function(md) { callback(md) }, root.documentBase)
+    root.markdown.toMarkdown(documentHtml(), function(md) {
+      callback(md.replace(/(^|\n) \n?$/, "$1"))
+    }, root.documentBase)
   }
 
   // Notice mode: a message with optional buttons shown instead of the note
@@ -87,18 +95,17 @@ Item {
   // the note; the provider owns what is inside.
   property Component customView: null
   property var customViewProps: ({})
-  // The tools and the note sit the same distance from the hairline as the
-  // toolbar sits from the title. The two numbers differ because the neighbours
-  // do: a toolbar button carries its own padding below its glyph, the first
-  // line of the note carries almost none, so equal numbers here would look
-  // unequal on screen.
-  readonly property real ruleRoomAbove: Style.spacing.lg
-  readonly property real ruleRoomBelow: Style.space(17)
+  // The tools strip exists only while the note can be styled: Markdown,
+  // writable, and no notice standing in for it. Gated here once, so the
+  // strip, its height and the sheet below all agree.
+  readonly property bool toolsVisible: hasNote && !plain && !readOnly && !showingNotice
+    && (enabledTools === null || enabledTools.length > 0)
 
-  // A document title needs display weight, while the readable-width cap keeps
-  // both short notes and long prose calm on wide windows.
+  // A document title needs display weight. The note itself fills its pane
+  // the way a Markdown document fills an editor — no readable-width cap:
+  // the pane's width, set by the window and the splitter, is the line
+  // length the user chose.
   readonly property int titleSize: Math.round(Style.font.heading * 1.55)
-  readonly property real contentMaxWidth: Style.space(620)
   readonly property bool showingNotice: noticeText.length > 0 || customView !== null
   function showView(component, props) {
     customView = component; customViewProps = props || ({})
@@ -721,14 +728,31 @@ Item {
     return i
   }
 
+  // A snippet lands after the caret's block — or on the caret's own line
+  // when that line is an empty paragraph: an empty line is the author
+  // pointing at the spot. (Never inside a fence, where an empty line is
+  // code.) When nothing follows, a blank landing paragraph goes in behind
+  // the snippet and the caret takes it, its filler selected so typing
+  // starts clean — a rule or table that ends the note would otherwise
+  // leave the caret nowhere to stand. escapeForward is the same promise
+  // for a note that arrives already ending in one.
   function insertSnippet(md) {
     withMarkdown(function(lines, map) {
-      var at = blockEndLine(lines, Math.min(caretLine(map), lines.length - 1))
+      var i = Math.min(caretLine(map), lines.length - 1)
+      var fences = 0
+      for (var f = 0; f < i; f++) if (/^\s*```/.test(lines[f])) fences++
+      var onEmpty = fences % 2 === 0 && lines[i] === ""
+      var at = onEmpty ? i : blockEndLine(lines, i)
       var rest = lines.slice(at + 1)
       var atEnd = rest.join("").trim() === ""
-      var out = lines.slice(0, at + 1).concat([""], md.split("\n"), [""])
-      if (!atEnd) out = out.concat(rest)
-      replaceDoc(out.join("\n"), atEnd ? -1 : area.cursorPosition)
+      var head = onEmpty ? lines.slice(0, i).concat(md.split("\n"))
+                         : lines.slice(0, at + 1).concat([""], md.split("\n"))
+      if (atEnd) {
+        replaceDoc(head.concat(["", " "]).join("\n"), -1,
+                   function() { selectBlock(blockAt(area.length)) })
+        return
+      }
+      replaceDoc(head.concat([""], rest).join("\n"), area.cursorPosition)
     })
   }
 
@@ -814,13 +838,16 @@ Item {
 
   // Code and quotes leave only from their run's last line (an empty line
   // higher up is content); an empty list item leaves from anywhere,
-  // splitting the list the way every editor does.
+  // splitting the list the way every editor does. A rule leaves from
+  // anywhere too: Qt's own Enter would split the empty block and clone the
+  // rule format onto the new line — two rules where the user asked for a
+  // paragraph.
   function returnLeavesBlock() {
     if (root.readOnly || root.plain || area.selectionStart !== area.selectionEnd) return false
     if (root.tableReturn()) return true
     var b = blockInfoAt(area.cursorPosition)
     if (!b || !b.empty || !b.kind) return false
-    if (b.kind !== "list" && !b.last) return false
+    if (b.kind !== "list" && b.kind !== "rule" && !b.last) return false
     root.leaveBlock(b.kind)
     return true
   }
@@ -868,7 +895,10 @@ Item {
     })
   }
 
-  function leaveBlock(kind) {
+  // `seed` (optional) is text that caused the leave: a character typed with
+  // the caret on a rule lands as the new paragraph's first character rather
+  // than on the ruler (typeLeavesRule).
+  function leaveBlock(kind, seed) {
     withMarkdown(function(lines, map) {
       var i = caretLine(map)
       var target = map.blocks[i]
@@ -882,11 +912,29 @@ Item {
         out.splice(i + 1, 0, "", " ", "")
       } else if (kind === "list") {
         out.splice(i, 1, "", " ", "")
+      } else if (kind === "rule") {
+        // the rule stays where it is; the landing paragraph goes in after
+        // it, and the caret takes that instead
+        out.splice(i + 1, 0, "", " ", "")
+        target = target + 1
       }
       // a quote's empty line already reads back as a blank paragraph
-      // (kept in the map now, trimmed only on save): re-rendering the
-      // markdown is the whole edit
-      replaceDoc(out.join("\n"), area.cursorPosition, function() { selectBlock(target) })
+      // (kept in the map now, stripped only from an unused landing at save
+      // time): re-rendering the markdown is the whole edit
+      replaceDoc(out.join("\n"), area.cursorPosition, function() {
+        selectBlock(target)
+        if (!seed) return
+        // the seed replaces the landing's filler, as literal text — the
+        // highlight's insert-then-remove order, for the same block reason
+        var from = Math.min(area.selectionStart, area.selectionEnd)
+        var to = Math.max(area.selectionStart, area.selectionEnd)
+        atomic(function() {
+          area.insert(to, seed.replace(/&/g, "&amp;").replace(/</g, "&lt;"))
+          area.remove(from, to)
+        })
+        area.cursorPosition = Math.min(from + seed.length, area.length)
+        root.edited()
+      })
     })
   }
 
@@ -976,7 +1024,54 @@ Item {
     return withoutChip(fragment.replace(/font-family:[^;"]*mono[^;"]*;?/gi, ""))
   }
 
-  // ── escaping inline code: Right at its end ──────────────────────────
+  // ── stepping past a trap: Right at the note's very end ──────────────
+  // Some shapes trap the caret at the end of a note, each for its own Qt
+  // reason, and one gesture frees it from all of them: inline code, whose
+  // typing format clings past its last character (escapeCode), and a rule,
+  // an empty block the caret can stand on but never after (escapeRule).
+  // This dispatcher is the one thing the key handler asks; a new trap adds
+  // its escape here, not another branch in the handler.
+  function escapeForward() {
+    if (root.readOnly || root.plain) return false
+    if (area.selectionStart !== area.selectionEnd) return false
+    if (escapeCode()) return true
+    return escapeRule()
+  }
+
+  // A rule holds no characters, so a rule that ends the note leaves the
+  // caret nowhere past it. Right steps out the way the second Enter leaves
+  // a block — through leaveBlock's markdown trip, which lands the caret on
+  // a fresh blank paragraph behind the rule.
+  function escapeRule() {
+    var pos = area.cursorPosition
+    if (pos < area.length) return false        // something follows; Qt's own Right serves
+    var b = blockInfoAt(pos)
+    if (!b || b.kind !== "rule") return false
+    leaveBlock("rule")
+    return true
+  }
+
+  // Typing with the caret on a rule would draw the text over the ruler
+  // itself — Qt's block takes characters, the eye says it must not. The
+  // keystroke becomes the first character of a fresh paragraph after the
+  // rule instead, through the same leaveBlock trip Enter takes. The two
+  // one-character reads keep the common case cheap: only a caret sitting
+  // in an *empty* block goes on to the full block lookup.
+  function typeLeavesRule(text) {
+    if (root.readOnly || root.plain) return false
+    if (area.selectionStart !== area.selectionEnd) return false
+    if (!text) return false
+    var c = text.charCodeAt(0)
+    if (c < 0x20 || c === 0x7f) return false   // backspace, delete and friends ride event.text too
+    var pos = area.cursorPosition
+    if (!atBlockStart(pos)) return false
+    if (pos < area.length && area.getText(pos, pos + 1) !== root.sep) return false
+    var b = blockInfoAt(pos)
+    if (!b || b.kind !== "rule") return false
+    leaveBlock("rule", text)
+    return true
+  }
+
   // Qt takes the typing format from the character before the caret, so code
   // that ends the note traps it: there is no character to arrow past, and
   // everything typed next would come out mono on the chip. Anywhere else
@@ -1097,18 +1192,233 @@ Item {
     applying = false
   }
 
-  // ---- the note's sheet: title, toolbar and body on one surface. No frame
-  // around it and no rule beside it — a box drawn around a page is one line
-  // too many.
+  // ---- the tools strip: the pane's own toolbar, pinned across its top the
+  // way an IDE pins one, wearing the chrome's tint and hairline so it reads
+  // as chrome — the sheet below stays a bare page. Gone entirely, height and
+  // all, while the note cannot be styled.
+  Item {
+    id: toolStrip
+    width: parent.width
+    height: root.toolsVisible ? strip.implicitHeight + Style.spacing.hairline : 0
+    visible: root.toolsVisible
+
+    Rectangle {
+      anchors.fill: parent
+      color: Qt.tint(root.background, Util.alpha(root.foreground, 0.015))
+    }
+
+    Column {
+      id: strip
+      width: parent.width
+      topPadding: Style.spacing.sm
+      bottomPadding: Style.spacing.sm
+      leftPadding: Style.spacing.panelPadding
+      rightPadding: Style.spacing.panelPadding
+      spacing: Style.spacing.sm
+
+      // ---- formatting toolbar (Markdown notes only)
+      Flow {
+        id: toolbar
+        width: parent.width - parent.leftPadding - parent.rightPadding
+        spacing: Style.spacing.sm
+
+        // The rows of the text-style menu, the toolbar's one dropdown: each
+        // previews its own size, on the same scale the dialect writes headings
+        // at (HEADING_FONT_SIZE in services/markdown/qthtml/dialect.py —
+        // xx-large, x-large, large). Sub- and superscript stayed out: the
+        // dialect's Markdown has no syntax for them, so the round trip through
+        // save would drop them (docs/decisions.md). Providers gate the ids one
+        // by one, so the menu carries only the rows the provider can store.
+        readonly property var styleMenuRows: [
+          { id: "h1", label: "Heading 1", scale: 2.0, bold: true },
+          { id: "h2", label: "Heading 2", scale: 1.5, bold: true },
+          { id: "h3", label: "Heading 3", scale: 1.17, bold: true },
+          { id: "p", label: "Normal text", scale: 1.0, bold: false }
+        ].filter(function(o) { return root.toolEnabled(o.id) })
+
+        Repeater {
+          // Material Design glyphs from the shell's Nerd Font, by name:
+          // md-format_bold, md-format_italic, … (see PROVIDERS.md for tool ids).
+          model: [
+            { id: "bold", icon: "󰉤", tip: "Bold (ctrl+b)" },
+            { id: "italic", icon: "󰉷", tip: "Italic (ctrl+i)" },
+            { id: "underline", icon: "󰊇", tip: "Underline (ctrl+u)" },
+            { id: "strikeout", icon: "󰊁", tip: "Strikethrough (ctrl+s)" },
+            { id: "sep" },
+            // The dressing-up group: what a run of text *is* (highlight, code,
+            // heading), apart from the toggles of how it is drawn. The style
+            // entry is one dropdown, not four buttons — the block styles read
+            // as a choice of one, the way bold/italic never could. Its rows
+            // keep the ids h1 h2 h3 p (toolbar.styleMenuRows), so providers
+            // and `editorTool` see nothing new.
+            { id: "highlight", icon: "󰙒", tip: "Highlight (ctrl+shift+h)" },
+            { id: "code", icon: "󰅴", tip: "Inline code" },
+            { id: "style", icon: "󰉿", tip: "Text style" },
+            { id: "sep" },
+            { id: "ul", icon: "󰉹", tip: "Bullet list" },
+            { id: "ol", icon: "󰉻", tip: "Numbered list" },
+            { id: "todo", icon: "󰥪", tip: "Checkbox" },
+            { id: "outdent", icon: "󰉵", tip: "Outdent" },
+            { id: "indent", icon: "󰉶", tip: "Indent" },
+            { id: "sep" },
+            { id: "quote", icon: "󰉾", tip: "Quote" },
+            { id: "codeblock", icon: "󰅩", tip: "Code block" },
+            { id: "rule", icon: "󰍴", tip: "Horizontal rule" },
+            { id: "link", icon: "󰌹", tip: "Insert link" },
+            { id: "sep" },
+            { id: "table", icon: "󰓫", tip: "Insert a table" },
+            { id: "addRow", icon: "󰓳", tip: "Add a row below" },
+            { id: "delRow", icon: "󰓵", tip: "Delete this row" },
+            { id: "addCol", icon: "󰓬", tip: "Add a column" },
+            { id: "delCol", icon: "󰓮", tip: "Delete this column" }
+          ]
+          delegate: Loader {
+            required property var modelData
+            sourceComponent: modelData.id === "sep" ? sepComp : (modelData.id === "style" ? styleComp : buttonComp)
+            readonly property bool tableOnly: ["addRow", "addCol", "delRow", "delCol"].indexOf(modelData.id) >= 0
+            // The style menu stands for its rows: it stays as long as any of
+            // them survives the provider's gate.
+            readonly property bool allowed: modelData.id === "sep"
+              || (modelData.id === "style" ? toolbar.styleMenuRows.length > 0
+                                           : root.toolEnabled(tableOnly ? "table" : modelData.id))
+            visible: allowed && (tableOnly ? root.inTable
+                               : modelData.id === "table" ? !root.inTable
+                               : modelData.id === "style" ? !root.inList
+                               : true)
+            onLoaded: if (modelData.id !== "sep") { item.iconText = modelData.icon; item.tooltipText = modelData.tip; item.toolId = modelData.id }
+          }
+        }
+        Component { id: sepComp; Item { width: Style.spacing.md; height: Style.spacing.controlHeight } }
+        Component {
+          id: buttonComp
+          Button {
+            property string toolId: ""
+            property bool hovering: false
+            // Quiet toolbar: the outline appears only under the cursor.
+            bordered: hovering
+            foreground: root.foreground
+            accent: root.accent
+            iconSize: Style.font.icon
+            horizontalPadding: Style.spacing.sm
+            verticalPadding: Style.spacing.xxs
+            onHovered: function(isHovered) { hovering = isHovered }
+            onClicked: root.tool(toolId)
+          }
+        }
+        Component {
+          id: styleComp
+          Button {
+            id: styleButton
+            property string toolId: ""
+            property bool hovering: false
+            // Held open reads as held down: the outline stays while the menu is up.
+            bordered: hovering || styleMenu.opened
+            foreground: root.foreground
+            accent: root.accent
+            iconSize: Style.font.icon
+            // A chevron after the glyph — this button opens a menu, the others act.
+            text: "󰅀"
+            fontSize: Style.font.caption
+            horizontalPadding: Style.spacing.sm
+            verticalPadding: Style.spacing.xxs
+            onHovered: function(isHovered) { hovering = isHovered }
+            onClicked: styleMenu.opened ? styleMenu.close() : styleMenu.open()
+            // The toolbar can vanish under the menu (a provider switch, a
+            // notice); the menu must not outlive it.
+            onVisibleChanged: if (!visible) styleMenu.close()
+
+            // The two candidate widest rows, measured at their menu size, so
+            // every row takes the same width and the hover fill is not ragged.
+            TextMetrics { id: widestHeading; text: "Heading 1"; font.family: root.fontFamily; font.bold: true; font.pixelSize: Math.round(Style.font.body * 2) }
+            TextMetrics { id: widestNormal; text: "Normal text"; font.family: root.fontFamily; font.pixelSize: Style.font.body }
+
+            QQC.Popup {
+              id: styleMenu
+              y: styleButton.height + Style.spacing.xxs
+              readonly property var borderSpec: Border.localOrSurfaceSpec("popups", "border", Color.popups.border, Color.popups.border, Style.normalBorderWidth)
+              readonly property real rowWidth: Math.ceil(Math.max(widestHeading.width, widestNormal.width)) + 2 * Style.spacing.controlPaddingX
+              padding: Style.spacing.xxs
+              leftPadding: Border.left(borderSpec) + Style.spacing.xxs
+              rightPadding: Border.right(borderSpec) + Style.spacing.xxs
+              topPadding: Border.top(borderSpec) + Style.spacing.xxs
+              bottomPadding: Border.bottom(borderSpec) + Style.spacing.xxs
+              background: BorderSurface {
+                color: Color.popups.background
+                borderSpec: styleMenu.borderSpec
+                radius: Style.cornerRadius
+              }
+              contentItem: Column {
+                spacing: Style.spacing.labelGap
+                Repeater {
+                  model: toolbar.styleMenuRows
+                  delegate: Rectangle {
+                    id: styleRow
+                    required property var modelData
+                    width: styleMenu.rowWidth
+                    height: rowLabel.implicitHeight + Style.spacing.sm
+                    radius: Style.cornerRadius
+                    color: rowMouse.containsMouse ? Style.hoverFillFor(Color.popups.text, root.accent) : "transparent"
+                    Text {
+                      id: rowLabel
+                      anchors.left: parent.left
+                      anchors.leftMargin: Style.spacing.controlPaddingX
+                      anchors.verticalCenter: parent.verticalCenter
+                      text: styleRow.modelData.label
+                      color: rowMouse.containsMouse ? Style.hoverStateColor(Color.popups.text, root.accent) : Color.popups.text
+                      font.family: root.fontFamily
+                      font.pixelSize: Math.round(Style.font.body * styleRow.modelData.scale)
+                      font.bold: styleRow.modelData.bold
+                    }
+                    MouseArea {
+                      id: rowMouse
+                      anchors.fill: parent
+                      hoverEnabled: true
+                      cursorShape: Qt.PointingHandCursor
+                      onClicked: { styleMenu.close(); root.tool(styleRow.modelData.id) }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+
+      // ---- link bar
+      Row {
+        visible: root.linkBarOpen
+        spacing: Style.spacing.sm
+        TextField { id: linkText; width: Style.space(200); placeholderText: "Text"; foreground: root.foreground; accent: root.accent; font.family: root.fontFamily; verticalPadding: Style.spacing.xxs
+          Keys.onReturnPressed: root.insertLink(); Keys.onEscapePressed: { root.linkBarOpen = false; root.focusEditor() } }
+        TextField { id: linkUrl; width: Style.space(340); placeholderText: "https://…"; foreground: root.foreground; accent: root.accent; font.family: root.fontFamily; verticalPadding: Style.spacing.xxs
+          Keys.onReturnPressed: root.insertLink(); Keys.onEscapePressed: { root.linkBarOpen = false; root.focusEditor() } }
+        Button { text: "Insert"; bordered: true; foreground: root.foreground; accent: root.accent; verticalPadding: Style.spacing.xxs; onClicked: root.insertLink() }
+        Button { text: "Cancel"; bordered: true; foreground: root.foreground; accent: root.accent; verticalPadding: Style.spacing.xxs; onClicked: { root.linkBarOpen = false; root.focusEditor() } }
+      }
+    }
+
+    Rectangle {
+      anchors.bottom: parent.bottom
+      width: parent.width
+      height: Style.spacing.hairline
+      color: Util.alpha(root.foreground, 0.1)
+    }
+  }
+
+  // ---- the note's sheet: title and body on one surface. No frame around it
+  // and no rule beside it — a box drawn around a page is one line too many.
   Column {
     id: sheet
-    anchors.top: parent.top
+    anchors.top: toolStrip.bottom
     anchors.bottom: parent.bottom
+    anchors.left: parent.left
+    anchors.right: parent.right
     anchors.topMargin: Style.spacing.panelPadding
     anchors.bottomMargin: Style.spacing.panelPadding
-    x: Math.max(Style.spacing.panelPadding, (parent.width - width) / 2)
-    width: Math.min(root.contentMaxWidth, parent.width - Style.spacing.panelPadding * 2)
+    anchors.leftMargin: Style.spacing.panelPadding
+    anchors.rightMargin: Style.spacing.panelPadding
     spacing: Style.spacing.xs
+
 
     // ---- header: the title belongs on the note's own sheet
     Item {
@@ -1171,202 +1481,6 @@ Item {
         }
       }
     }
-
-    // ---- formatting toolbar (Markdown notes only)
-    Flow {
-      id: toolbar
-      visible: root.hasNote && !root.plain && !root.readOnly && !root.showingNotice && (root.enabledTools === null || root.enabledTools.length > 0)
-      width: parent.width
-      spacing: Style.spacing.sm
-
-      // The rows of the text-style menu, the toolbar's one dropdown: each
-      // previews its own size, on the same scale the dialect writes headings
-      // at (HEADING_FONT_SIZE in services/markdown/qthtml/dialect.py —
-      // xx-large, x-large, large). Sub- and superscript stayed out: the
-      // dialect's Markdown has no syntax for them, so the round trip through
-      // save would drop them (docs/decisions.md). Providers gate the ids one
-      // by one, so the menu carries only the rows the provider can store.
-      readonly property var styleMenuRows: [
-        { id: "h1", label: "Heading 1", scale: 2.0, bold: true },
-        { id: "h2", label: "Heading 2", scale: 1.5, bold: true },
-        { id: "h3", label: "Heading 3", scale: 1.17, bold: true },
-        { id: "p", label: "Normal text", scale: 1.0, bold: false }
-      ].filter(function(o) { return root.toolEnabled(o.id) })
-
-      Repeater {
-        // Material Design glyphs from the shell's Nerd Font, by name:
-        // md-format_bold, md-format_italic, … (see PROVIDERS.md for tool ids).
-        model: [
-          { id: "bold", icon: "󰉤", tip: "Bold (ctrl+b)" },
-          { id: "italic", icon: "󰉷", tip: "Italic (ctrl+i)" },
-          { id: "underline", icon: "󰊇", tip: "Underline (ctrl+u)" },
-          { id: "strikeout", icon: "󰊁", tip: "Strikethrough (ctrl+s)" },
-          { id: "sep" },
-          // The dressing-up group: what a run of text *is* (highlight, code,
-          // heading), apart from the toggles of how it is drawn. The style
-          // entry is one dropdown, not four buttons — the block styles read
-          // as a choice of one, the way bold/italic never could. Its rows
-          // keep the ids h1 h2 h3 p (toolbar.styleMenuRows), so providers
-          // and `editorTool` see nothing new.
-          { id: "highlight", icon: "󰙒", tip: "Highlight (ctrl+shift+h)" },
-          { id: "code", icon: "󰅴", tip: "Inline code" },
-          { id: "style", icon: "󰉿", tip: "Text style" },
-          { id: "sep" },
-          { id: "ul", icon: "󰉹", tip: "Bullet list" },
-          { id: "ol", icon: "󰉻", tip: "Numbered list" },
-          { id: "todo", icon: "󰥪", tip: "Checkbox" },
-          { id: "outdent", icon: "󰉵", tip: "Outdent" },
-          { id: "indent", icon: "󰉶", tip: "Indent" },
-          { id: "sep" },
-          { id: "quote", icon: "󰉾", tip: "Quote" },
-          { id: "codeblock", icon: "󰅩", tip: "Code block" },
-          { id: "rule", icon: "󰍴", tip: "Horizontal rule" },
-          { id: "link", icon: "󰌹", tip: "Insert link" },
-          { id: "sep" },
-          { id: "table", icon: "󰓫", tip: "Insert a table" },
-          { id: "addRow", icon: "󰓳", tip: "Add a row below" },
-          { id: "delRow", icon: "󰓵", tip: "Delete this row" },
-          { id: "addCol", icon: "󰓬", tip: "Add a column" },
-          { id: "delCol", icon: "󰓮", tip: "Delete this column" }
-        ]
-        delegate: Loader {
-          required property var modelData
-          sourceComponent: modelData.id === "sep" ? sepComp : (modelData.id === "style" ? styleComp : buttonComp)
-          readonly property bool tableOnly: ["addRow", "addCol", "delRow", "delCol"].indexOf(modelData.id) >= 0
-          // The style menu stands for its rows: it stays as long as any of
-          // them survives the provider's gate.
-          readonly property bool allowed: modelData.id === "sep"
-            || (modelData.id === "style" ? toolbar.styleMenuRows.length > 0
-                                         : root.toolEnabled(tableOnly ? "table" : modelData.id))
-          visible: allowed && (tableOnly ? root.inTable
-                             : modelData.id === "table" ? !root.inTable
-                             : modelData.id === "style" ? !root.inList
-                             : true)
-          onLoaded: if (modelData.id !== "sep") { item.iconText = modelData.icon; item.tooltipText = modelData.tip; item.toolId = modelData.id }
-        }
-      }
-      Component { id: sepComp; Item { width: Style.spacing.md; height: Style.spacing.controlHeight } }
-      Component {
-        id: buttonComp
-        Button {
-          property string toolId: ""
-          property bool hovering: false
-          // Quiet toolbar: the outline appears only under the cursor.
-          bordered: hovering
-          foreground: root.foreground
-          accent: root.accent
-          iconSize: Style.font.icon
-          horizontalPadding: Style.spacing.sm
-          verticalPadding: Style.spacing.xxs
-          onHovered: function(isHovered) { hovering = isHovered }
-          onClicked: root.tool(toolId)
-        }
-      }
-      Component {
-        id: styleComp
-        Button {
-          id: styleButton
-          property string toolId: ""
-          property bool hovering: false
-          // Held open reads as held down: the outline stays while the menu is up.
-          bordered: hovering || styleMenu.opened
-          foreground: root.foreground
-          accent: root.accent
-          iconSize: Style.font.icon
-          // A chevron after the glyph — this button opens a menu, the others act.
-          text: "󰅀"
-          fontSize: Style.font.caption
-          horizontalPadding: Style.spacing.sm
-          verticalPadding: Style.spacing.xxs
-          onHovered: function(isHovered) { hovering = isHovered }
-          onClicked: styleMenu.opened ? styleMenu.close() : styleMenu.open()
-          // The toolbar can vanish under the menu (a provider switch, a
-          // notice); the menu must not outlive it.
-          onVisibleChanged: if (!visible) styleMenu.close()
-
-          // The two candidate widest rows, measured at their menu size, so
-          // every row takes the same width and the hover fill is not ragged.
-          TextMetrics { id: widestHeading; text: "Heading 1"; font.family: root.fontFamily; font.bold: true; font.pixelSize: Math.round(Style.font.body * 2) }
-          TextMetrics { id: widestNormal; text: "Normal text"; font.family: root.fontFamily; font.pixelSize: Style.font.body }
-
-          QQC.Popup {
-            id: styleMenu
-            y: styleButton.height + Style.spacing.xxs
-            readonly property var borderSpec: Border.localOrSurfaceSpec("popups", "border", Color.popups.border, Color.popups.border, Style.normalBorderWidth)
-            readonly property real rowWidth: Math.ceil(Math.max(widestHeading.width, widestNormal.width)) + 2 * Style.spacing.controlPaddingX
-            padding: Style.spacing.xxs
-            leftPadding: Border.left(borderSpec) + Style.spacing.xxs
-            rightPadding: Border.right(borderSpec) + Style.spacing.xxs
-            topPadding: Border.top(borderSpec) + Style.spacing.xxs
-            bottomPadding: Border.bottom(borderSpec) + Style.spacing.xxs
-            background: BorderSurface {
-              color: Color.popups.background
-              borderSpec: styleMenu.borderSpec
-              radius: Style.cornerRadius
-            }
-            contentItem: Column {
-              spacing: Style.spacing.labelGap
-              Repeater {
-                model: toolbar.styleMenuRows
-                delegate: Rectangle {
-                  id: styleRow
-                  required property var modelData
-                  width: styleMenu.rowWidth
-                  height: rowLabel.implicitHeight + Style.spacing.sm
-                  radius: Style.cornerRadius
-                  color: rowMouse.containsMouse ? Style.hoverFillFor(Color.popups.text, root.accent) : "transparent"
-                  Text {
-                    id: rowLabel
-                    anchors.left: parent.left
-                    anchors.leftMargin: Style.spacing.controlPaddingX
-                    anchors.verticalCenter: parent.verticalCenter
-                    text: styleRow.modelData.label
-                    color: rowMouse.containsMouse ? Style.hoverStateColor(Color.popups.text, root.accent) : Color.popups.text
-                    font.family: root.fontFamily
-                    font.pixelSize: Math.round(Style.font.body * styleRow.modelData.scale)
-                    font.bold: styleRow.modelData.bold
-                  }
-                  MouseArea {
-                    id: rowMouse
-                    anchors.fill: parent
-                    hoverEnabled: true
-                    cursorShape: Qt.PointingHandCursor
-                    onClicked: { styleMenu.close(); root.tool(styleRow.modelData.id) }
-                  }
-                }
-              }
-            }
-          }
-        }
-      }
-    }
-
-    // ---- link bar
-    Row {
-      visible: root.linkBarOpen
-      width: parent.width
-      spacing: Style.spacing.sm
-      TextField { id: linkText; width: Style.space(200); placeholderText: "Text"; foreground: root.foreground; accent: root.accent; font.family: root.fontFamily; verticalPadding: Style.spacing.xxs
-        Keys.onReturnPressed: root.insertLink(); Keys.onEscapePressed: { root.linkBarOpen = false; root.focusEditor() } }
-      TextField { id: linkUrl; width: Style.space(340); placeholderText: "https://…"; foreground: root.foreground; accent: root.accent; font.family: root.fontFamily; verticalPadding: Style.spacing.xxs
-        Keys.onReturnPressed: root.insertLink(); Keys.onEscapePressed: { root.linkBarOpen = false; root.focusEditor() } }
-      Button { text: "Insert"; bordered: true; foreground: root.foreground; accent: root.accent; verticalPadding: Style.spacing.xxs; onClicked: root.insertLink() }
-      Button { text: "Cancel"; bordered: true; foreground: root.foreground; accent: root.accent; verticalPadding: Style.spacing.xxs; onClicked: { root.linkBarOpen = false; root.focusEditor() } }
-    }
-
-      // A hairline under the tools, so they read as the note's own strip.
-      Item {
-        visible: toolbar.visible
-        width: parent.width
-        height: root.ruleRoomAbove + Style.spacing.hairline + root.ruleRoomBelow
-
-        Rectangle {
-          y: root.ruleRoomAbove
-          width: parent.width
-          height: Style.spacing.hairline
-          color: Util.alpha(root.foreground, 0.12)
-        }
-      }
 
       Loader {
         id: customLoader
@@ -1494,7 +1608,10 @@ Item {
             if (event.accepted || root.plain) return
             if (event.key === Qt.Key_Right
                 && !(event.modifiers & (Qt.ControlModifier | Qt.ShiftModifier | Qt.AltModifier))
-                && root.escapeCode()) { event.accepted = true; return }
+                && root.escapeForward()) { event.accepted = true; return }
+            if (event.text.length > 0
+                && !(event.modifiers & (Qt.ControlModifier | Qt.AltModifier))
+                && root.typeLeavesRule(event.text)) { event.accepted = true; return }
             if (event.key !== Qt.Key_Return && event.key !== Qt.Key_Enter) return
             if (!(event.modifiers & (Qt.ControlModifier | Qt.ShiftModifier | Qt.AltModifier))
                 && root.returnLeavesBlock()) { event.accepted = true; return }
@@ -1697,9 +1814,9 @@ Item {
     visible: flick.visible && flick.contentHeight > flick.height + 1
     anchors.right: parent.right
     anchors.rightMargin: Style.spacing.xs
-    // The Column sits panelPadding in from the pane and flick.y is measured
-    // inside it; their sum is the viewport's top in this Item's coordinates.
-    y: Style.spacing.panelPadding + flick.y
+    // The sheet starts under the tools strip and flick.y is measured inside
+    // it; their sum is the viewport's top in this Item's coordinates.
+    y: sheet.y + flick.y
     height: flick.height
     width: Style.space(3)
     color: "transparent"
