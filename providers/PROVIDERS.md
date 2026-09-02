@@ -23,6 +23,7 @@ host's config (see "Settings from the host's config").
 | `canImages`         | bool   | a pasted picture can be stored: the editor writes it into the note as `![](file:///…)` and `save()` must carry it to the backend. False (the default) makes ctrl+v say so rather than swallow the paste. An image may carry a display width the author set with the editor's corner handle, written as `![alt](src){width=N}` — a provider stores it with the image if the backend can, and must at least round-trip the marker |
 | `tools`             | list   | optional: formatting-toolbar tool ids the backend can store — `bold italic underline strikeout highlight code h1 h2 h3 p ul ol todo indent outdent quote codeblock table rule link`; omitted = all (when `markdown`), `[]` = no toolbar |
 | `microsoftScopes`   | list   | Graph scopes the provider asks for when it creates its own Microsoft account |
+| `microsoftClientId` | string | the provider's own Microsoft app registration — the application (client) id of an Entra public client that allows personal and work accounts — that its Microsoft account signs in through. Every provider brings its own; none is shared |
 | `logo`              | url    | optional: a mark shown at the head of every one of this provider's tabs, and beside the header title while one of them is open |
 | `sections`          | list   | `[{ key, name, rows, color?, count?, notes? }]` — one binder tab each; `count` overrides the tab's note count. `notes` (`[{ path, title, preview }]`) is every note the section holds, for search: give it when `rows` can hide notes (a folded tree); left out, the note rows are taken to be all of them |
 
@@ -302,12 +303,17 @@ except ratelimit.Throttled as t:
 
 ### `services.microsoft`
 
-`services.microsoft.create(providerId, scopes)` returns an account of the
-provider's own (see `services/microsoft/Account.qml`): its own token file
-(`~/.local/state/omarchy/note-note-ms-<providerId>.json`) and only the
-scopes it asked for, so signing out of one provider never touches another.
-It exposes `configured`, `signedIn`, `account`, `hasScope(s)`, `login()`,
-`relogin()`, `logout()`, `refresh()`, `env` (environment for processes that
-run `msgraph.py`-based scripts), `scriptDir`, and the signal `updated()`.
-The host renders the device-code screen for any account it created. What
-providers share is only the code and the app registration.
+`services.microsoft.create(providerId, scopes, clientId)` returns an account
+of the provider's own (see `services/microsoft/Account.qml`): it signs in
+through the provider's own app registration (`clientId`, your
+`microsoftClientId`) into its own token file
+(`~/.local/state/omarchy/note-note-ms-<providerId>.json`), for only the
+scopes it asked for — so nothing about one provider's account touches
+another's. It exposes `configured`, `signedIn`, `account`, `hasScope(s)`,
+`login()`, `relogin()`, `logout()`, `refresh()`, `env` (environment for
+processes that run `msgraph.py`-based scripts), `scriptDir`, and the signal
+`updated()`. The host renders the device-code screen for any account it
+created. What providers share is only the code. A user who prefers a
+registration of their own gives it to your provider alone, in
+`~/.config/omarchy/note-note.json` as
+`{"microsoft": {"<providerId>": {"clientId": "…", "tenant": "…"}}}`.

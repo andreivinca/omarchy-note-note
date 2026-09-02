@@ -112,9 +112,10 @@ Every source of notes is a self-contained *provider* — a folder with a
 - `providers/sticky/` — Microsoft Sticky Notes
 - `providers/onenote/` — OneNote
 - `providers/notion/` — Notion
-- `services/microsoft/` — Microsoft sign-in code shared by the above; each
-  provider keeps its own token and scope, so signing out of one leaves the
-  others signed in.
+- `services/microsoft/` — Microsoft sign-in code the two above run; each
+  has its own app registration, token and scope, so nothing about one's
+  account touches the other's, and signing out of one leaves the other
+  signed in.
 
 External providers go in
 `~/.config/omarchy/note-note/providers/<id>/Provider.qml` — a plain

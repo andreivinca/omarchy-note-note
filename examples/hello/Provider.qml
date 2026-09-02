@@ -19,6 +19,7 @@ Item {
   readonly property bool canReorder: false
   readonly property bool canCreateSection: false
   readonly property var microsoftScopes: []
+  readonly property string microsoftClientId: ""
 
   property var host: null
   property var services: null

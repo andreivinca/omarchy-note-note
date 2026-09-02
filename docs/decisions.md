@@ -69,22 +69,34 @@ contract already exists.
 
 ### Each provider signs in separately, sharing only code
 
-Sticky Notes and OneNote use the same Microsoft app registration and the same
-`msgraph.py`, but each has **its own token file and its own scopes**
-(`note-note-ms-<provider>.json`). Signing out of one leaves the other signed
-in. The cost is signing in twice; the benefit is that "everything separate"
-actually means separate. A token from before this split is adopted once into
-each provider's file so nobody had to re-authenticate.
+Sticky Notes and OneNote run the same `msgraph.py`, and nothing else about
+their sign-ins is shared: each has **its own app registration, its own
+token file and its own scopes** (`note-note-ms-<provider>.json`). Signing
+out of one leaves the other signed in. The cost is signing in twice; the
+benefit is that "everything separate" actually means separate. A token from
+before the token files split is adopted once into each provider's file so
+nobody had to re-authenticate.
 
-### One app registration, owned by the author
+### An app registration per provider, owned by the author
 
 Microsoft Graph has no anonymous access — someone must own an app
 registration. Making every user create one (the first implementation) was
-rejected as unusable; the registration is now the plugin's, exactly as rclone
-and Thunderbird do it. The client id is public by design for a public client
-and lives in `services/microsoft/msgraph.py`; users only sign in. A user who
-prefers their own registration can override it in
-`~/.config/omarchy/note-note.json`.
+rejected as unusable; the registrations are the author's, exactly as rclone
+and Thunderbird do it. A client id is public by design for a public client;
+users only sign in.
+
+There is one registration **per provider**, declared in its `Provider.qml`
+(`microsoftClientId`) beside the scopes it asks for. *Considered:* one
+registration for the plugin, which is how it started. *Rejected:* the two
+providers then share everything Microsoft attaches to a registration — its
+consent record, its permission list, and its throttling, which OneNote
+counts per app and user — so "nothing shared between providers" stopped
+being true at the one place a user cannot see. *Chosen:* a registration
+each, listing exactly what its provider does. A token is bound to the
+registration that issued it, so a provider whose registration changes
+simply asks for a sign-in again. A user who prefers a registration of their
+own gives it to one provider at a time in `~/.config/omarchy/note-note.json`,
+under `microsoft.<provider id>`.
 
 Notion is the opposite by necessity: its API has no public-client flow, so
 each user creates an internal integration and pastes the secret into the
@@ -274,13 +286,14 @@ that provider's lane. Neither layer waits out what the other already waited.
 ### A rate key per provider, not one budget for the host
 
 *Considered:* one shared `graph.microsoft.com` budget, since OneNote and
-Sticky Notes talk to the same host with the same app registration.
+Sticky Notes talk to the same host.
 *Rejected:* it couples them — a OneNote throttle would stop sticky notes
 saving, and the limits are nothing alike (OneNote 120/min and 400/hr; a
 mailbox far more). *Chosen:* a key each, with its own window, its own cooldown
-and its own lane. The cost is that a user who later splits the app
-registrations gets no benefit from it; the benefit is that one throttled
-backend never becomes three broken ones.
+and its own lane. Each provider also signs in through a registration of its
+own, and Microsoft counts per app and user, so the keys match the budgets
+Microsoft actually keeps; the benefit is that one throttled backend never
+becomes three broken ones.
 
 ### Admission by rolling count, not by a gap between requests
 

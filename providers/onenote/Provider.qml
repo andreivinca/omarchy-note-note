@@ -24,6 +24,10 @@ Item {
   // with the save (onenote.py).
   readonly property bool canImages: true
   readonly property var microsoftScopes: ["Notes.ReadWrite"]
+  // This provider's own app registration: an Entra public client for
+  // personal and work accounts, registered by the author, that every user
+  // of OneNote here signs in through. Sticky Notes has one of its own.
+  readonly property string microsoftClientId: "1ed713b0-195a-4360-88b4-993f3aeaa262"
 
   property var host: null
   property var services: null
@@ -31,7 +35,8 @@ Item {
   // (~/.config/notenote/config.json): each notebook a binder tab of its own
   // when true; the whole tree in one OneNote tab when false, the default.
   property bool notebookTabs: false
-  // This provider's own Microsoft sign-in: own token file, own scope.
+  // This provider's own Microsoft sign-in: own registration, own token file,
+  // own scope.
   property var ms: null
   // And its own request lane, keyed to its own Graph budget: everything below
   // goes through it, in order, and it parks whole when OneNote says it has
@@ -39,7 +44,7 @@ Item {
   // a lane of its own, so a OneNote throttle never reaches it.
   property var rq: null
   Component.onCompleted: {
-    if (services && services.microsoft) root.ms = services.microsoft.create(root.id, root.microsoftScopes)
+    if (services && services.microsoft) root.ms = services.microsoft.create(root.id, root.microsoftScopes, root.microsoftClientId)
     if (services && services.requests) root.rq = services.requests.queueFor("graph-onenote", root)
   }
   // A provider is destroyed and rebuilt when its settings change, and on
@@ -205,7 +210,7 @@ Item {
       root.viewRequested("New section in " + notebookName(root.newSectionNotebook), sectionView, {})
     }
     else if (id === "unavailable") root.noticeRequested("Microsoft sign-in is not configured in this build",
-      "This copy of Note Note has no Microsoft app registration built in (CLIENT_ID in services/microsoft/msgraph.py), so nobody can sign in yet.", "", [])
+      "This copy of Note Note has no app registration for OneNote built in (microsoftClientId in providers/onenote/Provider.qml), so nobody can sign in yet.", "", [])
   }
 
   function notebookName(id) {

@@ -10,10 +10,12 @@ Standard library only.
                                     then blocks; last line: {"ok":true,"account":...}
   msgraph.py logout
 
-The app registration is the plugin's own (CLIENT_ID below), registered once
-by the plugin author; users only sign in to their account. An optional
-~/.config/omarchy/note-note.json {"microsoft": {"clientId": ..., "tenant": ...}}
-overrides it, for people who prefer their own registration.
+The app registration is the provider's own (its `microsoftClientId`, handed
+in through the environment below), registered once by the plugin author;
+users only sign in to their account. An optional
+~/.config/omarchy/note-note.json
+{"microsoft": {"<provider id>": {"clientId": ..., "tenant": ...}}}
+gives one provider a registration of the user's own instead.
 """
 import json, os, sys, time, urllib.request, urllib.parse, urllib.error
 
@@ -26,17 +28,23 @@ CONFIG = os.path.join(os.environ.get("XDG_CONFIG_HOME", HOME + "/.config"), "oma
 STATE_DIR = os.path.join(os.environ.get("XDG_STATE_HOME", HOME + "/.local/state"), "omarchy")
 CACHE_DIR = os.path.join(os.environ.get("XDG_CACHE_HOME", HOME + "/.cache"), "omarchy")
 # Each provider signs in on its own: it points the script at its own token
-# file (NOTE_NOTE_MS_TOKEN) and asks only for its own scopes
-# (NOTE_NOTE_MS_SCOPES). The app registration and this code are shared.
+# file (NOTE_NOTE_MS_TOKEN), asks only for its own scopes (NOTE_NOTE_MS_SCOPES)
+# and names its own app registration (NOTE_NOTE_MS_CLIENT_ID) — Sticky Notes
+# and OneNote share this code and nothing else. NOTE_NOTE_MS_ACCOUNT is the
+# provider's id, under which CONFIG may hold a registration of the user's own.
 LEGACY_TOKENS = os.path.join(STATE_DIR, "note-note-ms-token.json")
 TOKENS = os.environ.get("NOTE_NOTE_MS_TOKEN") or LEGACY_TOKENS
-# Note Note's own public-client registration (Microsoft Entra, multi-tenant +
-# personal accounts, public client flows enabled, delegated Mail.ReadWrite,
-# User.Read, offline_access). Fill in once; every user signs in through it.
-CLIENT_ID = "e5652641-e704-4d1a-a62f-df67d7053a30"
+ACCOUNT = os.environ.get("NOTE_NOTE_MS_ACCOUNT", "")
+# The provider's public-client registration (Microsoft Entra: personal and
+# work accounts, public client flows enabled). Every user of that provider
+# signs in through it. Empty — no provider behind the call — and nobody can.
+CLIENT_ID = os.environ.get("NOTE_NOTE_MS_CLIENT_ID", "")
 TENANT = "common"
+# The one registration every token came from before each provider had its
+# own. A token that does not say who issued it is from there.
+LEGACY_CLIENT_ID = "e5652641-e704-4d1a-a62f-df67d7053a30"
 
-# Providers declare the scopes they need; the host passes the union in.
+# Providers declare the scopes they need; each passes only its own in.
 SCOPES = os.environ.get("NOTE_NOTE_MS_SCOPES", "offline_access User.Read")
 GRAPH = "https://graph.microsoft.com/v1.0"
 
@@ -110,9 +118,14 @@ def read_payload(path):
             return None
     return load_json(path, None)
 def config():
-    cfg = load_json(CONFIG, {}).get("microsoft", {})
-    client_id = cfg.get("clientId", "").strip() or CLIENT_ID
-    tenant = cfg.get("tenant", "").strip() or TENANT
+    """The registration this provider signs in through: its own, unless the
+    user gave it one of theirs under its id in CONFIG."""
+    entries = load_json(CONFIG, {}).get("microsoft", {})
+    own = entries.get(ACCOUNT, {}) if isinstance(entries, dict) and ACCOUNT else {}
+    if not isinstance(own, dict):
+        own = {}
+    client_id = str(own.get("clientId", "")).strip() or CLIENT_ID
+    tenant = str(own.get("tenant", "")).strip() or TENANT
     return client_id, tenant
 
 
@@ -208,11 +221,22 @@ def token_url(tenant):
     return "https://login.microsoftonline.com/%s/oauth2/v2.0/token" % tenant
 
 
+def signed_in(client_id):
+    """The token file, if it is a sign-in through `client_id`. A refresh
+    token works only with the registration that issued it, so a token from
+    another one — a provider given a registration of its own, or the user's
+    override changing — is no sign-in at all, and the provider asks again."""
+    tok = load_json(TOKENS, None)
+    if not tok or tok.get("client_id", LEGACY_CLIENT_ID) != client_id:
+        return None
+    return tok
+
+
 def access_token():
     client_id, tenant = config()
     if not client_id:
         fail("not configured")
-    tok = load_json(TOKENS, None)
+    tok = signed_in(client_id)
     if not tok:
         fail("not signed in")
     if tok.get("expires_at", 0) - 60 > time.time():
@@ -225,6 +249,7 @@ def access_token():
         fail("sign-in expired: %s" % res.get("error_description", res.get("error", status)))
     tok.update(res)
     tok["expires_at"] = time.time() + int(res.get("expires_in", 3600))
+    tok["client_id"] = client_id
     save_private(TOKENS, tok)
     return tok["access_token"]
 
@@ -253,7 +278,7 @@ def adopt_legacy_token():
 def cmd_status():
     adopt_legacy_token()
     client_id, _ = config()
-    tok = load_json(TOKENS, None) if client_id else None
+    tok = signed_in(client_id) if client_id else None
     out({"configured": bool(client_id), "signedIn": bool(tok), "account": (tok or {}).get("account", ""),
          "scope": (tok or {}).get("scope", "")})
 
@@ -277,6 +302,7 @@ def cmd_login():
         }, form=True)
         if status == 200 and "access_token" in tok:
             tok["expires_at"] = time.time() + int(tok.get("expires_in", 3600))
+            tok["client_id"] = client_id
             save_private(TOKENS, tok)
             s, me = graph("GET", "/me?$select=displayName,userPrincipalName,mail")
             tok["account"] = (me.get("mail") or me.get("userPrincipalName") or me.get("displayName") or "") if s == 200 else ""

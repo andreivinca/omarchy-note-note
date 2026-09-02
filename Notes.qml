@@ -38,8 +38,9 @@ Item {
   readonly property string externalProvidersDir: Quickshell.env("HOME") + "/.config/omarchy/note-note/providers"
   readonly property string statePath: Quickshell.env("HOME") + "/.local/state/omarchy/note-note.json"
   // Note-note's own settings — deliberately its own directory, not the
-  // omarchy/note-note.json above (that one stays the Microsoft clientId
-  // override). A raw JSON file the settings page reads and writes verbatim.
+  // omarchy/ ones (layout state above; ~/.config/omarchy/note-note.json stays
+  // the per-provider Microsoft registration override). A raw JSON file the
+  // settings page reads and writes verbatim.
   readonly property string configDir: Quickshell.env("HOME") + "/.config/notenote"
   readonly property string configPath: root.configDir + "/config.json"
 
@@ -165,16 +166,18 @@ Item {
   Timer { id: statusTimer; interval: 3500; onTriggered: root.statusText = "" }
 
   // ── services & providers ────────────────────────────────────────────
-  // Providers get their own Microsoft sign-in (own token, own scopes) from
-  // the shared service code: services.microsoft.create(providerId, scopes).
+  // Providers get their own Microsoft sign-in (own registration, own token,
+  // own scopes) from the shared service code:
+  // services.microsoft.create(providerId, scopes, clientId).
   property var accounts: []
   function copyText(s) { Quickshell.execDetached(["sh", "-c", 'printf %s "$1" | wl-copy', "sh", s]) }
-  function createMicrosoftAccount(owner, scopes) {
+  function createMicrosoftAccount(owner, scopes, clientId) {
     // A provider recreated on a settings change asks for its account again;
     // the one its old instance left behind would otherwise stay in the list,
     // costing a status process on every open for nobody.
     root.accounts = root.accounts.filter(function(a) { if (a.owner !== owner) return true; a.destroy(); return false })
-    var acc = accountComponent.createObject(root, { owner: owner, scopes: ["offline_access", "User.Read"].concat(scopes || []).join(" ") })
+    var acc = accountComponent.createObject(root, { owner: owner, clientId: clientId || "",
+                                                    scopes: ["offline_access", "User.Read"].concat(scopes || []).join(" ") })
     acc.codeReceived.connect(function(code, uri) {
       editor.showNotice("Sign in to Microsoft for " + owner,
         "Open " + uri + " in a browser, enter this code, and sign in with your Microsoft account. This screen updates by itself once you are done.", code,
@@ -235,7 +238,7 @@ Item {
   // Pasting a picture into a note; only providers that can store one take it.
   Clipboard.Clipboard { id: clipboardService }
   readonly property var services: ({
-    microsoft: { create: function(owner, scopes) { return root.createMicrosoftAccount(owner, scopes) } },
+    microsoft: { create: function(owner, scopes, clientId) { return root.createMicrosoftAccount(owner, scopes, clientId) } },
     requests: { queueFor: function(key, provider) { return root.queueFor(key, provider) },
                 cancelOwner: function(owner) { root.cancelQueuedFor(owner) } }
   })

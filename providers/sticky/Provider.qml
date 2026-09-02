@@ -17,17 +17,22 @@ Item {
   readonly property bool canReorder: false
   readonly property bool canCreateSection: false
   readonly property var microsoftScopes: ["Mail.ReadWrite"]
+  // This provider's own app registration: an Entra public client for
+  // personal and work accounts, registered by the author, that every user
+  // of Sticky Notes here signs in through. OneNote has one of its own.
+  readonly property string microsoftClientId: "867770a1-477d-4864-9e09-8e3019ca336c"
 
   property var host: null
   property var services: null
-  // This provider's own Microsoft sign-in: own token file, own scope.
+  // This provider's own Microsoft sign-in: own registration, own token file,
+  // own scope.
   property var ms: null
   // And its own request lane. Mail's limits are far above OneNote's, so this
   // lane exists mostly to keep sticky notes moving *while* OneNote is parked:
   // separate keys, separate cooldowns (providers/PROVIDERS.md).
   property var rq: null
   Component.onCompleted: {
-    if (services && services.microsoft) root.ms = services.microsoft.create(root.id, root.microsoftScopes)
+    if (services && services.microsoft) root.ms = services.microsoft.create(root.id, root.microsoftScopes, root.microsoftClientId)
     if (services && services.requests) root.rq = services.requests.queueFor("graph-mail", root)
   }
   Component.onDestruction: { if (services && services.requests) services.requests.cancelOwner(root) }
@@ -92,7 +97,7 @@ Item {
       [{ label: "Sign out", action: function() { root.noticeCleared(); ms.logout() } },
        { label: "Cancel", action: function() { root.noticeCleared() } }])
     else if (id === "unavailable") root.noticeRequested("Microsoft sign-in is not configured in this build",
-      "This copy of Note Note has no Microsoft app registration built in (CLIENT_ID in services/microsoft/msgraph.py), so nobody can sign in yet.", "", [])
+      "This copy of Note Note has no app registration for Sticky Notes built in (microsoftClientId in providers/sticky/Provider.qml), so nobody can sign in yet.", "", [])
   }
 
   function refresh() {
