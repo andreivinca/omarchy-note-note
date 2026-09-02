@@ -127,7 +127,10 @@ Item {
     var id = idOf(path), cached = root.bodies[id], pg = pageAt(path)
     if (cached && (!pg || cached.version === (pg.edited || ""))) { cb({ title: cached.title, body: cached.body, editable: cached.editable, version: cached.version || "" }); return }
     if (!root.rq) { cb({ error: "not ready" }); return }
-    root.rq.enqueue({ key: "load:" + path, mode: "dedupe", priority: 0, owner: root, label: "page" },
+    // The handle goes back to the caller: the host withdraws the load of a
+    // note the user has stepped past, so the one they stopped on is not
+    // stuck queueing behind it.
+    return root.rq.enqueue({ key: "load:" + path, mode: "dedupe", priority: 0, owner: root, label: "page" },
       function(ctx) { root.runScript(["page", id], "", ctx) },
       function(r) {
         if (!r) { if (cb) cb({ error: "not loaded — the window closed" }); return }

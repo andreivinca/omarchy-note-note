@@ -415,8 +415,10 @@ Item {
     if (cached && (!pg || cached.version === (pg.modified || ""))) { cb({ title: cached.title, body: cached.body, editable: cached.editable, version: cached.version || "" }); return }
     if (!root.rq) { cb({ error: "not ready" }); return }
     // dedupe: asking for the same page twice before it arrives is one read,
-    // and both askers are answered from it.
-    root.rq.enqueue({ key: "load:" + path, mode: "dedupe", priority: 0, owner: root, label: "page" },
+    // and both askers are answered from it. The handle goes back to the
+    // caller: the host withdraws the load of a note the user has stepped
+    // past, so the one they stopped on is not stuck queueing behind it.
+    return root.rq.enqueue({ key: "load:" + path, mode: "dedupe", priority: 0, owner: root, label: "page" },
       function(ctx) { root.runScript(["page", id], "", ctx) },
       function(r) {
         if (!r) { if (cb) cb({ error: "not loaded — the window closed" }); return }

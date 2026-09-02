@@ -25,6 +25,9 @@ Item {
   // built twice, once with drag areas and buttons nobody can see.
   property var model: []
   property string currentPath: ""
+  // The keyboard cursor when it rests on a section row instead of the open
+  // note: that tree row's path, "" otherwise (see the host's treeCursor).
+  property string treeCursor: ""
   property bool filtering: false
   // Providers are still answering the content search; the search panel says
   // so instead of a premature "No match" (see the host's searchBusy).
@@ -235,7 +238,9 @@ Item {
               height: root.rowHeight - Style.spacing.xxs
               anchors.verticalCenter: parent.verticalCenter
               radius: root.rowRadius
-              readonly property bool current: slot.isNote && slot.modelData.path === root.currentPath
+              readonly property bool current: slot.isNote
+                ? slot.modelData.path === root.currentPath
+                : slot.isTree && slot.modelData.path === root.treeCursor
               color: current || rowHover.hovered ? Style.hoverFill : "transparent"
               // Action rows ("New note…", sign in/out, settings) are dimmed so
               // notes stand out from the things you can do; hover lifts them.

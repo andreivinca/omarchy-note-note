@@ -258,8 +258,24 @@ Item {
   // cannot exceed the cap, and a FIFO cannot hold the queue.
   property var loadQueue: []
   function load(path, cb) {
-    root.loadQueue.push({ path: path, cb: cb })
+    var job = { path: path, cb: cb }
+    root.loadQueue.push(job)
     if (!readProc.running) nextRead()
+    return { cancel: function() { root.cancelRead(job) } }
+  }
+  // Only a read that has not started can be withdrawn — the running one is
+  // loadQueue[0], and its own result answers it. The withdrawn caller is
+  // still answered: every load is, exactly once.
+  function cancelRead(job) {
+    var at = root.loadQueue.indexOf(job)
+    if (at < 0) {
+      return
+    }
+    if (at === 0 && readProc.running) {
+      return
+    }
+    root.loadQueue.splice(at, 1)
+    job.cb({ error: "cancelled" })
   }
   function nextRead() {
     if (root.loadQueue.length === 0) return

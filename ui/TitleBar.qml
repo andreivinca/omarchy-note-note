@@ -29,6 +29,10 @@ Item {
   // (KeyEvent) -> bool, the host's shortcuts — run before the field's own
   // key handling, so ctrl+n in the search still makes a note.
   property var shortcutHandler: null
+  // The bar sits flush against the top of whatever hosts it. In the overlay
+  // that host is a rounded card whose border is painted under the content,
+  // so the bar's top corners must curve with it or they square it off.
+  property real cornerRadius: 0
 
   signal filterEdited(string text)
   signal clearRequested()
@@ -53,6 +57,8 @@ Item {
   Rectangle {
     anchors.fill: parent
     color: root.fill
+    topLeftRadius: root.cornerRadius
+    topRightRadius: root.cornerRadius
   }
 
   Rectangle {

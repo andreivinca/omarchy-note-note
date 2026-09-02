@@ -81,6 +81,13 @@ them.
 
 - `refresh()` — (re)load; emit `changed` when `sections` are ready.
 - `load(path, cb)` → `cb({ title, body, editable, error, base })`
+  May return a handle `{ cancel() }` — `services.requests`' `enqueue()` hands
+  you one. The host cancels the load of a note the user has already stepped
+  past (Ctrl+↑/↓ through a slow provider), so the note they stopped on is not
+  stuck queueing behind every note they crossed. Cancelling withdraws only a
+  read that has not started; one in flight is delivered normally. Answer the
+  withdrawn `cb` too (the queue's cancelled answer counts): every load is
+  answered exactly once. Return nothing when the answer is immediate.
   `base` (optional) is the note's own directory, for a provider whose notes
   name their images by a relative path (the local provider's `.assets/`):
   the editor resolves the links against it and the converter measures the

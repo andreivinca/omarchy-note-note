@@ -75,6 +75,11 @@ Item {
   property bool dirty: false
   property string currentCrumb: ""
   property string loadingPath: ""
+  // The pending load's cancel handle — null when there is none, or when the
+  // provider answered without one (a cache hit, a sync provider). Cancelling
+  // withdraws only a read still queued in the provider's lane; one already in
+  // flight lands anyway, and the path guard on its callback drops it.
+  property var loadHandle: null
 
   // Shares the [menu] surface tokens, so a theme that styles the launcher
   // styles this too.
@@ -82,6 +87,13 @@ Item {
   property color foreground: Color.menu.text
   property color borderColor: Color.menu.border
   property var borderSpec: Border.surfaceSpec("menu", "border", borderColor, Math.max(1, Style.space(2)))
+  // The overlay card paints its rounded background and border under the
+  // content, and clips nothing: chrome that sits flush in a corner would
+  // square it off. So the flush pieces round their own corners to nest
+  // inside the border's arc — the card's radius minus the border they are
+  // inset by. Zero when detached: there the window is square and the
+  // compositor does the rounding.
+  readonly property real chromeRadius: detached ? 0 : Math.max(0, Style.cornerRadius - Math.max(1, Style.space(2)))
 
   property color scrim: Color.menu.scrim
   property color accent: Color.accent
@@ -800,7 +812,7 @@ Item {
     if (!p) return
     root.loadingNote = true
     root.loadedVersion = versionOf(path)
-    p.load(path, function(r) {
+    root.loadHandle = p.load(path, function(r) {
       if (root.currentPath !== path) return
       if (r.error) { root.loadingNote = false; root.loadFailed = true; return }
       root.loadFailed = false
@@ -812,7 +824,7 @@ Item {
       root.loadingNote = false
       root.dirty = false
       showStatus(p.name + ": reloaded, changed elsewhere")
-    })
+    }) || null
   }
   // A note is "in" its provider while a section shows its row — or holds it
   // in `notes`, the section's searchable whole: a folded tree hides the row
@@ -937,7 +949,23 @@ Item {
   }
 
   // ── selection ───────────────────────────────────────────────────────
+  // Withdraws the load the editor is waiting on, for when its answer no
+  // longer matters: the user has stepped to another note, and a read the
+  // queue still holds for the old one would only make the new one wait its
+  // turn. Cancelling a load that already answered is a no-op by the queue's
+  // design, so a stale handle is harmless.
+  function cancelLoad() {
+    var h = root.loadHandle
+    root.loadHandle = null
+    if (h) {
+      h.cancel()
+    }
+  }
+
   function selectPath(path) {
+    // Any selection pulls the list's keyboard cursor back to the note —
+    // a click, a search landing, a tab switch putting the note away.
+    root.treeCursor = ""
     // Any real selection — the user's or the first-open pick itself — ends
     // the first-open window (see rebuildRows).
     if (path) root.pickedInitial = true
@@ -948,6 +976,10 @@ Item {
     editor.clearNotice()
     root.loadingNote = true
     root.currentPath = path
+    // Cancelled only now, after currentPath moved on: the cancelled answer —
+    // or an in-flight read landing late — hits the path guard below and is
+    // dropped, instead of reading as a failure of the note being opened.
+    root.cancelLoad()
     root.currentCrumb = crumbOf(path)
     editor.readOnly = false
     editor.documentBase = ""
@@ -956,7 +988,7 @@ Item {
     editor.setNote("", "")
     editor.readOnly = true
     root.loadedVersion = ""
-    p.load(path, function(r) {
+    root.loadHandle = p.load(path, function(r) {
       if (root.currentPath !== path) return
       root.loadingPath = ""
       if (r.error) { root.loadingNote = false; root.loadFailed = true; showStatus(p.name + ": " + r.error); return }
@@ -967,21 +999,76 @@ Item {
       editor.readOnly = r.editable === false
       root.loadingNote = false
       root.dirty = false
-    })
+    }) || null
   }
+
+  // The list's keyboard cursor. Usually it is the open note; Ctrl+up/down
+  // stepping onto a section row (kind "tree") parks it there instead — the
+  // note stays open in the editor, only the highlight travels. Any real
+  // selection pulls the cursor back to the note (selectPath).
+  property string treeCursor: ""
 
   function moveSelection(delta) {
     var idx = [], cur = -1
     for (var i = 0; i < root.rows.length; i++) {
-      if (root.rows[i].kind !== "note") continue
-      if (root.rows[i].path === root.currentPath) cur = idx.length
+      var r = root.rows[i]
+      if (r.kind !== "note" && r.kind !== "tree") { continue }
+      if (atCursor(r)) { cur = idx.length }
       idx.push(i)
     }
-    if (idx.length === 0) return
+    if (idx.length === 0) { return }
     var next = (cur + delta + idx.length) % idx.length
-    if (cur < 0) next = delta < 0 ? idx.length - 1 : 0
-    selectPath(root.rows[idx[next]].path)
+    if (cur < 0) { next = delta < 0 ? idx.length - 1 : 0 }
+    var row = root.rows[idx[next]]
+    if (row.kind === "tree") { root.treeCursor = row.path }
+    else { selectPath(row.path) }
     list.positionViewAtIndex(idx[next], ListView.Contain)
+  }
+  function atCursor(r) {
+    if (root.treeCursor) { return r.kind === "tree" && r.path === root.treeCursor }
+    return r.kind === "note" && r.path === root.currentPath
+  }
+  function treeCursorIndex() {
+    if (!root.treeCursor) { return -1 }
+    for (var i = 0; i < root.rows.length; i++) {
+      if (root.rows[i].kind === "tree" && root.rows[i].path === root.treeCursor) { return i }
+    }
+    return -1
+  }
+  // Ctrl+Right opens the section under the cursor. Only that: with the
+  // cursor on a note the key stays the editor's (jump a word right).
+  function openTreeCursor() {
+    var i = treeCursorIndex()
+    if (i < 0) { return false }
+    if (!root.rows[i].expanded) { treeToggle(root.rows[i].path) }
+    return true
+  }
+  // Ctrl+Left walks up the tree: an open section closes, a closed one
+  // yields to its parent, and from a note the cursor jumps to the section
+  // that holds it. A note with no section above it leaves the key to the
+  // editor.
+  function closeTreeCursor() {
+    var i = treeCursorIndex()
+    if (i >= 0) {
+      if (root.rows[i].expanded) { treeToggle(root.rows[i].path) }
+      else { cursorToParent(i) }
+      return true
+    }
+    var n = rowIndexOf(root.currentPath)
+    return n >= 0 && cursorToParent(n)
+  }
+  // The parent of rows[i]: the nearest section row above it a level up.
+  function cursorToParent(i) {
+    var level = root.rows[i].level || 0
+    for (var j = i - 1; j >= 0; j--) {
+      var r = root.rows[j]
+      if (r.kind === "tree" && (r.level || 0) < level) {
+        root.treeCursor = r.path
+        list.positionViewAtIndex(j, ListView.Contain)
+        return true
+      }
+    }
+    return false
   }
 
   // ── create / delete ─────────────────────────────────────────────────
@@ -1079,6 +1166,13 @@ Item {
     if (ctrl && event.key === Qt.Key_D) { root.requestDelete(root.currentPath); return true }
     if (ctrl && (event.key === Qt.Key_Down || event.key === Qt.Key_J)) { root.moveSelection(1); return true }
     if (ctrl && event.key === Qt.Key_Up) { root.moveSelection(-1); return true }
+    // Ctrl+left/right drive the section tree the cursor is on. Shift and Alt
+    // stay out so select-word survives, and a press with nothing to do (a
+    // note with no parent) falls through to the editor's word jump.
+    if (ctrl && !(event.modifiers & (Qt.ShiftModifier | Qt.AltModifier))) {
+      if (event.key === Qt.Key_Right && root.openTreeCursor()) { return true }
+      if (event.key === Qt.Key_Left && root.closeTreeCursor()) { return true }
+    }
     // Ctrl+Tab walks the binder, the way Ctrl+up/down walks the notes in it.
     // Shift+Tab arrives as Key_Backtab on some layouts and as Key_Tab on others.
     if (ctrl && (event.key === Qt.Key_Tab || event.key === Qt.Key_Backtab)) {
@@ -1237,6 +1331,7 @@ Item {
         activeKey: root.revision < 0 ? "" : root.activeKey()
         detached: root.detached
         settingsOpen: root.settingsOpen
+        cornerRadius: root.chromeRadius
         background: root.background
         foreground: root.foreground
         accent: root.accent
@@ -1271,6 +1366,7 @@ Item {
           height: parent.height
           model: root.rows
           currentPath: root.currentPath
+          treeCursor: root.treeCursor
           filtering: root.filterText.length > 0
           searchBusy: root.searchBusy
           sections: root.tabs
@@ -1386,6 +1482,7 @@ Item {
       ViewBar {
         id: viewBar
         width: parent.width
+        cornerRadius: root.chromeRadius
         sourceName: root.sourceName
         sourceLogo: root.sourceLogo
         sourceInk: root.sourceInk

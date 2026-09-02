@@ -48,12 +48,18 @@ Item {
   property color foreground: Color.menu.text
   property color accent: Color.accent
   property string fontFamily: Style.font.menuFamily
+  // The bar sits flush along the bottom of whatever hosts it. In the overlay
+  // that host is a rounded card whose border is painted under the content,
+  // so the bar's bottom corners must curve with it or they square it off.
+  property real cornerRadius: 0
 
   height: Style.space(26)
 
   Rectangle {
     anchors.fill: parent
     color: Qt.tint(root.background, Util.alpha(root.foreground, 0.015))
+    bottomLeftRadius: root.cornerRadius
+    bottomRightRadius: root.cornerRadius
   }
 
   Rectangle {
@@ -78,6 +84,7 @@ Item {
     // every theme has.
     color: root.sourceBase.a > 0 ? Util.alpha(root.sourceBase, 0.16)
                                  : Util.alpha(root.foreground, 0.05)
+    bottomLeftRadius: root.cornerRadius
   }
 
   Image {
