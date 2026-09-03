@@ -11,14 +11,14 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import mistune  # noqa: E402
-from mistune.plugins.formatting import _parse_to_end  # noqa: E402
 
 UNDERLINE_PATTERN = r"(?<![\w_])_(?!\s)(?:\\_|[^_\n])+?(?<!\s)_(?![\w_])"
 
 
 def _parse_underline(inline, m, state):
-    # Reuse mistune's delimited-span parser; marker is "_", one character.
-    pos = m.start() + 1
+    # UNDERLINE_PATTERN has already matched both delimiters, so the body is
+    # simply what lies between them; re-rendering it as inline content is what
+    # keeps *bold*, `code` and links working inside an underline.
     text = m.group(0)[1:-1]
     new_state = state.copy()
     new_state.src = text

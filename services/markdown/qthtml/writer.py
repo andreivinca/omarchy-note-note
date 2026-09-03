@@ -265,7 +265,7 @@ class _Renderer:
         if width:
             return ' width="%d"' % width
         natural = width_of(local_path(url, self.base))
-        return ' width="%d"' % dialect.MAX_IMAGE_DISPLAY if natural > dialect.MAX_IMAGE_DISPLAY else ""
+        return (' width="%d"' % dialect.MAX_IMAGE_DISPLAY) if natural > dialect.MAX_IMAGE_DISPLAY else ""
 
     def span(self, style, body):
         return '<span style="%s">%s</span>' % (style, body)

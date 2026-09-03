@@ -17,8 +17,12 @@
 
 ```
 manifest.json               plugin id, kinds: ["overlay"], entry point, keepLoaded
+pyproject.toml              the Python floor, the empty dependency list, and ruff;
+                            nothing is built or installed from it
 Notes.qml                   the host
 lib/ratelimit.py            cross-process request pacing (+ its selftest)
+lib/provider_io.py          the JSON error/IO shape every provider answers with,
+                            and the one table saying which HTTP statuses retry
 ui/TitleBar.qml             the title bar, browser-shaped: the binder's tabs
                             from the left, search and window actions at the right
 ui/TabStrip.qml             the binder's tabs across the title bar

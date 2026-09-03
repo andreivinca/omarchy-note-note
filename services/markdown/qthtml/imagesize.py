@@ -18,7 +18,19 @@ def local_path(url, base=""):
     if url.startswith("file://"):
         return urllib.parse.unquote(url[len("file://"):])
     if base and "://" not in url and not url.startswith(("/", "data:")):
-        return os.path.join(base, urllib.parse.unquote(url))
+        # `../../x.png`, and `%2Fetc%2Fpasswd`, which unquotes to an absolute
+        # path after the test above has already let it through. Both are held
+        # off by normalising the relative half and refusing one that climbs
+        # out or was never relative. This keeps a property rather than closing
+        # a hole: the src was typed by the user into their own note, names a
+        # file they can already read as themselves, and all that leaves here
+        # is a width — but "an image reference cannot escape the note's
+        # directory" is cheaper to keep than to re-establish later, once
+        # something else has started trusting the answer.
+        rel = os.path.normpath(urllib.parse.unquote(url))
+        if not os.path.isabs(rel) and rel != os.pardir \
+                and not rel.startswith(os.pardir + os.sep):
+            return os.path.join(base, rel)
     return ""
 
 

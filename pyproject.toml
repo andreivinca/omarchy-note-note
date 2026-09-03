@@ -1,0 +1,51 @@
+# Note Note is an Omarchy shell plugin, not a distributable package: nothing
+# installs from this file and there is deliberately no [build-system] table.
+# It is here to state, once and in a place a tool can read, the two things
+# that were previously only inferable from 6,500 lines of source — which
+# Python the scripts are written against, and that the empty dependency list
+# is a rule rather than an accident.
+#
+# The review that asked for this file (docs/future/python-review-fixes.md, §5)
+# made the case concretely: `getattr(st, "st_birthtime", 0)` shipped for as
+# long as providers/local/list.py existed, and nothing in the repository was
+# ever in a position to say a word about it.
+
+[project]
+name = "note-note"
+version = "1.0.8"
+description = "Notes for the Omarchy shell: your Markdown notebooks on disk alongside Microsoft Sticky Notes, OneNote and Notion."
+# Nothing in the tree uses syntax newer than 3.8 — no match statement, no
+# walrus, no PEP 604 unions — so the floor is set by what is still supported
+# rather than by what the code needs.
+requires-python = ">=3.9"
+# Empty, and enforced. These scripts are run by the shell plugin against
+# whatever Python the system provides; there is no virtualenv to install into,
+# so "add a dependency" is never the smaller change it looks like.
+dependencies = []
+
+[tool.ruff]
+line-length = 120
+target-version = "py39"
+# Vendored upstream. Both reviews excluded it; so does the linter.
+exclude = ["services/markdown/mistune"]
+
+[tool.ruff.lint]
+# Pyflakes (F) is the half that earns its keep: an undefined name or a stale
+# import in a script that only runs on a user's machine is a crash nobody sees
+# until they reach that one command. The pycodestyle rules are narrowed to the
+# error classes (E4 imports, E7 statements, E9 syntax) because the formatting
+# in this repository is deliberate and is not a linter's to have an opinion on
+# — E501 in particular stays off, since the long lines are long on purpose.
+select = ["E4", "E7", "E9", "F"]
+ignore = [
+    # `import json, os, sys, time` is the house style in every provider
+    # script. It is not changing, and flagging it on every run would only
+    # teach the next reader to stop looking at the output.
+    "E401",
+    # `for l in ...` reads as "line" consistently across the tree, and the
+    # semicolon pairs are compact steps inside the two Markdown renderers'
+    # tightest loops. Both are settled local conventions rather than defects,
+    # and a linter that reopens them buries the findings that are.
+    "E741",
+    "E702",
+]

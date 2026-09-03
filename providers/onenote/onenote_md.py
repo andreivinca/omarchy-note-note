@@ -282,9 +282,6 @@ class Converter:
                 self.lines.append("")
             self.last = None
             return
-        if t == "img":
-            self.lines.append(self.inline(Node("span", children_of=None) if False else _wrap(node)).strip())
-            return
         if t in LOSSY_TAGS:
             self.editable = False
             self.lines.append("[unsupported: %s]" % t)
@@ -414,8 +411,8 @@ def html_to_markdown(html, image_path_for=None):
 # Markdown is parsed by the vendored mistune (services/markdown/parse.py);
 # this is only the renderer into the HTML OneNote accepts.
 
-import os as _os
-import sys as _sys
+import os as _os  # noqa: E402
+import sys as _sys  # noqa: E402
 _sys.path.insert(0, _os.path.join(_os.path.dirname(_os.path.abspath(__file__)), "..", "..", "services", "markdown"))
 from parse import parse as _parse  # noqa: E402
 

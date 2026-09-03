@@ -20,7 +20,8 @@ sys.path.insert(0, os.path.join(HERE, "..", "..", "lib"))
 sys.path.insert(0, HERE)
 import msgraph  # noqa: E402
 import ratelimit  # noqa: E402
-from msgraph import graph, http, fail, fail_throttled, out, load_json, save_private, read_payload, access_token, CACHE_DIR, GRAPH  # noqa: E402
+from msgraph import (graph, http, fail, fail_throttled, fail_transient, out, load_json, save_private,  # noqa: E402
+                     read_payload, access_token, THROTTLED_STATUSES, TRANSIENT_STATUSES, CACHE_DIR, GRAPH)
 import onenote_md  # noqa: E402
 
 # OneNote's own Graph budget, shared with no other provider: a throttle here
@@ -51,35 +52,54 @@ MAX_NEW_IMAGES = 4
 
 
 
-def graph_raw(method, path, data=None, content_type=None, extra_headers=None, max_bytes=MAX_PAGE_HTML):
+def graph_raw(method, path, data=None, content_type=None, extra_headers=None,
+              max_bytes=MAX_PAGE_HTML, transient_5xx=True):
     """Graph call with a non-JSON body (OneNote HTML) and a text response.
 
-    Paced and retried by the same loop as `msgraph.http()` — this used to be
-    a second copy of it, and the two drifted.
+    Paced and retried by the same loop as `msgraph.http()`, and classifying
+    statuses out of the same two names — this used to be a second copy of it,
+    and the two drifted.
+
+    `transient_5xx` is on for every caller but one. A 500 from Graph is
+    normally the far end having a bad moment and worth running the job again;
+    the exception is the title replace in `cmd_onenote_update`, which knows
+    its 500 is the same answer every time and has somewhere better to put it.
     """
-    headers = {"Authorization": "Bearer " + access_token()}
-    if content_type:
-        headers["Content-Type"] = content_type
-    headers.update(extra_headers or {})
     url = path if path.startswith("http") else GRAPH + path
-    req = urllib.request.Request(url, data=data, method=method, headers=headers)
 
-    def once():
-        try:
-            with urllib.request.urlopen(req, timeout=60) as r:
-                raw = r.read(max_bytes + 1)
-                if len(raw) > max_bytes:
-                    fail("response larger than %d bytes" % max_bytes)
-                return r.status, raw.decode(errors="replace")
-        except urllib.error.HTTPError as e:
-            body = e.read(max_bytes + 1)[:max_bytes].decode(errors="replace")
-            if e.code in (429, 503):
-                raise ratelimit.Retry(msgraph.wait_asked_by(e))
-            return e.code, body
-        except urllib.error.URLError as e:
-            fail("network error: %s" % e.reason)
+    def send(force):
+        headers = {"Authorization": "Bearer " + access_token(force)}
+        if content_type:
+            headers["Content-Type"] = content_type
+        headers.update(extra_headers or {})
+        req = urllib.request.Request(url, data=data, method=method, headers=headers)
 
-    return ratelimit.attempt_loop(msgraph.rate_key_for(url), msgraph.RATE_WINDOWS, once)
+        def once():
+            try:
+                with urllib.request.urlopen(req, timeout=60) as r:
+                    raw = r.read(max_bytes + 1)
+                    if len(raw) > max_bytes:
+                        fail("response larger than %d bytes" % max_bytes)
+                    return r.status, raw.decode(errors="replace")
+            except urllib.error.HTTPError as e:
+                body = e.read(max_bytes + 1)[:max_bytes].decode(errors="replace")
+                if e.code in THROTTLED_STATUSES:
+                    raise ratelimit.Retry(msgraph.wait_asked_by(e))
+                if transient_5xx and e.code in TRANSIENT_STATUSES:
+                    fail_transient(e.code, body)
+                return e.code, body
+            except urllib.error.URLError as e:
+                fail("network error: %s" % e.reason)
+
+        return ratelimit.attempt_loop(msgraph.rate_key_for(url), msgraph.RATE_WINDOWS, once)
+
+    status, body = send(False)
+    if status == 401:
+        # As in `msgraph.graph()`: a 401 on a token the disk still calls valid
+        # is a grant revoked at Microsoft's end, and only a forced refresh can
+        # tell that apart from a token that simply needed renewing.
+        status, body = send(True)
+    return status, body
 
 
 def graph_err(res, status):
@@ -207,16 +227,27 @@ def cmd_onenote_list(cached, max_age=0, force=False):
     # the pacer holds the total to four requests in flight.
     from concurrent.futures import ThreadPoolExecutor, as_completed
 
-    token = access_token()  # refresh once, not from four threads at a time
+    # Refresh once, not from four threads at a time. This token needs no
+    # revoked-grant pass of its own: the sections `graph()` above already made
+    # a request on it and forced a refresh if that came back 401, so by the
+    # time the pool starts the sign-in has been proved good.
+    token = access_token()
 
     def section_pages(sct):
         found = []
         url = section_pages_url(sct["id"])
         while url and len(found) < MAX_PAGES:
+            # A worker must not answer for the whole run: `fail()` writes the
+            # one JSON line and exits, and doing that from inside the pool
+            # would step over the other three threads' stdout *and* jump the
+            # `listing.save(False)` below, throwing away every section already
+            # fetched. So the classification is carried back instead.
             status, res = http("GET", url if url.startswith("http") else GRAPH + url, headers={
-                "Authorization": "Bearer " + token, "Accept": "application/json"}, max_bytes=MAX_LIST_BODY)
+                "Authorization": "Bearer " + token, "Accept": "application/json"},
+                max_bytes=MAX_LIST_BODY, transient_5xx=False)
             if status != 200:
-                return {"error": graph_err(res, status)}
+                return {"error": graph_err(res, status),
+                        "kind": "transient" if status in TRANSIENT_STATUSES else None}
             for pg in res.get("value", []):
                 found.append({"id": pg["id"], "title": pg.get("title", "") or "",
                               "sectionId": sct["id"], "modified": pg.get("lastModifiedDateTime", "")})
@@ -224,14 +255,14 @@ def cmd_onenote_list(cached, max_age=0, force=False):
         return found
 
     if todo:
-        error = ""
+        error, error_kind = "", None
         try:
             with ThreadPoolExecutor(max_workers=4) as pool:
                 futures = dict((pool.submit(section_pages, sct), sct) for sct in todo)
                 for future in as_completed(futures):
                     result = future.result()
                     if isinstance(result, dict):
-                        error = result["error"]
+                        error, error_kind = result["error"], result.get("kind")
                         break
                     listing.record(futures[future], result)
                     listing.checkpoint()
@@ -242,8 +273,11 @@ def cmd_onenote_list(cached, max_age=0, force=False):
             listing.save(False)
             raise
         if error:
+            # Whatever went wrong, what did arrive is kept first — the same
+            # bargain the `Throttled` path above makes, and the reason a run
+            # after a failure fetches only the tail.
             listing.save(False)
-            fail(error)
+            fail(error, kind=error_kind)
 
     listing.save(True)
     out({"sections": sections, "pages": listing.pages(), "cached": False})
@@ -420,6 +454,9 @@ def cached_image(src, width=0):
         os.remove(path)                  # a failed fetch left a stub
     except OSError:
         pass
+    # No revoked-grant pass of its own, for the reason the listing pool has
+    # none: the only caller is `cmd_onenote_page`, whose `graph_raw` fetch of
+    # the page content has already met any 401 and forced the refresh.
     req = urllib.request.Request(src, headers={"Authorization": "Bearer " + access_token()})
     fd, tmp = tempfile.mkstemp(prefix=".", suffix=".tmp", dir=ONENOTE_IMG_DIR)   # fresh, 0600, never a symlink
     pause = 0.0        # a throttle met here, recorded once the slot is released
@@ -575,11 +612,17 @@ def multipart(commands, parts):
 
 
 def patch_page(url, commands, parts):
+    # A save that carries no parts is a set of `replace` commands against
+    # known ids: running it twice leaves the page exactly as running it once
+    # does, so a 5xx may re-run the job. A save that *does* carry parts is
+    # uploading images, `remember_staged` only records them once the PATCH is
+    # answered, and a re-run would put the same pictures on the page a second
+    # time. So the upload path takes its failure as it stands.
     if parts:
         content_type, body = multipart(commands, parts)
     else:
         content_type, body = "application/json", json.dumps(commands).encode()
-    return graph_raw("PATCH", url, body, content_type)
+    return graph_raw("PATCH", url, body, content_type, transient_5xx=not parts)
 
 
 def wrap_runs(runs):
@@ -761,11 +804,15 @@ def cmd_onenote_update(page_id, path):
 
     # The title goes in its own request, and only when it changed: on some
     # (older) pages Graph answers a title replace with a 500 "Transient
-    # error" every time, and bundling it would sink the body save too.
+    # error" every time, and bundling it would sink the body save too. That
+    # "every time" is also why this one call turns the transient kind off —
+    # the body is already saved, and re-running the whole save three more
+    # times would only spend three more saves arriving at this same warning.
     warning = ""
     if "title" in payload and payload["title"] != payload.get("originalTitle", payload["title"]):
         ops = [{"target": "title", "action": "replace", "content": _html.escape(payload["title"])}]
-        status, res = graph_raw("PATCH", url, json.dumps(ops).encode(), "application/json")
+        status, res = graph_raw("PATCH", url, json.dumps(ops).encode(), "application/json",
+                                transient_5xx=False)
         if status not in (200, 204):
             try:
                 warning = "title not saved: " + graph_err(json.loads(res), status)
@@ -798,8 +845,10 @@ def cmd_onenote_create(section_id, path):
         content_type, payload_bytes = "multipart/form-data; boundary=" + boundary, b"".join(body)
     else:
         content_type, payload_bytes = "application/xhtml+xml", html.encode()
+    # A 502 or a 504 is the gateway losing the answer to a page Graph may
+    # already have made; re-running would leave the user with two or three.
     status, res = graph_raw("POST", "/me/onenote/sections/" + urllib.parse.quote(section_id, safe="") + "/pages",
-                            payload_bytes, content_type)
+                            payload_bytes, content_type, transient_5xx=False)
     if status not in (200, 201):
         try:
             fail(graph_err(json.loads(res), status))
@@ -826,8 +875,9 @@ def cmd_onenote_create_section(notebook_id, path):
     name = (payload.get("name") or "").strip()
     if not name:
         fail("a section needs a name")
+    # Not repeatable either, for the same reason a page create is not.
     status, res = graph("POST", "/me/onenote/notebooks/%s/sections" % urllib.parse.quote(notebook_id, safe=""),
-                        {"displayName": name[:50]})
+                        {"displayName": name[:50]}, transient_5xx=False)
     if status not in (200, 201) or "id" not in res:
         fail(graph_err(res, status))
     section = {"id": res["id"], "name": res.get("displayName", name),

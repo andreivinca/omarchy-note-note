@@ -16,12 +16,19 @@ integration in Notion ("Connections") to be visible.
   notion.py delete <id>            -> archives the page
   notion.py clear-cache
 """
-import json, os, sys, time, urllib.request, urllib.error
+import json, os, sys, time, urllib.parse, urllib.request, urllib.error
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(HERE, "..", "..", "lib"))
 sys.path.insert(0, HERE)
 import ratelimit  # noqa: E402
+# The error and IO shape every provider answers with. This script carried its
+# own copies of these until they were lifted into lib/provider_io.py; see its
+# docstring for why one of each is the point.
+from provider_io import (  # noqa: E402
+    out, fail, fail_throttled, fail_transient, load_json, save_private, read_payload,
+    THROTTLED_STATUSES, TRANSIENT_STATUSES,
+)
 import notion_md  # noqa: E402
 
 HOME = os.path.expanduser("~")
@@ -44,62 +51,6 @@ RATE_KEY = "notion"
 RATE_WINDOWS = [(1, 3)]
 
 
-def out(obj):
-    sys.stdout.write(json.dumps(obj) + "\n")
-    sys.stdout.flush()
-
-
-def fail(msg, code=1, kind=None, retry_after=None):
-    """The one error shape a provider script answers with; `kind` is what the
-    queue in the host reads (providers/PROVIDERS.md)."""
-    payload = {"error": msg}
-    if kind:
-        payload["kind"] = kind
-    if retry_after is not None:
-        payload["retryAfter"] = round(float(retry_after), 3)
-    out(payload)
-    sys.exit(code)
-
-
-def load_json(path, default):
-    try:
-        with open(path) as f:
-            return json.load(f)
-    except (OSError, ValueError):
-        return default
-
-
-def save_private(path, obj):
-    """Write a private file atomically: a fresh O_EXCL temp file (mkstemp,
-    0600, never a pre-existing path or symlink), then rename over the target."""
-    import tempfile
-    d = os.path.dirname(path)
-    os.makedirs(d, mode=0o700, exist_ok=True)   # the files themselves are 0600
-    fd, tmp = tempfile.mkstemp(prefix=".", suffix=".tmp", dir=d)
-    try:
-        with os.fdopen(fd, "w") as f:
-            json.dump(obj, f)
-        os.replace(tmp, path)
-    except BaseException:
-        try:
-            os.remove(tmp)
-        except OSError:
-            pass
-        raise
-
-
-def read_payload(path):
-    """A JSON payload: from stdin when path is "-" (how the plugin passes
-    secrets and note bodies — nothing touches a shared temp directory)."""
-    if path == "-":
-        raw = sys.stdin.read(8 * 1024 * 1024 + 1)
-        if len(raw) > 8 * 1024 * 1024:
-            fail("payload too large")
-        try:
-            return json.loads(raw)
-        except ValueError:
-            return None
-    return load_json(path, None)
 def token():
     t = load_json(TOKEN_FILE, {}).get("token", "")
     if not t:
@@ -107,12 +58,19 @@ def token():
     return t
 
 
-def api(method, path, data=None, tok=None):
+def api(method, path, data=None, tok=None, transient_5xx=True):
     """One Notion request, paced across processes and retried.
 
     Notion answers a 429 with a `Retry-After`, and its limit is per second
     rather than a long lockout, so a missing header means a short wait rather
-    than a real cooldown.
+    than a real cooldown. A 502 used to wait here too; it is a bad gateway
+    rather than a busy account, so it goes back as "transient" with the other
+    server errors and re-runs the one job (lib/provider_io.py).
+
+    `transient_5xx` is the caller saying whether that re-run is safe. A 502 or
+    a 504 is the gateway losing the answer to a request that may well have
+    been carried out, so only a repeatable one may be run again — `cmd_create`
+    is not, and says so.
     """
     headers = {"Authorization": "Bearer " + (tok or token()), "Notion-Version": VERSION, "Content-Type": "application/json"}
     req = urllib.request.Request(API + path, data=json.dumps(data).encode() if data is not None else None, method=method, headers=headers)
@@ -126,9 +84,11 @@ def api(method, path, data=None, tok=None):
                 return r.status, (json.loads(raw) if raw else {})
         except urllib.error.HTTPError as e:
             raw = e.read(MAX_BODY + 1)[:MAX_BODY]
-            if e.code in (429, 502, 503):
+            if e.code in THROTTLED_STATUSES:
                 wait = ratelimit.retry_after_of(e.headers)
                 raise ratelimit.Retry(wait if wait is not None else ratelimit.SHORT_RETRY)
+            if transient_5xx and e.code in TRANSIENT_STATUSES:
+                fail_transient(e.code, raw)
             try:
                 return e.code, json.loads(raw)
             except ValueError:
@@ -216,7 +176,9 @@ def fetch_children(block_id, budget):
     """All child blocks, recursively, within a block budget; returns (blocks, truncated)."""
     blocks, cursor = [], None
     while True:
-        status, res = api("GET", "/blocks/%s/children?page_size=100%s" % (block_id, "&start_cursor=" + cursor if cursor else ""))
+        status, res = api("GET", "/blocks/%s/children?page_size=100%s" % (
+            urllib.parse.quote(block_id, safe=""),
+            ("&start_cursor=" + urllib.parse.quote(cursor, safe="")) if cursor else ""))
         if status != 200:
             fail(err(res, status))
         for b in res.get("results", []):
@@ -235,7 +197,7 @@ def fetch_children(block_id, budget):
 
 
 def cmd_page(page_id):
-    status, pg = api("GET", "/pages/" + page_id)
+    status, pg = api("GET", "/pages/" + urllib.parse.quote(page_id, safe=""))
     if status != 200:
         fail(err(pg, status))
     blocks, truncated = fetch_children(page_id, [MAX_BLOCKS])
@@ -250,25 +212,40 @@ def cmd_update(page_id, path):
     payload = read_payload(path)
     if payload is None:
         fail("cannot read payload")
+    quoted = urllib.parse.quote(page_id, safe="")
     # Title: the page's title property (name varies; find it).
-    status, pg = api("GET", "/pages/" + page_id)
+    status, pg = api("GET", "/pages/" + quoted)
     if status != 200:
         fail(err(pg, status))
     tprop = next((k for k, v in (pg.get("properties") or {}).items() if v.get("type") == "title"), None)
     if tprop and "title" in payload and payload["title"] != title_of(pg):
-        status, res = api("PATCH", "/pages/" + page_id, {"properties": {tprop: {"title": [{"type": "text", "text": {"content": payload["title"][:2000]}}]}}})
+        status, res = api("PATCH", "/pages/" + quoted, {"properties": {tprop: {"title": [{"type": "text", "text": {"content": payload["title"][:2000]}}]}}})
         if status != 200:
             fail(err(res, status))
-    # Body: replace top-level blocks (children come along with their parents).
+    # Body: replace the top-level blocks (children come along with their
+    # parents) — new ones in first, old ones out afterwards, and in that order.
+    #
+    # Written the other way round this deleted the page and only then converted
+    # the markdown and sent it back, so the note spent a conversion and one
+    # round trip per hundred blocks not existing. Anything that ended the run
+    # inside that window ended it with the note gone and no way back: a 400
+    # from a block Notion will not take is delivered as it stands, and the app
+    # being killed says nothing at all.
+    #
+    # Reversing it is safe because Notion *appends* children: every PATCH
+    # lands after everything already on the page, so the ids recorded here
+    # cannot name anything that was just written and deleting them last cannot
+    # touch it. The worst case becomes the note twice over — visible, and
+    # something the user can fix.
     old, _ = fetch_children(page_id, [MAX_BLOCKS + 1])
-    for b in old:
-        status, res = api("DELETE", "/blocks/" + b["id"])
-        if status not in (200, 204):
-            fail(err(res, status))
     new = notion_md.markdown_to_blocks(payload.get("body", ""))
     for i in range(0, len(new), 100):
-        status, res = api("PATCH", "/blocks/%s/children" % page_id, {"children": new[i:i + 100]})
+        status, res = api("PATCH", "/blocks/%s/children" % quoted, {"children": new[i:i + 100]})
         if status != 200:
+            fail(err(res, status))
+    for b in old:
+        status, res = api("DELETE", "/blocks/" + urllib.parse.quote(b["id"], safe=""))
+        if status not in (200, 204):
             fail(err(res, status))
     out({"ok": True})
 
@@ -277,7 +254,12 @@ def cmd_create(parent_id, path):
     payload = read_payload(path) or {}
     body = {"parent": {"page_id": parent_id}, "properties": {"title": {"title": [{"type": "text", "text": {"content": payload.get("title", "") or ""}}]}},
             "children": notion_md.markdown_to_blocks(payload.get("body", ""))[:100]}
-    status, res = api("POST", "/pages", body)
+    # Never re-run on a 5xx: a 502 or a 504 here is the gateway losing the
+    # answer to a page that Notion may already have created, and the retry
+    # would leave the user with the same note two or three times over. The
+    # failure is reported instead, and one create the user can repeat is a
+    # far better outcome than three they did not ask for.
+    status, res = api("POST", "/pages", body, transient_5xx=False)
     if status != 200:
         fail(err(res, status))
     page = {"id": res["id"], "title": title_of(res), "parent": parent_of(res), "edited": res.get("last_edited_time", "")}
@@ -288,7 +270,7 @@ def cmd_create(parent_id, path):
 
 
 def cmd_delete(page_id):
-    status, res = api("PATCH", "/pages/" + page_id, {"archived": True})
+    status, res = api("PATCH", "/pages/" + urllib.parse.quote(page_id, safe=""), {"archived": True})
     if status != 200:
         fail(err(res, status))
     c = load_json(CACHE, {"pages": []})
@@ -337,7 +319,6 @@ if __name__ == "__main__":
     except SystemExit:
         raise
     except ratelimit.Throttled as t:
-        fail("rate limited — retrying in %ds" % max(1, round(t.retry_after)),
-             kind="throttled", retry_after=t.retry_after)
+        fail_throttled(t)
     except Exception as e:
         fail("%s: %s" % (type(e).__name__, e))

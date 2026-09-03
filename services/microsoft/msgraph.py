@@ -22,6 +22,14 @@ import json, os, sys, time, urllib.request, urllib.parse, urllib.error
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(HERE, "..", "..", "lib"))
 import ratelimit  # noqa: E402
+# The error and IO shape every provider answers with lives in lib/provider_io.py
+# so that there is one of each (see its docstring). It is re-exported from here
+# unchanged: onenote.py and sticky.py import these names from `msgraph`, and
+# where a helper is defined is not their business.
+from provider_io import (  # noqa: E402,F401
+    out, fail, fail_throttled, fail_transient, load_json, save_private, read_payload,
+    THROTTLED_STATUSES, TRANSIENT_STATUSES,
+)
 
 HOME = os.path.expanduser("~")
 CONFIG = os.path.join(os.environ.get("XDG_CONFIG_HOME", HOME + "/.config"), "omarchy/note-note.json")
@@ -49,74 +57,6 @@ SCOPES = os.environ.get("NOTE_NOTE_MS_SCOPES", "offline_access User.Read")
 GRAPH = "https://graph.microsoft.com/v1.0"
 
 
-def out(obj):
-    sys.stdout.write(json.dumps(obj) + "\n")
-    sys.stdout.flush()
-
-
-def fail(msg, code=1, kind=None, retry_after=None):
-    """The one error shape every provider script answers with.
-
-    `kind` is what the queue in the host reads (providers/PROVIDERS.md):
-    "throttled" parks that provider's lane until `retryAfter` seconds have
-    passed and then re-runs the job, "transient" re-runs the job a few times
-    on its own, and anything else — including no kind at all, which is every
-    error this plugin had before — is shown to the user as it stands.
-    """
-    payload = {"error": msg}
-    if kind:
-        payload["kind"] = kind
-    if retry_after is not None:
-        payload["retryAfter"] = round(float(retry_after), 3)
-    out(payload)
-    sys.exit(code)
-
-
-def fail_throttled(error):
-    """A `ratelimit.Throttled` as the queue expects to read it."""
-    fail("rate limited — retrying in %ds" % max(1, round(error.retry_after)),
-         kind="throttled", retry_after=error.retry_after)
-
-
-def load_json(path, default):
-    try:
-        with open(path) as f:
-            return json.load(f)
-    except (OSError, ValueError):
-        return default
-
-
-def save_private(path, obj):
-    """Write a private file atomically: a fresh O_EXCL temp file (mkstemp,
-    0600, never a pre-existing path or symlink), then rename over the target."""
-    import tempfile
-    d = os.path.dirname(path)
-    os.makedirs(d, mode=0o700, exist_ok=True)   # the files themselves are 0600
-    fd, tmp = tempfile.mkstemp(prefix=".", suffix=".tmp", dir=d)
-    try:
-        with os.fdopen(fd, "w") as f:
-            json.dump(obj, f)
-        os.replace(tmp, path)
-    except BaseException:
-        try:
-            os.remove(tmp)
-        except OSError:
-            pass
-        raise
-
-
-def read_payload(path):
-    """A JSON payload: from stdin when path is "-" (how the plugin passes
-    secrets and note bodies — nothing touches a shared temp directory)."""
-    if path == "-":
-        raw = sys.stdin.read(8 * 1024 * 1024 + 1)
-        if len(raw) > 8 * 1024 * 1024:
-            fail("payload too large")
-        try:
-            return json.loads(raw)
-        except ValueError:
-            return None
-    return load_json(path, None)
 def config():
     """The registration this provider signs in through: its own, unless the
     user gave it one of theirs under its id in CONFIG."""
@@ -174,7 +114,8 @@ def wait_asked_by(error):
     return ratelimit.SHORT_RETRY if error.code == 503 else ratelimit.DEFAULT_COOLDOWN
 
 
-def http(method, url, data=None, headers=None, form=False, max_bytes=MAX_BODY):
+def http(method, url, data=None, headers=None, form=False, max_bytes=MAX_BODY,
+         transient_5xx=True):
     """One Graph request, paced and retried.
 
     The retry loop is `ratelimit.attempt_loop`: short waits are slept here,
@@ -182,6 +123,14 @@ def http(method, url, data=None, headers=None, form=False, max_bytes=MAX_BODY):
     rather than a process sitting blocked for ten minutes. (The hand-rolled
     loop this replaced fell off its own end and returned None when all three
     attempts were throttled, which reached the caller as a TypeError.)
+
+    `transient_5xx` is the caller saying whether running this job twice is
+    the same as running it once. A 502 or a 504 is a gateway losing the
+    *answer*, not the far end refusing the request — the write may well have
+    landed — so "re-run it" is only safe for a request that is repeatable.
+    It is on by default because most requests here are reads or replaces;
+    the creates, the sign-in and anything carrying an upload turn it off, and
+    take the failure as it stands instead of risking a second copy.
     """
     body = None
     hdrs = dict(headers or {})
@@ -203,8 +152,10 @@ def http(method, url, data=None, headers=None, form=False, max_bytes=MAX_BODY):
             fail(str(e))
         except urllib.error.HTTPError as e:
             raw = e.read(max_bytes + 1)[:max_bytes]
-            if e.code in (429, 503):
+            if e.code in THROTTLED_STATUSES:
                 raise ratelimit.Retry(wait_asked_by(e))
+            if transient_5xx and e.code in TRANSIENT_STATUSES:
+                fail_transient(e.code, raw)
             try:
                 return e.code, json.loads(raw)
             except ValueError:
@@ -232,20 +183,68 @@ def signed_in(client_id):
     return tok
 
 
-def access_token():
+def forget_token(expected_refresh=None):
+    """Throw the sign-in away. `cmd_status` then reports signed out and the
+    provider shows its sign-in row, which is the only useful thing to offer
+    once the token on disk is known to be dead.
+
+    `expected_refresh` guards a race that only exists because this file is
+    shared: a lane runs up to four processes at once (lib/ratelimit.py), and
+    Entra rotates the refresh token every time one is used. Two processes that
+    meet a 401 together both force a refresh; the first is answered and writes
+    the new token, and the second is told `invalid_grant` about a refresh
+    token that is merely no longer current. Deleting then would sign the user
+    out of a grant that is perfectly alive, so the file goes only while it
+    still holds the very token whose refresh failed. `cmd_logout` passes
+    nothing and means it unconditionally.
+    """
+    if expected_refresh is not None and (load_json(TOKENS, None) or {}).get("refresh_token") != expected_refresh:
+        return
+    try:
+        os.remove(TOKENS)
+    except OSError:
+        pass
+
+
+def access_token(force=False):
+    """This provider's access token, refreshed when it has to be.
+
+    Ordinarily "has to be" is the stored `expires_at`, minus a minute. `force`
+    is the other case, and it is the answer to a 401 on a token this disk
+    still calls valid: the grant was revoked at Microsoft's end — consent
+    withdrawn, an admin action, a conditional-access change — and nothing here
+    can know that until it asks. A forced refresh either hands back a working
+    token or proves the sign-in is gone, and one that is gone is deleted
+    rather than left to 401 forever behind a raw Graph error.
+
+    `signed_in()` handles the neighbouring case, a token issued by a
+    registration that is no longer this provider's; this handles the
+    registration being right and the grant being gone.
+    """
     client_id, tenant = config()
     if not client_id:
         fail("not configured")
     tok = signed_in(client_id)
     if not tok:
         fail("not signed in")
-    if tok.get("expires_at", 0) - 60 > time.time():
+    if not force and tok.get("expires_at", 0) - 60 > time.time():
         return tok["access_token"]
+    used = tok.get("refresh_token", "")
     status, res = http("POST", token_url(tenant), {
         "client_id": client_id, "grant_type": "refresh_token",
-        "refresh_token": tok.get("refresh_token", ""), "scope": SCOPES,
+        "refresh_token": used, "scope": SCOPES,
     }, form=True)
     if status != 200 or "access_token" not in res:
+        if force:
+            # `invalid_grant` has two meanings here and they want opposite
+            # answers. If another process refreshed while this one was asking,
+            # the rotation is why this failed and its token is the good one —
+            # take it rather than reporting a sign-out that is not true.
+            fresh = signed_in(client_id)
+            if fresh and fresh.get("refresh_token") != used:
+                return fresh["access_token"]
+            forget_token(used)
+            fail("not signed in")
         fail("sign-in expired: %s" % res.get("error_description", res.get("error", status)))
     tok.update(res)
     tok["expires_at"] = time.time() + int(res.get("expires_in", 3600))
@@ -254,11 +253,22 @@ def access_token():
     return tok["access_token"]
 
 
-def graph(method, path, data=None, extra_headers=None, max_bytes=MAX_BODY):
-    headers = {"Authorization": "Bearer " + access_token(), "Accept": "application/json"}
-    headers.update(extra_headers or {})
+def graph(method, path, data=None, extra_headers=None, max_bytes=MAX_BODY, transient_5xx=True):
+    """One Graph request, signed — and signed again once if the 401 says the
+    token was revoked rather than merely old. The second pass is the same one
+    call with `force`, so there is no second copy of the request to keep in
+    step with the first."""
     url = path if path.startswith("http") else GRAPH + path
-    return http(method, url, data, headers, max_bytes=max_bytes)
+
+    def send(force):
+        headers = {"Authorization": "Bearer " + access_token(force), "Accept": "application/json"}
+        headers.update(extra_headers or {})
+        return http(method, url, data, headers, max_bytes=max_bytes, transient_5xx=transient_5xx)
+
+    status, res = send(False)
+    if status == 401:
+        status, res = send(True)
+    return status, res
 
 
 # ---------------------------------------------------------------- commands
@@ -287,8 +297,11 @@ def cmd_login():
     client_id, tenant = config()
     if not client_id:
         fail("not configured")
+    # Nothing in this flow may be re-run by the host. The user is reading a
+    # code off the screen, and a second run mints a different one — so a 5xx
+    # anywhere here is delivered as it stands rather than as "transient".
     status, res = http("POST", "https://login.microsoftonline.com/%s/oauth2/v2.0/devicecode" % tenant,
-                       {"client_id": client_id, "scope": SCOPES}, form=True)
+                       {"client_id": client_id, "scope": SCOPES}, form=True, transient_5xx=False)
     if status != 200 or "device_code" not in res:
         fail(res.get("error_description", res.get("error", "device code request failed")))
     out({"userCode": res["user_code"], "verificationUri": res["verification_uri"], "message": res.get("message", "")})
@@ -299,12 +312,20 @@ def cmd_login():
         status, tok = http("POST", token_url(tenant), {
             "client_id": client_id, "grant_type": "urn:ietf:params:oauth:grant-type:device_code",
             "device_code": res["device_code"],
-        }, form=True)
+        }, form=True, transient_5xx=False)
         if status == 200 and "access_token" in tok:
             tok["expires_at"] = time.time() + int(tok.get("expires_in", 3600))
             tok["client_id"] = client_id
             save_private(TOKENS, tok)
-            s, me = graph("GET", "/me?$select=displayName,userPrincipalName,mail")
+            # Asked with the token just minted, not through `graph()`: this
+            # probe is allowed to fail (the account name is a nicety, hence
+            # the `else ""`), and `graph()` would answer a 401 here — Entra
+            # replication lag right after a redemption is real — by forcing a
+            # refresh and, if that failed too, deleting the sign-in the user
+            # has this second completed.
+            s, me = http("GET", GRAPH + "/me?$select=displayName,userPrincipalName,mail",
+                         headers={"Authorization": "Bearer " + tok["access_token"],
+                                  "Accept": "application/json"}, transient_5xx=False)
             tok["account"] = (me.get("mail") or me.get("userPrincipalName") or me.get("displayName") or "") if s == 200 else ""
             save_private(TOKENS, tok)
             out({"ok": True, "account": tok["account"]})
@@ -321,10 +342,7 @@ def cmd_login():
 
 def cmd_logout():
     # Providers keep their own caches and clear them on their "signed out".
-    try:
-        os.remove(TOKENS)
-    except OSError:
-        pass
+    forget_token()
     out({"ok": True})
 
 

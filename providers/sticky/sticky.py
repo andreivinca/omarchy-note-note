@@ -9,7 +9,7 @@ Graph exposes as a well-known mail folder.
   sticky.py create             -> {"ok":true,"note":{...}}
   sticky.py delete <id>
 """
-import json, os, sys, time, urllib.parse
+import os, sys, time, urllib.parse
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(HERE, "..", "..", "services", "microsoft"))

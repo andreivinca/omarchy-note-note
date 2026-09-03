@@ -150,8 +150,8 @@ def blocks_to_markdown(blocks, depth=0):
 # Markdown is parsed by the vendored mistune (services/markdown/parse.py);
 # this is only the renderer into Notion blocks.
 
-import os as _os
-import sys as _sys
+import os as _os  # noqa: E402
+import sys as _sys  # noqa: E402
 _sys.path.insert(0, _os.path.join(_os.path.dirname(_os.path.abspath(__file__)), "..", "..", "services", "markdown"))
 from parse import parse as _parse  # noqa: E402
 

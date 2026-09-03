@@ -16,7 +16,11 @@ omarchy plugin enable io.github.andreivinca.note-note
   editor's converters, which run as a process per conversion.
 - Always lint first: `qmllint -I /usr/share/omarchy/shell Notes.qml ui/*.qml
   providers/*/Provider.qml services/*/*.qml`, and `python3 -m py_compile` the
-  scripts.
+  scripts. For Python there is also `uvx ruff check .`, configured in
+  `pyproject.toml` — it needs nothing installed and it is narrowed to the
+  rules that catch defects (a stale import, an unused local) rather than to
+  opinions about a deliberate house style. It should be silent; it found
+  three pieces of dead code the first time it was run.
 - Always check the log after a restart:
   ```bash
   journalctl --user --since "20 sec ago" --no-pager -o cat | grep -iE "Notes\.qml|Provider|NoteEditor"
@@ -122,6 +126,53 @@ from `settled`.
 
 **Add a case for every queueing bug.** A lost callback is a note that silently
 did not save, and it will not show up in any other test.
+
+## Testing the provider scripts
+
+Four suites, and none of them needs the shell, a display, an account or the
+network — every request is answered by a stub:
+
+```bash
+python3 providers/local/selftest.py       # the listing's order, and statx(2)
+python3 providers/notion/selftest.py      # a page is never emptied to save it
+python3 providers/onenote/selftest.py     # which writes may be run again
+python3 services/microsoft/selftest.py    # 5xx and 401 classification
+```
+
+Each pins a bug that shipped (`docs/future/python-review-fixes.md`):
+
+- **`providers/local/selftest.py`** — notes list oldest-first by **birth
+  time**, read through `statx(2)`, because `os.stat()` carries no
+  `st_birthtime` on Linux: the old key defaulted to 0 for every note and fell
+  through to a tie-break that compared *size as text*, so a note reordered
+  itself as it was typed into. It checks the `struct statx` layout as well,
+  since an offset wrong by eight bytes still hands back a plausible timestamp.
+- **`providers/notion/selftest.py`** — a save PATCHes the new blocks in
+  **before** deleting the old ones. Written the other way round it deleted
+  first, so a refused insert — a 400 on a block Notion will not take, or the
+  app being killed — left the page permanently empty. The test forces the
+  insert to fail and asserts nothing was deleted.
+- **`providers/onenote/selftest.py`** — `graph_raw` is a second copy of the
+  decisions `msgraph.http` makes, so it is tested separately: the same 401
+  pass, and the gate that says whether a failure may be run again. A
+  `kind: "transient"` re-runs the **whole job** three times, which is right
+  for a page fetch or a body replace and wrong for anything that creates — a
+  502 is the gateway losing the answer to a page Graph may already have made,
+  and a re-run would leave the user with two or three. The creates, the
+  sign-in flow and any save carrying image uploads therefore shut the gate,
+  and the test reads the flag off the calls rather than inferring it.
+- **`services/microsoft/selftest.py`** — 429 and 503 park the lane; 500, 502
+  and 504 come back as `kind: "transient"` and re-run that one job; and a 401
+  on a token the disk still calls valid forces one refresh and retries once.
+  A grant that will not refresh is deleted, so the UI offers a sign-in instead
+  of repeating a raw Graph error for ever — but a *server* error during that
+  forced refresh must not, or a passing blip would sign the user out.
+
+**Add a case for every provider-script bug.** Three of the four finish in
+about a tenth of a second; `providers/local/selftest.py` takes around four,
+and is meant to — a birth time cannot be forged, so it really does wait a
+second between creating its notes. They are the only tests that cover what a
+script does when the far end misbehaves.
 
 ## Testing the provider converters
 
@@ -229,9 +280,10 @@ With the shell running, and the OneNote tab open:
 
 ## Checklist for a UI change
 
-1. `qmllint` clean, `py_compile` clean, `qthtml/selftest.py` green — and, if
-   anything touched requests, `ratelimit_selftest.py` and
-   `services/requests/selftest.py` too.
+1. `qmllint` clean, `py_compile` clean, `ruff` silent, `qthtml/selftest.py`
+   green — and, if anything touched requests, `ratelimit_selftest.py` and
+   `services/requests/selftest.py` too; if it touched a provider script, the
+   three suites under "Testing the provider scripts".
 2. Restart the shell; log clean.
 3. Screenshot the window (`grim -o <output>` then crop with `magick`) and
    actually look at it.
