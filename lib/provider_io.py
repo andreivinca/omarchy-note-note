@@ -11,8 +11,8 @@ re-exports them so its importers never had to learn a new name.
 The two HTTP status groups are here for the same reason. `msgraph.http()`,
 `onenote.graph_raw()` and `notion.api()` each decided on their own which
 failures were worth another attempt, and by the time anyone compared them the
-three answers disagreed and none of them covered a 500
-(docs/future/python-review-fixes.md). They now read the same two names.
+three answers disagreed and none of them covered a 500. They now read the
+same two names.
 
 Standard library only, and `lib/` is already on the path of every script that
 imports this.

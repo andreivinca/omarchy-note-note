@@ -3,8 +3,7 @@
 
 Two properties, and neither is about a request succeeding.
 
-**What each HTTP status means to the queue** (§3a of
-docs/future/python-review-fixes.md). A 429 or a 503 carries a `Retry-After`
+**What each HTTP status means to the queue.** A 429 or a 503 carries a `Retry-After`
 and parks the provider's whole lane; a 500, a 502 or a 504 is one request
 going wrong at the far end and comes back as `kind="transient"`, re-running
 that job alone rather than stopping everything behind it; anything else is

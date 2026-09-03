@@ -139,7 +139,7 @@ python3 providers/onenote/selftest.py     # which writes may be run again
 python3 services/microsoft/selftest.py    # 5xx and 401 classification
 ```
 
-Each pins a bug that shipped (`docs/future/python-review-fixes.md`):
+Each pins a bug that shipped, and was found by a review of the Python:
 
 - **`providers/local/selftest.py`** — notes list oldest-first by **birth
   time**, read through `statx(2)`, because `os.stat()` carries no

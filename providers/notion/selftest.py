@@ -6,8 +6,7 @@ wrong. `cmd_update` replaces a page's body, and it used to do that by deleting
 every top-level block first and only then converting the markdown and sending
 it back: a conversion and one round trip per hundred blocks during which the
 user's page was empty, and any error in that window — a 400 from a block
-Notion will not take, the app being killed — left it empty for good
-(docs/future/python-review-fixes.md, §1).
+Notion will not take, the app being killed — left it empty for good.
 
 So the test is not "an update works". It is **no DELETE is ever issued until
 every insert has come back 200**, checked by scripting `api` to fail the first

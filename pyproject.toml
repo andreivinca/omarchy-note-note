@@ -5,8 +5,8 @@
 # Python the scripts are written against, and that the empty dependency list
 # is a rule rather than an accident.
 #
-# The review that asked for this file (docs/future/python-review-fixes.md, §5)
-# made the case concretely: `getattr(st, "st_birthtime", 0)` shipped for as
+# The Python review that asked for this file made the case concretely:
+# `getattr(st, "st_birthtime", 0)` shipped for as
 # long as providers/local/list.py existed, and nothing in the repository was
 # ever in a position to say a word about it.
 

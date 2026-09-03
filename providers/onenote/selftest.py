@@ -9,9 +9,8 @@ away from it, or while the one flag that matters was wired backwards.
 
 Two properties.
 
-**A 401 is a revoked grant until a refresh says otherwise** (§3b of
-docs/future/python-review-fixes.md) — one forced refresh, one repeat of the
-request, carrying the new token.
+**A 401 is a revoked grant until a refresh says otherwise** — one forced
+refresh, one repeat of the request, carrying the new token.
 
 **A job is re-run only when running it twice is the same as running it once.**
 `kind="transient"` re-runs the whole job three times, so it belongs to a page
