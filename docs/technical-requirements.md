@@ -58,14 +58,17 @@ External providers are loaded from
 ## Responsibilities
 
 **The host (`Notes.qml`) owns** the overlay/detached window, the title bar
-(search, the binder's tabs, the menu holding Detach and Settings), the
-settings page that stands in for the workspace, the view bar (whose notes, where they
+(search, the binder's tabs, the menu holding Detach, Settings and Key
+bindings), the pages that stand in for the workspace, the view bar (whose notes, where they
 live, save state, status, word count), the sidebar model, selection, the
 editor, the autosave state machine, keyboard shortcuts, the state file, and
 rendering the device-code sign-in screen for accounts a provider created. The
 bars are presentation components (`ui/TitleBar.qml`, `ui/TabStrip.qml`,
-`ui/ViewBar.qml`, `ui/SettingsView.qml`): fed by bindings, answering with
-signals, holding no state of their own.
+`ui/ViewBar.qml`, `ui/TextPage.qml`): fed by bindings, answering with
+signals, holding no state of their own. `ui/TextPage.qml` serves both pages —
+settings edits and saves, key bindings only shows — and the shortcuts it
+lists live as data in `ui/KeyBindings.js`, beside a note in `handleShortcut`
+saying the two are edited together.
 
 **The host must not** know any backend, path format, credential or API. Every
 branch of the form `if (provider.id === "…")` is a design failure; the two

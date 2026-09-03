@@ -53,7 +53,8 @@ token, or delete those files by hand.
 ## Settings
 
 Open the menu (☰, top right) and pick **Settings** to edit note-note's own
-config directly as JSON. It opens in place of your notes, saved with **Save**
+config directly as JSON. (**Key bindings**, in the same menu, opens the same
+kind of page over every shortcut the app answers to — read-only.) It opens in place of your notes, saved with **Save**
 or `Ctrl+S` — the page stays open, so a rejected edit is still there to fix.
 The ✕ at its top right, `Esc`, or any notebook tab takes you back. The file
 lives at `~/.config/notenote/config.json` and is pre-filled with every

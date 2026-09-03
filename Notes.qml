@@ -6,6 +6,7 @@ import qs.Commons
 import qs.Ui
 import "ui"
 import "ui/TabColors.js" as TabColors
+import "ui/KeyBindings.js" as KeyBindings
 import "services/clipboard" as Clipboard
 import "services/markdown" as Markdown
 import "services/microsoft" as Microsoft
@@ -50,7 +51,11 @@ Item {
   // across runs. 0 means they never did, and the default width stands.
   property real listWidth: 0
   property bool deleteConfirmOpen: false
-  property bool settingsOpen: false
+  // Which page stands in for the workspace, by name — "" while the notes
+  // themselves are on screen. A name rather than a flag each, so two pages
+  // cannot both believe they are the one being looked at.
+  property string page: ""
+  readonly property bool pageOpen: root.page !== ""
   property string filterText: ""
   property string statusText: ""
 
@@ -106,7 +111,7 @@ Item {
   function open(payloadJson) {
     root.opened = true
     root.deleteConfirmOpen = false
-    root.settingsOpen = false
+    root.page = ""
     root.pauseQueues(false)
     // A save that failed while nobody was looking is reported now, once.
     if (root.missedSaveNotice) { root.showStatus(root.missedSaveNotice); root.missedSaveNotice = "" }
@@ -142,16 +147,25 @@ Item {
     statusTimer.restart()
   }
 
-  // The settings page stands in for the workspace, so it is not dismissed
-  // the way a dialog is: what closes it is asking to see notes again — its
-  // own Close, Escape, or a notebook tab in the bar above it.
-  function openSettings() { root.settingsOpen = true }
-  function closeSettings() {
-    if (!root.settingsOpen) return
-    root.settingsOpen = false
+  // A page stands in for the workspace, so it is not dismissed the way a
+  // dialog is: what closes it is asking to see notes again — its own ✕,
+  // Escape, or a notebook tab in the bar above it. Opening one while another
+  // is up simply swaps them; there is only ever the one.
+  function openPage(name) { root.page = name }
+  function closePage() {
+    if (!root.pageOpen) return
+    root.page = ""
     // The editor is only just visible again; let the frame that reveals it
     // finish before handing it the keyboard.
     Qt.callLater(function() { editor.focusEditor() })
+  }
+  // The page on screen, or null for the notes. One place to ask, so another
+  // page is a row in the menu and a line here rather than a flag threaded
+  // through the layout.
+  function currentPage() {
+    if (root.page === "settings") return settingsPage
+    if (root.page === "keys") return keysPage
+    return null
   }
 
   function goBack() {
@@ -1173,7 +1187,12 @@ Item {
   // ── keys ────────────────────────────────────────────────────────────
   function handleShortcut(event) {
     if (root.deleteConfirmOpen) return deleteConfirm.handleKey(event)
-    if (root.settingsOpen) return settingsView.handleKey(event)
+    // A page owns the keyboard while it is up: its own Escape and action
+    // shortcut come first, and nothing below reaches a workspace that is not
+    // on screen. KeyBindings.js writes the navigation and note keys below out
+    // for the user, and says there which of them it leaves unlisted.
+    var openPage = root.currentPage()
+    if (openPage) return openPage.handleKey(event)
     var ctrl = event.modifiers & Qt.ControlModifier
     if (event.key === Qt.Key_Escape) { root.goBack(); return true }
     if (ctrl && (event.key === Qt.Key_K || event.key === Qt.Key_L)) { titleBar.focusSearch(); return true }
@@ -1345,7 +1364,7 @@ Item {
         matchCounts: root.tabMatches
         activeKey: root.revision < 0 ? "" : root.activeKey()
         detached: root.detached
-        settingsOpen: root.settingsOpen
+        pageOpen: root.pageOpen
         cornerRadius: root.chromeRadius
         background: root.background
         foreground: root.foreground
@@ -1356,8 +1375,9 @@ Item {
         onClearRequested: root.clearSearch()
         onMoveRequested: function(delta) { root.moveSelection(delta) }
         onAcceptRequested: editor.focusEditor()
-        onSectionActivated: function(key) { root.closeSettings(); root.setActiveSection(key) }
-        onSettingsRequested: root.openSettings()
+        onSectionActivated: function(key) { root.closePage(); root.setActiveSection(key) }
+        onSettingsRequested: root.openPage("settings")
+        onKeysRequested: root.openPage("keys")
         onDetachToggled: root.setDetached(!root.detached)
       }
 
@@ -1365,7 +1385,7 @@ Item {
       // ---- workspace: the binder rail and sidebar, the splitter, the note
       Row {
         id: body
-        visible: !root.settingsOpen
+        visible: !root.pageOpen
         width: parent.width
         height: parent.height - titleBar.height - viewBar.height
         spacing: 0
@@ -1510,35 +1530,60 @@ Item {
         }
       }
 
-      // ---- settings, in the workspace's place: everything under the title
-      // bar, so the bar itself stays live and its tabs stay reachable.
-      SettingsView {
-        id: settingsView
+      // ---- the pages, in the workspace's place: everything under the title
+      // bar, so the bar itself stays live and its tabs stay reachable. Only
+      // one is ever opened (root.page), and each is laid out as if it were
+      // the only one, since the other takes no space while it is not.
+      TextPage {
+        id: settingsPage
         width: parent.width
         height: parent.height - titleBar.height
-        opened: root.settingsOpen
-        initialText: JSON.stringify(root.config, null, 2)
-        configPath: root.configPath
+        opened: root.page === "settings"
+        title: "Settings"
+        subtitle: root.configPath
+        bodyText: JSON.stringify(root.config, null, 2)
+        actionText: "Save"
+        actionTooltip: "Write this to the config file (ctrl+s). The page stays open"
         cornerRadius: root.chromeRadius
         background: root.background
         foreground: root.foreground
         accent: root.accent
         fontFamily: root.interfaceFont
-        onCloseRequested: root.closeSettings()
+        onCloseRequested: root.closePage()
         // Saving does not close the page: the config is a file you edit,
         // not a question you answer, and a bad key is easiest to fix while
         // the text that holds it is still in front of you.
-        onSaveRequested: function(text) {
+        onActionRequested: function(text) {
           var result = root.applySettingsJson(text)
-          if (result.ok) settingsView.showSaved()
-          else settingsView.showError(result.error)
+          if (result.ok) settingsPage.showNotice("Saved.", false)
+          else settingsPage.showNotice(result.error, true)
         }
+      }
+
+      // The key bindings have only something to show, so the page locks its
+      // text and carries no action — and the foot goes with it, giving the
+      // height back to the listing.
+      TextPage {
+        id: keysPage
+        width: parent.width
+        height: parent.height - titleBar.height
+        opened: root.page === "keys"
+        title: "Key bindings"
+        subtitle: "Getting around your notes without reaching for the mouse"
+        bodyText: KeyBindings.text()
+        readOnly: true
+        cornerRadius: root.chromeRadius
+        background: root.background
+        foreground: root.foreground
+        accent: root.accent
+        fontFamily: root.interfaceFont
+        onCloseRequested: root.closePage()
       }
 
       // ---- view bar
       ViewBar {
         id: viewBar
-        visible: !root.settingsOpen
+        visible: !root.pageOpen
         width: parent.width
         cornerRadius: root.chromeRadius
         sourceName: root.sourceName

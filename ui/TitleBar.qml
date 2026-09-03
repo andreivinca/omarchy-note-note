@@ -22,7 +22,10 @@ Item {
   property var matchCounts: ({})
   property string activeKey: ""
   property bool detached: false
-  property bool settingsOpen: false
+  // True while any page stands in for the workspace — settings or the key
+  // bindings. The bar only needs to know that the notes are not on screen,
+  // not which page took them.
+  property bool pageOpen: false
   property color background: Color.menu.background
   property color foreground: Color.menu.text
   property color accent: Color.accent
@@ -43,6 +46,7 @@ Item {
   signal acceptRequested()
   signal sectionActivated(string key)
   signal settingsRequested()
+  signal keysRequested()
   signal detachToggled()
 
   readonly property bool searchFocused: searchField.activeFocus
@@ -80,12 +84,12 @@ Item {
     // clear button will stand once there is something to clear, so the right
     // edge always says the one thing you can do.
     //
-    // Gone while the settings page is up: it filters the notes, and the
-    // notes are not what is on screen then. A field that took typing and
-    // showed nothing for it would be worse than an absent one.
+    // Gone while a page is up: it filters the notes, and the notes are not
+    // what is on screen then. A field that took typing and showed nothing
+    // for it would be worse than an absent one.
     TextField {
       id: searchField
-      visible: !root.settingsOpen
+      visible: !root.pageOpen
       anchors.right: menuButton.left
       anchors.rightMargin: Style.spacing.lg
       anchors.verticalCenter: parent.verticalCenter
@@ -177,8 +181,8 @@ Item {
     }
 
     // The strip takes whatever the search leaves it, and all of it once the
-    // search steps aside — the tabs are the way back out of the settings
-    // page, so they must not shrink to make room for a field that is gone.
+    // search steps aside — the tabs are the way back out of any page, so
+    // they must not shrink to make room for a field that is gone.
     TabStrip {
       anchors.left: parent.left
       anchors.right: searchField.visible ? searchField.left : menuButton.left
@@ -196,23 +200,23 @@ Item {
     }
 
     // Everything you do to note-note rather than to the note in front of you
-    // lives behind this one button: detaching the window, and the settings
-    // page. A row of pills along the bar would have to grow with each new
-    // one, and each would spend the bar's width saying its own name; the
-    // menu spends none until it is asked.
+    // lives behind this one button: detaching the window, the settings page,
+    // the key bindings. A row of pills along the bar would have to grow with
+    // each new one, and each would spend the bar's width saying its own
+    // name; the menu spends none until it is asked.
     Button {
       id: menuButton
       anchors.right: parent.right
       anchors.verticalCenter: parent.verticalCenter
       // A tooltip under an open menu is one label too many, and it would
       // stand over the very rows it describes.
-      tooltipText: menu.opened ? "" : "Detach the window, or open settings"
+      tooltipText: menu.opened ? "" : "Detach the window, settings, key bindings"
       // No outline at rest: the bar's right end is quiet until you reach
       // for it, and the kit lends the button its hover ring then. Held open
       // still reads as held down, and the settings page keeps the button
       // marked for as long as it is the thing on screen — as a fill now,
       // which is what a borderless button has to say it with.
-      selected: root.settingsOpen || menu.opened
+      selected: root.pageOpen || menu.opened
       foreground: root.foreground
       accent: root.accent
       // A square, as tall as the tab strip beside it. The radius is capped
@@ -267,7 +271,7 @@ Item {
       // to the width of the detached one's longest word.
       TextMetrics {
         id: widestLabel
-        text: root.detached ? "Back to overlay" : "Settings"
+        text: root.detached ? "Back to overlay" : "Key bindings"
         font.family: root.fontFamily
         font.pixelSize: Style.font.body
       }
@@ -301,7 +305,10 @@ Item {
             label: root.detached ? "Back to overlay" : "Detach" },
           { id: "settings",
             icon: "󰒓",
-            label: "Settings" }
+            label: "Settings" },
+          { id: "keys",
+            icon: "󰌌",
+            label: "Key bindings" }
         ]
 
         padding: menu.inset
@@ -371,8 +378,10 @@ Item {
                   menu.close()
                   if (menuRow.modelData.id === "detach") {
                     root.detachToggled()
-                  } else {
+                  } else if (menuRow.modelData.id === "settings") {
                     root.settingsRequested()
+                  } else {
+                    root.keysRequested()
                   }
                 }
               }
