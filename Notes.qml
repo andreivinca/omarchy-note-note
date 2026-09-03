@@ -142,6 +142,18 @@ Item {
     statusTimer.restart()
   }
 
+  // The settings page stands in for the workspace, so it is not dismissed
+  // the way a dialog is: what closes it is asking to see notes again — its
+  // own Close, Escape, or a notebook tab in the bar above it.
+  function openSettings() { root.settingsOpen = true }
+  function closeSettings() {
+    if (!root.settingsOpen) return
+    root.settingsOpen = false
+    // The editor is only just visible again; let the frame that reveals it
+    // finish before handing it the keyboard.
+    Qt.callLater(function() { editor.focusEditor() })
+  }
+
   function goBack() {
     if (titleBar.searchFocused) {
       if (root.filterText.length > 0) { root.clearSearch() }
@@ -1161,7 +1173,7 @@ Item {
   // ── keys ────────────────────────────────────────────────────────────
   function handleShortcut(event) {
     if (root.deleteConfirmOpen) return deleteConfirm.handleKey(event)
-    if (root.settingsOpen) return settingsDialog.handleKey(event)
+    if (root.settingsOpen) return settingsView.handleKey(event)
     var ctrl = event.modifiers & Qt.ControlModifier
     if (event.key === Qt.Key_Escape) { root.goBack(); return true }
     if (ctrl && (event.key === Qt.Key_K || event.key === Qt.Key_L)) { titleBar.focusSearch(); return true }
@@ -1344,8 +1356,8 @@ Item {
         onClearRequested: root.clearSearch()
         onMoveRequested: function(delta) { root.moveSelection(delta) }
         onAcceptRequested: editor.focusEditor()
-        onSectionActivated: function(key) { root.setActiveSection(key) }
-        onSettingsRequested: root.settingsOpen = true
+        onSectionActivated: function(key) { root.closeSettings(); root.setActiveSection(key) }
+        onSettingsRequested: root.openSettings()
         onDetachToggled: root.setDetached(!root.detached)
       }
 
@@ -1353,6 +1365,7 @@ Item {
       // ---- workspace: the binder rail and sidebar, the splitter, the note
       Row {
         id: body
+        visible: !root.settingsOpen
         width: parent.width
         height: parent.height - titleBar.height - viewBar.height
         spacing: 0
@@ -1422,19 +1435,25 @@ Item {
           }
         }
 
-        // The gap between list and note is also the handle that resizes them:
+        // The seam between list and note is also the handle that resizes them:
         // drag it, and the sidebar follows the mouse; double-click, and the
         // default width is back. The bar only shows itself under the cursor —
         // the cursor's own change of shape is the invitation.
+        //
+        // The seam takes no width beyond the line itself, so the sidebar's
+        // wash on one side and the note's toolbar on the other both run into
+        // it and no strip of the card is left showing between them. The width
+        // belongs to the grab area instead, which is centred on the line and
+        // overhangs both panes — hence the z, which lifts it over the note
+        // pane laid out after it.
         Item {
           id: splitter
-          width: Style.space(8)
+          width: Style.spacing.hairline
           height: parent.height
+          z: 1
 
           Rectangle {
-            anchors.centerIn: parent
-            width: Style.spacing.hairline
-            height: parent.height
+            anchors.fill: parent
             color: Util.alpha(root.foreground,
                               splitterArea.pressed ? 0.35 : (splitterArea.containsMouse ? 0.22 : 0.08))
             Behavior on color { ColorAnimation { duration: 120 } }
@@ -1442,15 +1461,25 @@ Item {
 
           MouseArea {
             id: splitterArea
-            anchors.fill: parent
+            width: Style.space(8)
+            x: (parent.width - width) / 2
+            height: parent.height
             hoverEnabled: true
             cursorShape: Qt.SplitHCursor
             acceptedButtons: Qt.LeftButton
+            // Where in the handle the drag was started, measured from the list
+            // edge it moves: the width follows the mouse by that offset, so a
+            // press anywhere on the handle takes hold of the edge where it is
+            // instead of snapping it under the cursor.
+            property real grabOffset: 0
+            onPressed: function(mouse) {
+              grabOffset = splitterArea.mapToItem(body, mouse.x, 0).x - list.width
+            }
             // The area moves with the list edge it is dragging, so the mouse
             // is mapped into the body each time rather than trusted locally.
             onPositionChanged: function(mouse) {
               if (!pressed) return
-              root.listWidth = splitterArea.mapToItem(body, mouse.x, 0).x - splitter.width / 2
+              root.listWidth = splitterArea.mapToItem(body, mouse.x, 0).x - grabOffset
             }
             onReleased: root.saveState()
             onDoubleClicked: { root.listWidth = 0; root.saveState() }
@@ -1481,9 +1510,35 @@ Item {
         }
       }
 
+      // ---- settings, in the workspace's place: everything under the title
+      // bar, so the bar itself stays live and its tabs stay reachable.
+      SettingsView {
+        id: settingsView
+        width: parent.width
+        height: parent.height - titleBar.height
+        opened: root.settingsOpen
+        initialText: JSON.stringify(root.config, null, 2)
+        configPath: root.configPath
+        cornerRadius: root.chromeRadius
+        background: root.background
+        foreground: root.foreground
+        accent: root.accent
+        fontFamily: root.interfaceFont
+        onCloseRequested: root.closeSettings()
+        // Saving does not close the page: the config is a file you edit,
+        // not a question you answer, and a bad key is easiest to fix while
+        // the text that holds it is still in front of you.
+        onSaveRequested: function(text) {
+          var result = root.applySettingsJson(text)
+          if (result.ok) settingsView.showSaved()
+          else settingsView.showError(result.error)
+        }
+      }
+
       // ---- view bar
       ViewBar {
         id: viewBar
+        visible: !root.settingsOpen
         width: parent.width
         cornerRadius: root.chromeRadius
         sourceName: root.sourceName
@@ -1528,25 +1583,6 @@ Item {
       cornerRadius: Style.cornerRadius
       onCanceled: root.cancelDelete()
       onConfirmed: root.confirmDelete()
-    }
-
-    SettingsDialog {
-      id: settingsDialog
-      anchors.fill: parent
-      opened: root.settingsOpen
-      z: 10
-      initialText: JSON.stringify(root.config, null, 2)
-      background: root.background
-      foreground: root.foreground
-      scrim: root.scrim
-      accent: root.accent
-      cornerRadius: Style.cornerRadius
-      onCanceled: { root.settingsOpen = false; editor.focusEditor() }
-      onSaveRequested: function(text) {
-        var result = root.applySettingsJson(text)
-        if (result.ok) { root.settingsOpen = false; editor.focusEditor() }
-        else settingsDialog.showError(result.error)
-      }
     }
   }
 

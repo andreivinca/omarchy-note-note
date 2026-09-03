@@ -177,12 +177,14 @@ Item {
     }
 
     Column {
+      id: listColumn
       anchors.fill: parent
       anchors.margins: root.pagePadding
       visible: !root.filtering
       spacing: 0
 
       Item {
+        id: listArea
         width: parent.width
         height: parent.height - newNotebookRow.height
 
@@ -372,7 +374,8 @@ Item {
           ListWheel { flick: listView }
         }
 
-        // ---- there is more: fades and a thin track, as in Toolroll
+        // ---- there is more: these fades, and the track on the panel's own
+        // edge below, as in Toolroll
         readonly property bool scrollable: listView.contentHeight > listView.height + 1
 
         Rectangle {
@@ -394,29 +397,6 @@ Item {
           gradient: Gradient {
             GradientStop { position: 0.0; color: "transparent" }
             GradientStop { position: 1.0; color: Util.alpha(panel.fill, 0.95) }
-          }
-        }
-
-        Rectangle {
-          id: scrollTrack
-          anchors.right: parent.right
-          anchors.top: parent.top
-          anchors.bottom: parent.bottom
-          width: Style.space(3)
-          visible: parent.scrollable
-          color: "transparent"
-
-          Rectangle {
-            width: parent.width
-            radius: width / 2
-            height: Math.max(Style.space(24),
-                             scrollTrack.height * (listView.height / Math.max(1, listView.contentHeight)))
-            // contentY is measured from originY, which a ListView with section
-            // headers does not keep at 0 — subtract it or the thumb sits low.
-            y: (scrollTrack.height - height)
-               * Math.max(0, Math.min(1, (listView.contentY - listView.originY) / Math.max(1, listView.contentHeight - listView.height)))
-            color: Util.alpha(root.foreground, listView.moving ? 0.45 : 0.2)
-            Behavior on color { ColorAnimation { duration: 150 } }
           }
         }
 
@@ -501,6 +481,37 @@ Item {
           cursorShape: Qt.PointingHandCursor
           onClicked: root.startNewNotebook()
         }
+      }
+    }
+
+    // The track rides the panel's own edge, not the page margin: a bar held a
+    // margin's width inside the edge reads as a stray line beside the list
+    // rather than as the list's end. It keeps a hair of clearance so it does
+    // not touch the separator beyond it. It still spans only the rows it
+    // scrolls, so it takes its top and bottom from the column that holds them
+    // — the rows' area is that column less the "New notebook…" row beneath it.
+    Rectangle {
+      id: scrollTrack
+      anchors.right: parent.right
+      anchors.rightMargin: Style.spacing.xs
+      anchors.top: listColumn.top
+      anchors.bottom: listColumn.bottom
+      anchors.bottomMargin: newNotebookRow.height
+      width: Style.space(3)
+      visible: listArea.scrollable
+      color: "transparent"
+
+      Rectangle {
+        width: parent.width
+        radius: width / 2
+        height: Math.max(Style.space(24),
+                         scrollTrack.height * (listView.height / Math.max(1, listView.contentHeight)))
+        // contentY is measured from originY, which a ListView with section
+        // headers does not keep at 0 — subtract it or the thumb sits low.
+        y: (scrollTrack.height - height)
+           * Math.max(0, Math.min(1, (listView.contentY - listView.originY) / Math.max(1, listView.contentHeight - listView.height)))
+        color: Util.alpha(root.foreground, listView.moving ? 0.45 : 0.2)
+        Behavior on color { ColorAnimation { duration: 150 } }
       }
     }
   }

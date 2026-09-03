@@ -52,10 +52,12 @@ token, or delete those files by hand.
 
 ## Settings
 
-Click the gear left of **Detach** to edit note-note's own config directly as
-JSON, saved with **Save** or `Ctrl+S`. It lives at
-`~/.config/notenote/config.json` and is pre-filled with every setting on
-first run.
+Open the menu (☰, top right) and pick **Settings** to edit note-note's own
+config directly as JSON. It opens in place of your notes, saved with **Save**
+or `Ctrl+S` — the page stays open, so a rejected edit is still there to fix.
+The ✕ at its top right, `Esc`, or any notebook tab takes you back. The file
+lives at `~/.config/notenote/config.json` and is pre-filled with every
+setting on first run.
 
 - `providers.<id>.enabled` — hide a source (`local`, `sticky`, `onenote`,
   `notion`, or an external provider's own id) from the sidebar. Reordering
@@ -98,9 +100,9 @@ formatting toolbar for headings, lists, tables, links, images and the usual
 bold/italic/underline/strikethrough/highlight/code shortcuts (`Ctrl+B/I/U/S`,
 `Ctrl+Shift+H`). Search filters by title as you type and by body a moment
 later, where the backend allows it — OneNote and Notion are title-only,
-since neither API exposes body search. **Detach** turns the overlay into an
-ordinary window you can keep open beside your work; **Overlay** brings it
-back.
+since neither API exposes body search. **Detach**, in the menu at the top
+right, turns the overlay into an ordinary window you can keep open beside
+your work; **Back to overlay** brings it back.
 
 ## Providers
 

@@ -1,4 +1,5 @@
 import QtQuick
+import QtQuick.Controls as QQC
 import qs.Commons
 import qs.Ui
 
@@ -78,9 +79,14 @@ Item {
     // the bar. It names its own shortcut: a keycap in the field where the
     // clear button will stand once there is something to clear, so the right
     // edge always says the one thing you can do.
+    //
+    // Gone while the settings page is up: it filters the notes, and the
+    // notes are not what is on screen then. A field that took typing and
+    // showed nothing for it would be worse than an absent one.
     TextField {
       id: searchField
-      anchors.right: settingsButton.left
+      visible: !root.settingsOpen
+      anchors.right: menuButton.left
       anchors.rightMargin: Style.spacing.lg
       anchors.verticalCenter: parent.verticalCenter
       // On a narrow window the field gives way first — down to where typing
@@ -88,7 +94,7 @@ Item {
       // so nothing ever runs under anything.
       width: Math.max(Style.space(140),
                       Math.min(Style.space(300),
-                               settingsButton.x - Style.spacing.lg * 2 - Style.space(160)))
+                               menuButton.x - Style.spacing.lg * 2 - Style.space(160)))
       placeholderText: "Search notes…"
       foreground: root.foreground
       accent: root.accent
@@ -170,9 +176,12 @@ Item {
       }
     }
 
+    // The strip takes whatever the search leaves it, and all of it once the
+    // search steps aside — the tabs are the way back out of the settings
+    // page, so they must not shrink to make room for a field that is gone.
     TabStrip {
       anchors.left: parent.left
-      anchors.right: searchField.left
+      anchors.right: searchField.visible ? searchField.left : menuButton.left
       anchors.rightMargin: Style.spacing.lg
       anchors.verticalCenter: parent.verticalCenter
       height: Style.spacing.controlHeight
@@ -186,45 +195,41 @@ Item {
       onActivated: function(key) { root.sectionActivated(key) }
     }
 
+    // Everything you do to note-note rather than to the note in front of you
+    // lives behind this one button: detaching the window, and the settings
+    // page. A row of pills along the bar would have to grow with each new
+    // one, and each would spend the bar's width saying its own name; the
+    // menu spends none until it is asked.
     Button {
-      id: shapeButton
+      id: menuButton
       anchors.right: parent.right
       anchors.verticalCenter: parent.verticalCenter
-      text: root.detached ? "Overlay" : "Detach"
-      iconText: root.detached ? "󰨟" : "󰏌"
-      tooltipText: root.detached ? "Back to the overlay: summoned over your work, gone on Escape"
-                                 : "Detach into an ordinary window you can keep open beside your work"
-      bordered: true
-      selected: root.detached
+      // A tooltip under an open menu is one label too many, and it would
+      // stand over the very rows it describes.
+      tooltipText: menu.opened ? "" : "Detach the window, or open settings"
+      // No outline at rest: the bar's right end is quiet until you reach
+      // for it, and the kit lends the button its hover ring then. Held open
+      // still reads as held down, and the settings page keeps the button
+      // marked for as long as it is the thing on screen — as a fill now,
+      // which is what a borderless button has to say it with.
+      selected: root.settingsOpen || menu.opened
       foreground: root.foreground
       accent: root.accent
-      fontFamily: root.fontFamily
-      iconSize: Style.font.iconSmall
-      // Wider than the default control padding: a labelled pill wants
-      // air around its word.
-      horizontalPadding: Style.spacing.lg
-      verticalPadding: Style.spacing.xxs
-      onClicked: root.detachToggled()
-    }
-
-    Button {
-      id: settingsButton
-      anchors.right: shapeButton.left
-      anchors.rightMargin: Style.spacing.sm
-      anchors.verticalCenter: parent.verticalCenter
-      tooltipText: "Settings — edit note-note's config as JSON (for now: which providers show up)"
-      bordered: true
-      selected: root.settingsOpen
-      foreground: root.foreground
-      accent: root.accent
-      // A circle, as tall as the pill beside it. The gear is drawn as
-      // an OpticalGlyph rather than the button's own icon: an icon
-      // glyph's ink is not centered in its advance width, and inside a
-      // tight circle that reads as off-center.
-      width: shapeButton.height
-      height: shapeButton.height
-      radius: height / 2
-      onClicked: root.settingsRequested()
+      // A square, as tall as the tab strip beside it. The radius is capped
+      // the way the search keycap above caps its own: a square theme keeps
+      // its corners, and a round one is held back short of the point where
+      // a box this small stops being a box and becomes a circle.
+      //
+      // The bars are drawn as a plain Text rather than the button's own
+      // icon: an icon glyph's ink is not centered in its advance width, and
+      // in a box this tight that reads as off-center.
+      width: Style.spacing.controlHeight
+      height: Style.spacing.controlHeight
+      radius: Math.min(Style.cornerRadius, height / 4)
+      onClicked: menu.opened ? menu.close() : menu.open()
+      // Detaching re-parents the whole content under a different window;
+      // the menu that asked for it must not outlive the bar it hangs from.
+      onVisibleChanged: if (!visible) { menu.close() }
 
       // Centered on the glyph's painted ink, both axes. The kit's
       // OpticalGlyph corrects only horizontally — it keeps a shared
@@ -232,23 +237,148 @@ Item {
       // has no neighbours, and its line box's own centering reads as
       // vertical drift.
       TextMetrics {
-        id: gearMetrics
+        id: menuMetrics
         font.family: Style.fontFamily
-        font.pixelSize: Math.max(1, Math.round(Style.font.iconSmall))
-        text: gearGlyph.text
+        // The kit's large icon rather than its small one: three stacked bars
+        // are mostly the gaps between them, and at the size a lone glyph
+        // takes they close up into a smudge. Still short of the button's own
+        // height, so the hover ring has a margin to sit in.
+        font.pixelSize: Math.max(1, Math.round(Style.font.iconLarge))
+        text: menuGlyph.text
       }
       Text {
-        id: gearGlyph
+        id: menuGlyph
         anchors.centerIn: parent
         anchors.horizontalCenterOffset: implicitWidth / 2
-          - (gearMetrics.tightBoundingRect.x + gearMetrics.tightBoundingRect.width / 2)
+          - (menuMetrics.tightBoundingRect.x + menuMetrics.tightBoundingRect.width / 2)
         anchors.verticalCenterOffset: implicitHeight / 2
-          - (baselineOffset + gearMetrics.tightBoundingRect.y + gearMetrics.tightBoundingRect.height / 2)
-        text: "󰒓"
+          - (baselineOffset + menuMetrics.tightBoundingRect.y + menuMetrics.tightBoundingRect.height / 2)
+        text: "󰍜"
         font.family: Style.fontFamily
-        font.pixelSize: gearMetrics.font.pixelSize
+        font.pixelSize: menuMetrics.font.pixelSize
         renderType: Text.NativeRendering
-        color: settingsButton.selected ? Style.selectedStateColor(root.foreground, root.accent) : root.foreground
+        color: menuButton.selected ? Style.selectedStateColor(root.foreground, root.accent) : root.foreground
+      }
+
+      // The widest label the menu is about to show, measured at the size it
+      // will be drawn: every row then takes the same width and the hover fill
+      // is not ragged. Measured against what is on screen rather than every
+      // label that could ever be, so an overlay's short menu is not held open
+      // to the width of the detached one's longest word.
+      TextMetrics {
+        id: widestLabel
+        text: root.detached ? "Back to overlay" : "Settings"
+        font.family: root.fontFamily
+        font.pixelSize: Style.font.body
+      }
+
+      QQC.Popup {
+        id: menu
+        // Hung from the button's right edge: the bar's own edge is a few
+        // pixels further right, and a menu growing that way would run off it.
+        x: menuButton.width - width
+        y: menuButton.height + Style.spacing.xs
+        readonly property var borderSpec: Border.localOrSurfaceSpec("popups", "border", Color.popups.border, Color.popups.border, Style.normalBorderWidth)
+
+        // Three radii that have to agree, or the menu reads as a lozenge with
+        // pills inside it. The card is held back from the theme's full
+        // rounding, and a row's corner is the card's own less the padding
+        // between them — the standard nesting — then capped short of the
+        // point where a row this short would round into a pill.
+        readonly property real inset: Style.spacing.xs
+        readonly property real cardRadius: Math.min(Style.cornerRadius, Style.space(10))
+        readonly property real rowHeight: Style.spacing.popupRowHeight
+        readonly property real rowRadius: Math.max(0, Math.min(cardRadius - inset, rowHeight / 4))
+
+        readonly property real iconWidth: Math.ceil(Style.font.icon * 1.2)
+        readonly property real rowWidth: Style.spacing.controlPaddingX * 2 + iconWidth
+          + Style.spacing.md + Math.ceil(widestLabel.width)
+        // Detaching first, as the one reached for often; the settings page
+        // after it.
+        readonly property var rows: [
+          { id: "detach",
+            icon: root.detached ? "󰨟" : "󰏌",
+            label: root.detached ? "Back to overlay" : "Detach" },
+          { id: "settings",
+            icon: "󰒓",
+            label: "Settings" }
+        ]
+
+        padding: menu.inset
+        leftPadding: Border.left(borderSpec) + menu.inset
+        rightPadding: Border.right(borderSpec) + menu.inset
+        topPadding: Border.top(borderSpec) + menu.inset
+        bottomPadding: Border.bottom(borderSpec) + menu.inset
+        background: BorderSurface {
+          color: Color.popups.background
+          borderSpec: menu.borderSpec
+          radius: menu.cardRadius
+        }
+        contentItem: Column {
+          // Flush, not spaced: a gap between rows makes each read as its own
+          // button floating on the card. The hover fill is the only divider
+          // a two-row menu needs.
+          spacing: 0
+          Repeater {
+            model: menu.rows
+            delegate: Rectangle {
+              id: menuRow
+              required property var modelData
+              width: menu.rowWidth
+              height: menu.rowHeight
+              radius: menu.rowRadius
+              color: rowMouse.containsMouse ? Style.hoverFillFor(Color.popups.text, root.accent) : "transparent"
+
+              // The row's ink, named once: the glyph and the label are one
+              // thing lighting up, not two that agree by accident. The glyph
+              // carries it a shade lighter — it labels the row, the word is
+              // the row.
+              readonly property color ink: rowMouse.containsMouse
+                ? Style.hoverStateColor(Color.popups.text, root.accent) : Color.popups.text
+
+              Text {
+                id: rowIcon
+                textFormat: Text.PlainText
+                anchors.left: parent.left
+                anchors.leftMargin: Style.spacing.controlPaddingX
+                anchors.verticalCenter: parent.verticalCenter
+                width: menu.iconWidth
+                horizontalAlignment: Text.AlignHCenter
+                text: menuRow.modelData.icon
+                color: Util.alpha(menuRow.ink, 0.75)
+                font.family: Style.fontFamily
+                font.pixelSize: Style.font.icon
+              }
+
+              Text {
+                id: rowLabel
+                textFormat: Text.PlainText
+                anchors.left: rowIcon.right
+                anchors.leftMargin: Style.spacing.md
+                anchors.verticalCenter: parent.verticalCenter
+                text: menuRow.modelData.label
+                color: menuRow.ink
+                font.family: root.fontFamily
+                font.pixelSize: Style.font.body
+              }
+
+              MouseArea {
+                id: rowMouse
+                anchors.fill: parent
+                hoverEnabled: true
+                cursorShape: Qt.PointingHandCursor
+                onClicked: {
+                  menu.close()
+                  if (menuRow.modelData.id === "detach") {
+                    root.detachToggled()
+                  } else {
+                    root.settingsRequested()
+                  }
+                }
+              }
+            }
+          }
+        }
       }
     }
   }
