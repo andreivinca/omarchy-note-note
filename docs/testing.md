@@ -279,6 +279,27 @@ With the shell running, and the OneNote tab open:
   the old content. Wait ~15 s before verifying, and never poll in a tight
   loop — that is what triggers the throttle.
 
+### The manual checklist for what a tab opens with
+
+`debugState` reports `defaultOwed`: true while the tab on screen has not been
+given its opening note yet, false once it has been or the user has picked.
+
+1. A tab you have never been in opens empty and stays `defaultOwed` — nothing
+   is picked for you. Select a note there, switch away, switch back: that note.
+2. Restart the shell. The app opens on the tab you left, and on that tab's
+   note — not on the first tab's. That distinction is the bug worth watching:
+   while OneNote is still listing, `activeKey()` stands in with the first
+   section that exists, and answering the stand-in opens the wrong tab's note.
+3. Flip `notebookTabs` for OneNote and open its tab. A tab per notebook opens
+   each notebook's own page; the one tree tab opens the page of the notebook
+   last read in, and unfolds that notebook to show it. Neither shape loses the
+   answer when the setting is flipped back — that is the whole reason OneNote
+   implements `defaultNote` rather than living on the host's memory.
+4. Delete the note a tab opens with, then open that tab: it opens empty rather
+   than reporting a note it cannot load.
+5. A state file from before this (`version` 3, no `lastNotes`) opens every tab
+   empty until each has been used once — there is no first-open guess any more.
+
 ### The manual checklist for the list not flickering
 
 `revision` counts `rebuildRows` calls; `rowWrites` counts the times the list

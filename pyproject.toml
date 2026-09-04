@@ -12,7 +12,7 @@
 
 [project]
 name = "note-note"
-version = "1.0.8"
+version = "1.0.9"
 description = "Notes for the Omarchy shell: your Markdown notebooks on disk alongside Microsoft Sticky Notes, OneNote and Notion."
 # Nothing in the tree uses syntax newer than 3.8 — no match statement, no
 # walrus, no PEP 604 unions — so the floor is set by what is still supported

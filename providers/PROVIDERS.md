@@ -119,6 +119,20 @@ them.
   Implement neither this nor `saveRequested` and your notes are written on the
   host's own default pause (1500 ms), so a provider that does not care about
   the question still autosaves.
+- `noteOpened(path)` (optional) — that note is now the one on screen. The
+  host keeps its own record of the note last open in each tab and needs
+  nothing from you for it; take this only when the tab is not the unit you
+  want to answer by. OneNote does, because its `notebookTabs` setting turns
+  one tab holding every notebook into a tab each and back, so it remembers
+  per notebook instead and keeps that in its `saveState()`.
+- `defaultNote(sectionKey)` (optional) → the path a tab should open with, or
+  `""` for none. Asked when that tab becomes the open one — on a switch and at
+  startup — and asked again on every rebuild until it can be answered, so a
+  note whose row has not listed yet is opened when it arrives rather than
+  lost. Answer `""` and the tab opens empty; the host never falls back to
+  picking a note of its own. Implement neither this nor `noteOpened` and your
+  tabs open on the note last open in them, which is what the host remembers
+  for everyone.
 - `create(target, cb)` → `cb({ path, error })`
 - `remove(path, cb)` → `cb({ error })`
 - `createSection(name, cb)` → `cb({ key, target, error })`. `key` is the new

@@ -630,7 +630,71 @@ Item {
   // how many times rebuildRows ran (`revision`). The two used to be the same
   // number and should not be: every write here throws away every delegate.
   property int rowWrites: 0
-  property bool pickedInitial: false
+  // ── what a tab opens with ───────────────────────────────────────────
+  // A tab opens on the note you last had open in it. That is a fact about
+  // where the user was rather than about any backend — OneNote's API has no
+  // opinion about which page this app showed last — so the host keeps it,
+  // once, for every provider including the ones not written yet.
+  //
+  // A provider with a better answer says so with `defaultNote(sectionKey)`
+  // and is believed instead. OneNote keeps its own, per *notebook*, because
+  // its notebookTabs setting turns one tab holding every notebook into a tab
+  // each and back: keys the host has never seen, about notebooks the user has
+  // been reading all along.
+  property var lastNotes: ({})       // section key -> the note last open there
+  // True while the tab on screen has not been given its opening note yet: set
+  // at startup and on every switch, cleared as soon as it is answered or the
+  // user picks something themselves. It stays set while a provider is still
+  // listing — OneNote answers a second or two after the window is up — so the
+  // note is opened when its row arrives rather than lost to the race, and it
+  // costs nothing left set for a note that never comes back.
+  property bool defaultOwed: true
+
+  // Told to the note's own provider, and kept here for the tab it was opened
+  // in — which are two different questions, and a search landing in another
+  // tab is where they come apart.
+  function noteWasOpened(path) {
+    var owner = providerOf(path)
+    if (owner && typeof owner.noteOpened === "function") owner.noteOpened(path)
+    var key = activeKey()
+    if (!key || root.lastNotes[key] === path) return
+    // Replaced wholesale, never mutated, like contentHits above it.
+    var next = {}
+    for (var k in root.lastNotes) next[k] = root.lastNotes[k]
+    next[key] = path
+    root.lastNotes = next
+    saveState()
+  }
+
+  // Empty means open nothing: a tab you have not been in, or one whose note
+  // is gone, opens empty rather than opening something you did not ask for.
+  function defaultNoteFor(key) {
+    var p = providerById(String(key).split("/")[0])
+    if (p && typeof p.defaultNote === "function") return p.defaultNote(key) || ""
+    return root.lastNotes[key] || ""
+  }
+
+  function openDefaultNote() {
+    // The tab on screen while a provider is still listing is a stand-in:
+    // activeKey() falls back to the first section that exists, and the tab
+    // the user actually left open — activeSection, which is deliberately not
+    // resolved against the live list so that a slow provider cannot cost them
+    // their tab — may be a OneNote one that arrives a second later. Answering
+    // the stand-in opens a note from a tab they are about to stop looking at,
+    // and spends the claim doing it. A tab that never arrives at all (signed
+    // out of its provider since) simply leaves the claim standing, which
+    // costs a comparison per rebuild and opens nothing.
+    var key = activeKey()
+    if (key !== root.activeSection) return
+    var path = defaultNoteFor(key)
+    // Not yet, rather than not at all: a provider still listing has no row to
+    // find the note in, and the next rebuild asks again.
+    if (!path || !noteExists(path)) return
+    selectPath(path)
+    // Deferred: revealPath rebuilds the provider's rows, and this is being
+    // called from inside a rebuild.
+    Qt.callLater(function() { root.revealCurrent() })
+  }
   // The tab the sidebar is open at, persisted verbatim. It is deliberately not
   // resolved against the live sections here: a provider that has not listed yet
   // (OneNote is async) must not cost the user their tab.
@@ -664,8 +728,12 @@ Item {
   // per keystroke, and not the tab to come back to next run.
   function setActiveSection(key, persist) {
     if (!key || key === activeKey()) return
-    // Switching tabs is engagement: from here on no note is picked unasked.
-    root.pickedInitial = true
+    // The tab being opened is owed the note it opens with — the one last open
+    // in it, or its provider's own answer. This is where the app used to
+    // decide the opposite, that a switch means no note is picked unasked;
+    // what survives of that is the rule that nothing is picked when there is
+    // nothing remembered (docs/decisions.md).
+    root.defaultOwed = true
     // Opening another notebook puts the one you were reading away: a note from
     // a tab you have left is not what the panel beside it is showing. Unsaved
     // edits are flushed on the way out.
@@ -840,14 +908,12 @@ Item {
     // back over it is one more jump for nothing — which is why this was worst
     // on a list scrolled down to a note in an open tree.
     if (rowsChanged && keep > 0) Qt.callLater(function() { list.setScrollOffset(keep) })
-    // First open: land on the most recent note of the tab that opened —
-    // whichever provider's tab that is. A tab whose notes have not listed yet
-    // (OneNote is async) leaves the chance open for the rebuild that brings
-    // them; the first tab switch or selection closes it (pickedInitial), so a
-    // tab the user emptied on purpose is not refilled behind their back.
-    if (!root.currentPath && !root.filterText && !root.pickedInitial) {
-      for (var n = out.length - 1; n >= 0; n--) if (out[n].kind === "note") { selectPath(out[n].path); break }
-    }
+    // The tab on screen opens with the note it is owed. Asked on every
+    // rebuild while the claim stands, because a tab whose notes have not
+    // listed yet (OneNote is async) can only be answered by the rebuild that
+    // brings them — and never once the user has picked for themselves, so a
+    // note you closed is not reopened behind your back.
+    if (root.defaultOwed && !root.filterText) openDefaultNote()
     // A note that vanished from its provider (deleted elsewhere, signed out)
     // is deselected; one merely sitting in another tab is kept.
     if (root.currentPath && !root.filterText && !noteExists(root.currentPath)) { selectPath(""); return }
@@ -970,6 +1036,7 @@ Item {
     return JSON.stringify({ currentPath: root.currentPath, loadingPath: root.loadingPath, loadingNote: root.loadingNote,
                             status: root.statusText, readOnly: editor.readOnly, words: editor.wordCount, notice: editor.noticeTitle, viewFocused: editor.viewHasFocus,
                             dirty: root.dirty, saving: root.saveInFlight(root.currentPath), loadSeq: root.noteLoadSeq,
+                            defaultOwed: root.defaultOwed,
                             rows: root.rows.length, revision: root.revision, rowWrites: root.rowWrites,
                             offset: Math.round(list.scrollOffset()),
                             loadFailed: root.loadFailed, queues: lanes,
@@ -1026,9 +1093,11 @@ Item {
     // Any selection pulls the list's keyboard cursor back to the note —
     // a click, a search landing, a tab switch putting the note away.
     root.treeCursor = ""
-    // Any real selection — the user's or the first-open pick itself — ends
-    // the first-open window (see rebuildRows).
-    if (path) root.pickedInitial = true
+    // Any real selection settles what this tab opens with next time and ends
+    // its claim on being given one — the user choosing, or openDefaultNote
+    // answering the claim itself. Before the early return below, because
+    // re-picking the note already open is still a choice.
+    if (path) { root.defaultOwed = false; root.noteWasOpened(path) }
     if (path === root.currentPath) return
     var p = providerOf(path)
     if (path && !p) return
@@ -1418,9 +1487,11 @@ Item {
     // otherwise still hold the startup snapshot — and lose the fold state
     // made since.
     root.providerState = ps
-    // version 3: the open tab, where 2 kept two lists of folded sections. An
-    // older file simply has no `active`, and the first local notebook opens.
-    var st = { version: 3, detached: root.detached, active: root.activeSection, providers: ps }
+    // version 4: what each tab opens with, where 3 added the open tab itself
+    // and 2 kept two lists of folded sections. An older file simply has no
+    // `lastNotes`, and every tab opens empty until it has been used once.
+    var st = { version: 4, detached: root.detached, active: root.activeSection,
+               lastNotes: root.lastNotes, providers: ps }
     if (root.listWidth > 0) st.listWidth = Math.round(root.listWidth)
     stateFile.setText(JSON.stringify(st, null, 2) + "\n")
   }
@@ -1432,6 +1503,7 @@ Item {
       // The stored width is trusted only as a number; the list's own binding
       // clamps it against whatever window it wakes up in.
       if (typeof s.listWidth === "number" && isFinite(s.listWidth) && s.listWidth > 0) root.listWidth = s.listWidth
+      if (s.lastNotes && typeof s.lastNotes === "object") root.lastNotes = s.lastNotes
       if (s.providers) root.providerState = s.providers
     } catch (e) { /* a corrupt state file costs nothing */ }
     scanProviders.running = true

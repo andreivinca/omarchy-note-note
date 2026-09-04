@@ -183,8 +183,48 @@ Item {
 
   function crumb(path) { var pg = pageAt(path); return pg ? sectionName(pg.sectionId) : "OneNote" }
   function createTargetFor(path) { var pg = pageAt(path); return pg ? "section:" + pg.sectionId : "" }
-  function restoreState(obj) { if (obj && Array.isArray(obj.expanded)) root.expanded = obj.expanded }
-  function saveState() { return { expanded: root.expanded } }
+  function restoreState(obj) {
+    if (!obj) return
+    if (Array.isArray(obj.expanded)) root.expanded = obj.expanded
+    if (typeof obj.lastNotebook === "string") root.lastNotebook = obj.lastNotebook
+    if (obj.lastPages && typeof obj.lastPages === "object") root.lastPages = obj.lastPages
+  }
+  function saveState() { return { expanded: root.expanded, lastNotebook: root.lastNotebook, lastPages: root.lastPages } }
+
+  // ── what a tab opens with ───────────────────────────────────────────
+  // The host keeps this for every provider, keyed by tab, and that is the
+  // right answer for anything whose tabs are fixed. OneNote's are not: the
+  // notebookTabs setting turns one tab holding every notebook into a tab
+  // each and back again, so a memory keyed by tab is thrown away by a setting
+  // that changed nothing about which notebook the user was reading. Kept per
+  // notebook here instead, which is the unit the user actually means either
+  // way, and answered into whichever shape the tabs are wearing.
+  property string lastNotebook: ""   // the notebook last read in
+  property var lastPages: ({})       // notebook id -> the page last open in it
+
+  function noteOpened(path) {
+    var pg = pageAt(path)
+    if (!pg) return
+    var sec = sectionAt(pg.sectionId)
+    if (!sec) return
+    root.lastNotebook = sec.notebookId
+    if (root.lastPages[sec.notebookId] === path) return
+    var next = {}
+    for (var k in root.lastPages) next[k] = root.lastPages[k]
+    next[sec.notebookId] = path
+    root.lastPages = next
+    root.persistRequested()
+  }
+
+  // A notebook tab's section key is the notebook's own id; the single tree
+  // tab's is this provider's, and the notebook it means is the last one read
+  // in — which is what makes that tab open where it was left, notebook and
+  // page both, rather than merely on a page.
+  function defaultNote(sectionKey) {
+    var key = sectionKey.substring(root.id.length + 1)
+    var book = root.notebookTabs ? key : root.lastNotebook
+    return root.lastPages[book] || ""
+  }
 
   function toggleTree(id) {
     var i = root.expanded.indexOf(id), next = root.expanded.slice()

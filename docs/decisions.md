@@ -317,6 +317,41 @@ always did, and a write that fails terminally meanwhile is reported once on
 the next open(). Still not an offline queue: it is in memory, this session
 only, and quitting the shell ends it.
 
+### A tab opens on the note you left in it, and the host is what remembers
+
+Switching tabs used to put the note away and refuse to pick another —
+`selectPath("")` and a `pickedInitial` flag whose whole job was that no note is
+opened unasked. That was right while the app had nothing to open *but* a
+guess: the rule it enforced sat next to a first-open heuristic that landed on
+whichever note happened to be last in the list, and being given a note nobody
+asked for is worse than being given none.
+
+*Considered:* every provider keeping its own record of the note last open in
+each of its sections.
+*Rejected:* which note this app last showed is a fact about where the user was,
+not about a backend — OneNote's API has no opinion about it — so each provider
+would have kept the same map, the same persistence and the same pruning
+question, four times over, and an external provider would have had to write it
+again to have the feature at all.
+
+*Chosen:* the host remembers, keyed by tab, in its own state file; a provider
+that has a better answer implements `defaultNote(sectionKey)` and is believed
+instead. OneNote does, and it is the case that shows why the hook is not
+speculative: `notebookTabs` turns one tab holding every notebook into a tab
+each and back, so a memory keyed by tab is discarded by a setting that changed
+nothing about which notebook was being read. It keeps its own per notebook,
+and answers into whichever shape the tabs are wearing — for the single tree
+tab, the last notebook read in and the page last open in *that*, which is what
+"where I left off" means when one tab holds them all.
+
+*Chosen:* a tab with nothing remembered opens empty. The old first-open
+heuristic goes with it: the most recent note of a tab is not a note the user
+asked for, and now that the app can open the right one it should not guess at
+a substitute. The claim is a flag rather than a one-shot at startup, because
+OneNote lists a second or two after the window is up — it stands until it can
+be answered, and the moment the user picks anything themselves it is dropped,
+so a note you closed is never reopened behind your back.
+
 ### The list is handed a new model only when it is a different list
 
 The rows sit behind a `DelegateModel`, so assigning `rows` is not an update to
