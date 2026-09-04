@@ -317,6 +317,104 @@ always did, and a write that fails terminally meanwhile is reported once on
 the next open(). Still not an offline queue: it is in memory, this session
 only, and quitting the shell ends it.
 
+### The list is handed a new model only when it is a different list
+
+The rows sit behind a `DelegateModel`, so assigning `rows` is not an update to
+a list — it is a different list, and every delegate is destroyed and built
+again. `rebuildRows` runs far more often than the rows actually change: a
+single open runs it six times, as each provider's `refresh()`, OneNote's
+cached read and then its listing, and the account's own refresh each land.
+All six normally produce exactly the rows already on screen, so the list was
+being thrown away and remade six times for nothing. That is what the flicker
+on reopening was, and it was worst on a list scrolled down to a note inside an
+open tree, because the remembered scroll offset was then put back over each of
+the six rebuilds in turn.
+
+*Chosen:* compare and only then assign — the rule the tabs above it already
+followed, for the same reason. The scroll offset is restored only when the
+model really was replaced, since a list that never moved has kept its place.
+`rowWrites` counts the assignments beside `revision`'s calls: the two used to
+be the same number, and the distance between them is the fix.
+
+### The host says a note changed; the provider says when it is written
+
+*Considered:* the host keying the autosave delay off the provider's id — the
+one line it was, `id === "local" ? 500 : 1500`.
+*Rejected:* it reads as a small thing and is not one. It puts a provider's
+name in the host, which is the arrangement the whole contract exists to avoid,
+and it silently decides the cadence for every provider that will ever be
+written: one cloned into the providers directory could be a local database or
+a file on a mount and would still be given the number meant for a network
+round trip, with nowhere to say otherwise.
+
+*Considered:* a `saveDebounce` number on the provider, read by the host's
+timer.
+*Rejected:* it answers "how long" and nothing else, and the host still owns
+the schedule — so a provider whose answer is not a constant has no way to say
+so. Backing off while its own lane is cooling, writing a note the moment a
+sign-in lands, holding everything until a batch window opens: all of those are
+a provider knowing something about its backend that a single number cannot
+carry, and none of them are the host's business.
+
+*Chosen:* `noteEdited(path)` in, `saveRequested(path)` out. The host owns the
+note and the text — it is the editor's document, and only the host can turn it
+into Markdown — and the provider owns the timing entirely, with a `Timer` of
+its own if a pause is all it wants. There is no interval in the host to read
+and no provider named anywhere in it.
+
+The host keeps the moments that are not a schedule: a note switch, the window
+closing, a delete each flush the note, because those are the app about to lose
+the ability to save it at all. And because `flushSave` does nothing for a note
+that is not dirty, a provider's schedule firing after one of them costs
+nothing — which is why the contract has no cancel, and a provider never has to
+be told its request came too late.
+
+*Chosen:* a provider that implements neither is written on the host's own
+default pause. A minimal provider is still a provider, and it should not have
+to know this question exists to keep its notes.
+
+### A note is unsaved until a provider says otherwise
+
+The note's text is rich text and the file is Markdown, so a save begins with a
+converter running in its own process. That conversion is part of the save, and
+for a while it was not counted as one: `dirty` was cleared where the snapshot
+was taken, and the in-flight count only began when the converter answered.
+Between the two the app believed the note was saved, which showed up as the
+unsaved dot blinking off mid-save and, less visibly, as a window in which a
+change arriving from elsewhere was free to reload the editor out from under
+the text about to be sent.
+
+*Chosen:* one mark, taken where the attempt begins and released on whichever
+way out it takes — so the note is unsaved for the whole of it, conversion
+included. `dirty` keeps its own job, which is not the same one: it says the
+editor holds text nobody has captured, and clearing it at the snapshot is what
+stops a second flush from sending that same text twice.
+
+*Chosen:* a failed save puts the note back to unsaved, but only while the
+editor still holds the text it was carrying — the same note, no reload over
+it, no newer attempt that now owns its state. Failing any of those there is
+nothing left here to carry, and marking it would spend a request re-sending
+text that is gone or already on its way. Nothing reruns on its own: this is
+one note marked as what it is, and the app is still not a sync engine.
+
+### The converter's answer is framed, so a failure cannot read as an empty note
+
+Both directions of the conversion answer with JSON. That is not about what
+they carry — `to-html` carries one string — but about what a failure looks
+like: a run that dies writes nothing, and raw text has no failed answer that
+could not also be a real one, because an empty note converts to an empty
+string too.
+
+Unframed, the two were indistinguishable, and the caller that could least
+afford to confuse them was autosave: a converter that crashed handed back an
+empty body, which went to the provider and replaced the note with nothing. The
+same mistake on the way in blanked the editor for a note that had text, and
+the next keystroke saved the blank. *Chosen:* an answer that does not parse is
+the failure, always. On the way out nothing is sent and the note stays
+unsaved; on the way in the note is held read-only with the reason said, which
+is what goal 2 asks for — a note that cannot be written back safely opens
+read-only and says why.
+
 ### Sticky Notes: plain text, no title, no reordering
 
 The backend stores the subject as a copy of the first body line and offers no

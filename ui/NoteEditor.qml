@@ -71,16 +71,21 @@ Item {
     return area.length > 0 ? area.getFormattedText(0, area.length) : area.text
   }
 
-  // The note as it belongs on disk.  callback(markdown)
+  // The note as it belongs on disk.  callback(markdown, ok)
   // The blank landing paragraph the editor parks after a trailing rule or
   // table (insertSnippet, leaveBlock) is its own furniture, not the note's:
   // one still holding nothing but its filler at save time stays out of the
   // file. Reloading such a note ends it with the rule again, and
   // escapeForward is what steps past it.
+  //
+  // `ok` is the converter's, passed on rather than swallowed: the caller is
+  // autosave, and an empty answer from a converter that died is not an empty
+  // note — sending it would write nothing over everything.
   function requestMarkdown(callback) {
-    if (root.plain || !root.markdown) { callback(plainText()); return }
-    root.markdown.toMarkdown(documentHtml(), function(md) {
-      callback(md.replace(/(^|\n) \n?$/, "$1"))
+    if (root.plain || !root.markdown) { callback(plainText(), true); return }
+    root.markdown.toMarkdown(documentHtml(), function(md, map) {
+      if (!map.ok) { callback("", false); return }
+      callback(md.replace(/(^|\n) \n?$/, "$1"), true)
     }, root.documentBase)
   }
 
@@ -143,8 +148,22 @@ Item {
     titleField.cursorPosition = 0
     settingText = false
     if (root.plain || !root.markdown || !body) { showBody(body || "", token); return }
-    root.markdown.toHtml(body, function(html) { root.showBody(html, token) }, root.documentBase)
+    root.markdown.toHtml(body, function(html, ok) {
+      if (token !== root.noteToken) return        // a newer note won the race
+      // The note was read but could not be rendered. Its text does not go
+      // into the document — an empty document is what autosave would write
+      // back — and the host is told, so the note says why rather than sitting
+      // there looking like a note somebody emptied.
+      if (!ok) { root.renderFailed(); return }
+      root.showBody(html, token)
+    }, root.documentBase)
   }
+
+  // The open note could not be turned into a document. The host answers by
+  // holding it read-only with a reason, the way it does for a note it could
+  // not read at all — a note that cannot be written back safely opens
+  // read-only and says so (business-requirements.md, goal 2).
+  signal renderFailed()
 
   function showBody(document, token) {
     if (token !== root.noteToken) return          // a newer note won the race
@@ -415,7 +434,8 @@ Item {
   // position survives the round trip unchanged.
   function replaceDoc(md, caret, then) {
     var pos = caret === undefined ? area.cursorPosition : (caret < 0 ? Number.MAX_VALUE : caret)
-    root.markdown.toHtml(md, function(html) {
+    root.markdown.toHtml(md, function(html, ok) {
+      if (!ok) return                             // a failed conversion changes nothing
       atomic(function() {
         area.remove(0, area.length)
         area.insert(0, html)

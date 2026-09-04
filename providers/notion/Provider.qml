@@ -26,6 +26,19 @@ Item {
                                 "h1", "h2", "h3", "p", "ul", "ol", "todo", "indent", "outdent",
                                 "quote", "codeblock", "rule", "link"]
 
+  // When the note is written is this provider's own to decide; the host only
+  // says that it changed. A save is a request against Notion's API, and one
+  // that rewrites the page's blocks rather than patching a character, so the
+  // typing is let settle first.
+  signal saveRequested(string path)
+  function noteEdited(path) { saveSchedule.path = path; saveSchedule.restart() }
+  Timer {
+    id: saveSchedule
+    property string path: ""
+    interval: 1500
+    onTriggered: root.saveRequested(saveSchedule.path)
+  }
+
   property var host: null
   property var services: null
   // This provider's own request lane, keyed to Notion's own limit — a

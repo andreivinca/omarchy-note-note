@@ -107,6 +107,18 @@ them.
   backend by reference rather than uploading them again, and
   `providers/local/images.py`, which copies staged pastes into `.assets/`
   beside the note and makes the links relative.
+- `noteEdited(path)` (optional) — the open note has just been changed, and
+  the change is not written yet. **When it gets written is yours to decide.**
+  The host says only that it happened; keep whatever schedule your backend
+  wants — a short pause for a local file, a longer one for a note that costs a
+  request, a longer one still while your lane is cooling, or nothing at all
+  until something you are waiting for arrives — and emit `saveRequested(path)`
+  when you want the write. It is called on every edit, so debouncing is the
+  usual shape and the one every built-in provider takes: see the four-line
+  `Timer` at the head of any `Provider.qml`.
+  Implement neither this nor `saveRequested` and your notes are written on the
+  host's own default pause (1500 ms), so a provider that does not care about
+  the question still autosaves.
 - `create(target, cb)` → `cb({ path, error })`
 - `remove(path, cb)` → `cb({ error })`
 - `createSection(name, cb)` → `cb({ key, target, error })`. `key` is the new
@@ -164,6 +176,14 @@ them.
   A provider that is not configured should show a `Set up…` action row in its
   section and open the view from `action(id)`; a `Settings…` row can reopen it.
 - `persistRequested()` — ask the host to persist `saveState()`.
+- `saveRequested(string path)` (optional) — write that note now: the host
+  takes the editor's text and calls your `save()` with it. Emit it whenever
+  your schedule says so, having been told by `noteEdited(path)`.
+  It is answered only for the note that is open, because the text being
+  written is the editor's, and it is free to arrive late or never: a note the
+  user has moved away from, closed the window on, or deleted has already been
+  written by then, and a request to write a note with nothing pending does
+  nothing. So you never have to cancel a schedule — let it fire.
 
 ## Setup and settings
 

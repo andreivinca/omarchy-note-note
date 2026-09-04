@@ -22,6 +22,19 @@ Item {
   // of Sticky Notes here signs in through. OneNote has one of its own.
   readonly property string microsoftClientId: "867770a1-477d-4864-9e09-8e3019ca336c"
 
+  // When the note is written is this provider's own to decide; the host only
+  // says that it changed. A save is a Graph request like any other, and a
+  // sticky note is short enough that waiting for the typing to stop costs the
+  // user nothing.
+  signal saveRequested(string path)
+  function noteEdited(path) { saveSchedule.path = path; saveSchedule.restart() }
+  Timer {
+    id: saveSchedule
+    property string path: ""
+    interval: 1500
+    onTriggered: root.saveRequested(saveSchedule.path)
+  }
+
   property var host: null
   property var services: null
   // This provider's own Microsoft sign-in: own registration, own token file,

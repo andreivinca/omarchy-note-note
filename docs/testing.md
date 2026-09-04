@@ -34,7 +34,8 @@ everything in this project was verified:
 
 ```bash
 C="omarchy-shell shell call io.github.andreivinca.note-note"
-$C debugState ""                 # currentPath, loading, status, words, readOnly, providers
+$C debugState ""                 # currentPath, loading, dirty/saving, status, words, readOnly, providers
+                                 # rows/revision/rowWrites/offset: what the list is doing
 $C selectPath "local:/home/you/Notes/x.md"
 $C editorTool h1                 # any toolbar tool id
 $C editorCursor 42               # move the caret; prints position + in-table
@@ -277,6 +278,54 @@ With the shell running, and the OneNote tab open:
 - Writes are **eventually consistent**: a GET right after a PATCH can return
   the old content. Wait ~15 s before verifying, and never poll in a tight
   loop — that is what triggers the throttle.
+
+### The manual checklist for the list not flickering
+
+`revision` counts `rebuildRows` calls; `rowWrites` counts the times the list
+was actually handed a new model, which is the expensive one — every write of
+it destroys and rebuilds every delegate. They must not track each other.
+
+1. Open the app on a note inside an expanded tree, `$C dismiss ""`, then
+   `$C open "{}"`. `revision` climbs by about six, `rowWrites` by **zero**.
+   Six there is the flicker back.
+2. Switch tabs, expand a tree, let a note appear or vanish on disk: one new
+   model each, and the rows change with it.
+3. Leave it alone for a poll or two: no new models at all.
+
+### The manual checklist for the save state
+
+The note counts as unsaved from the keystroke until a provider says otherwise,
+and the converter runs inside that span — so the states worth watching are
+`dirty` and `saving` together, and the writes that do or do not follow. On a
+scratch local note, with the window open:
+
+```bash
+C="omarchy-shell shell call io.github.andreivinca.note-note"
+inotifywait -m -e close_write,moved_to --format '%e %f' ~/Notes   # writes are a rename
+```
+
+1. `$C onEdited ""` marks it: `dirty=true saving=false`. After the provider's
+   own pause (`noteEdited` → its `Timer` → `saveRequested`; the host's 1500 ms
+   default only for a provider that implements neither),
+   `dirty=false saving=true` for one unbroken span — never both false while a
+   save is under way — then both false, and **one** `MOVED_TO` for the note.
+2. Move `services/markdown/qthtml/__main__.py` aside and repeat. `saving` goes
+   true, the converter fails, and the note is **not written at all**: `dirty`
+   comes back true and the bar says it could not be read for saving. Put the
+   script back and the next flush carries the note. This is the case that used
+   to write an empty note over a full one, so it is the one worth rerunning.
+3. With the script still aside, open a note: it is held read-only saying it
+   could not be displayed, rather than opening blank and editable — an
+   editable blank is what autosave would write back.
+4. Time the pause to check whose it is: `$C onEdited ""`, then poll
+   `debugState` until `saving` turns true. It is the interval on that
+   provider's own `Timer` — 500 ms for a local note, 1500 for the three that
+   pay a request per write. Comment the `Timer` and its `noteEdited` out and
+   the same note takes the host's default instead, which is the only number
+   left in the host.
+5. Delete the open note while a save is converting: nothing is written back to
+   it (`cancelPendingSave` moves the epoch the conversion checks). A save
+   already handed to the provider still finishes; that one is past recall.
 
 ## Checklist for a UI change
 

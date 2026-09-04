@@ -14,6 +14,13 @@ large images, and telling that cap from a width the author chose).
 came from, and how many blocks there are — which is what lets the toolbar turn
 a caret position into a Markdown line.
 
+`to-html` answers with JSON as well (`{"html": …}`), for a reason that has
+nothing to do with what it carries: a run that dies writes nothing, and raw
+HTML has no failed answer that could not also be a real one — an empty note
+converts to an empty string, and so does a crash. Framing the answer is what
+tells the two apart, and telling them apart is what stops a conversion that
+failed from being read as "the note is empty" and saved back over the note.
+
 Payloads arrive on stdin rather than argv so a note never appears in the
 process list (docs/security.md rule 2). The options are parsed by hand
 because `argparse` costs more to import than the conversion costs to run, and
@@ -65,9 +72,9 @@ def main(argv=None):
     text = payload.decode("utf-8", "replace")
 
     if direction == "to-html":
-        sys.stdout.write(to_html(text, options["highlight"], options["ink"], options["link"],
-                                 options["quote_ink"], options["code_background"],
-                                 options["code_chip"], options["base"]))
+        json.dump({"html": to_html(text, options["highlight"], options["ink"], options["link"],
+                                   options["quote_ink"], options["code_background"],
+                                   options["code_chip"], options["base"])}, sys.stdout)
     elif options["map"]:
         json.dump(convert(text, options["base"]), sys.stdout)
     else:

@@ -41,19 +41,32 @@ Item {
   // monospace span before it looks at a colour.
   property string codeChip: "transparent"
 
-  // Markdown -> HTML for `TextEdit.text`.  callback(html)
+  // Markdown -> HTML for `TextEdit.text`.  callback(html, ok)
+  //
+  // `ok` is false when the converter failed, and only then — the rule
+  // `toMarkdown` answers by, said here for the same reason. A caller that
+  // cannot tell a failure from an empty note puts the empty one in the
+  // editor, and autosave writes it back over the note; an answer that does
+  // not parse is the failure, and a run that dies writes nothing, which does
+  // not parse. The callback always runs: a failed conversion must never lose
+  // the note.
   //
   // `base` (optional) is the note's own directory, for notes that name their
   // images by a relative path (local notebooks): it is how the converter
   // finds and measures them. A directory path, never note content, so it may
   // ride on argv.
   function toHtml(markdown, callback, base) {
-    if (!markdown) { callback(""); return }
+    if (!markdown) { callback("", true); return }
     run(["to-html", "--highlight", root.highlight, "--highlight-ink", root.highlightInk,
          "--link", root.link, "--quote-ink", root.quoteInk,
          "--code-background", root.codeBackground,
          "--code-chip", root.codeChip].concat(base ? ["--base", base] : []),
-        markdown, function(text) { callback(text) })
+        markdown, function(text) {
+      var result = null
+      try { result = JSON.parse(text) } catch (error) { result = null }
+      if (!result || typeof result.html !== "string") { console.warn("note-note: could not render the note"); callback("", false); return }
+      callback(result.html, true)
+    })
   }
 
   // HTML from `getFormattedText()` -> Markdown.  callback(markdown, map)
@@ -69,8 +82,8 @@ Item {
     run(["to-markdown", "--with-map"].concat(base ? ["--base", base] : []), html, function(text) {
       var result = null
       try { result = JSON.parse(text) } catch (error) { result = null }
-      if (!result) { console.warn("note-note: could not read the editor's document"); callback("", { blocks: [], count: 0, ok: false }); return }
-      callback(result.markdown || "", { blocks: result.blocks || [], count: result.count || 0, ok: true })
+      if (!result || typeof result.markdown !== "string") { console.warn("note-note: could not read the editor's document"); callback("", { blocks: [], count: 0, ok: false }); return }
+      callback(result.markdown, { blocks: result.blocks || [], count: result.count || 0, ok: true })
     })
   }
 
@@ -79,6 +92,11 @@ Item {
   // while the toolbar converts), and sharing one would mean queueing them.
   function run(args, payload, callback) {
     var proc = converter.createObject(root, { command: ["python3", root.script].concat(args), callback: callback })
+    // The callback runs even then: both directions read an answer that does
+    // not parse as a failed conversion, and a converter that never started
+    // is one of those. A caller left without an answer at all is a note
+    // stuck half-saved.
+    if (!proc) { console.warn("note-note: could not start the converter"); callback(""); return }
     proc.stdinEnabled = true                 // stdin must be open before it starts
     proc.running = true
     proc.write(payload)

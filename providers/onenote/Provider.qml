@@ -29,6 +29,20 @@ Item {
   // of OneNote here signs in through. Sticky Notes has one of its own.
   readonly property string microsoftClientId: "1ed713b0-195a-4360-88b4-993f3aeaa262"
 
+  // When the note is written is this provider's own to decide; the host only
+  // says that it changed. Every save is a PATCH against Graph, paced and
+  // retried by the lane behind it and counted against an account's budget, so
+  // the typing is let settle first: long enough that a sentence is one
+  // request rather than one per word.
+  signal saveRequested(string path)
+  function noteEdited(path) { saveSchedule.path = path; saveSchedule.restart() }
+  Timer {
+    id: saveSchedule
+    property string path: ""
+    interval: 1500
+    onTriggered: root.saveRequested(saveSchedule.path)
+  }
+
   property var host: null
   property var services: null
   // Assigned by the host from config.providers.onenote.notebookTabs
