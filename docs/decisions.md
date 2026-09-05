@@ -319,9 +319,9 @@ only, and quitting the shell ends it.
 
 ### A tab opens on the note you left in it, and the host is what remembers
 
-Switching tabs used to put the note away and refuse to pick another —
-`selectPath("")` and a `pickedInitial` flag whose whole job was that no note is
-opened unasked. That was right while the app had nothing to open *but* a
+Switching tabs still puts the note away (`selectPath("")`); it used to also
+refuse to pick another — a `pickedInitial` flag whose whole job was that no
+note is opened unasked. That was right while the app had nothing to open *but* a
 guess: the rule it enforced sat next to a first-open heuristic that landed on
 whichever note happened to be last in the list, and being given a note nobody
 asked for is worse than being given none.
@@ -347,16 +347,35 @@ tab, the last notebook read in and the page last open in *that*, which is what
 *Chosen:* a tab with nothing remembered opens empty. The old first-open
 heuristic goes with it: the most recent note of a tab is not a note the user
 asked for, and now that the app can open the right one it should not guess at
-a substitute. The claim is a flag rather than a one-shot at startup, because
-OneNote lists a second or two after the window is up — it stands until it can
-be answered, and the moment the user picks anything themselves it is dropped,
-so a note you closed is never reopened behind your back.
+a substitute. What a tab is owed is a flag rather than a one-shot at startup,
+because OneNote lists a second or two after the window is up — it stands
+until it can be answered, and the moment the user picks anything themselves
+it is dropped, so a note you closed is never reopened behind your back.
+
+*Chosen:* only a choice is remembered. The host has two doors: `choosePath`
+for the user's own selections (a click, the keyboard, a note just created,
+the tab being given the note it was owed) and `selectPath` for everything
+the app puts on screen by itself — a search landing on its first hit, the
+neighbour picked after a delete, a switch putting the note away. Only the
+first records the note and ends what the tab is owed; letting the second do
+it would have brought the guess back through the search field, and written
+the state file once per keystroke.
+
+*Chosen:* an empty or unlisted intent means the tab on screen is the tab.
+`activeSection` is persisted verbatim and may name a tab no provider has
+listed yet (or ever will, signed out since); while it does, the first tab
+stands in and is not given a note, since that would spend the real tab's on
+a tab about to disappear. But no intent at all — a fresh state file, a user
+who has never switched tabs — is not a slow provider, and the tab on screen
+is owed its note like any other; and clicking the stand-in commits it.
 
 ### The list is handed a new model only when it is a different list
 
-The rows sit behind a `DelegateModel`, so assigning `rows` is not an update to
-a list — it is a different list, and every delegate is destroyed and built
-again. `rebuildRows` runs far more often than the rows actually change: a
+`rows` is a plain JS array handed to the view as a value, so assigning it is
+not an update to a list — it is a different list, and every delegate is
+destroyed and built again, with or without the `DelegateModel` in front of
+it (which is there so a drag can reorder without a model write).
+`rebuildRows` runs far more often than the rows actually change: a
 single open runs it six times, as each provider's `refresh()`, OneNote's
 cached read and then its listing, and the account's own refresh each land.
 All six normally produce exactly the rows already on screen, so the list was
@@ -370,6 +389,12 @@ followed, for the same reason. The scroll offset is restored only when the
 model really was replaced, since a list that never moved has kept its place.
 `rowWrites` counts the assignments beside `revision`'s calls: the two used to
 be the same number, and the distance between them is the fix.
+
+*Chosen:* a row carries only what the list shows or drags on. A note's
+`version` moves on every save, and a row that carried it made two lists that
+looked the same compare different — so every autosave rebuilt the list the
+comparison was meant to spare. The version is read from the providers' own
+sections where it is needed (`versionOf`).
 
 ### The host says a note changed; the provider says when it is written
 
@@ -397,12 +422,14 @@ into Markdown — and the provider owns the timing entirely, with a `Timer` of
 its own if a pause is all it wants. There is no interval in the host to read
 and no provider named anywhere in it.
 
-The host keeps the moments that are not a schedule: a note switch, the window
-closing, a delete each flush the note, because those are the app about to lose
-the ability to save it at all. And because `flushSave` does nothing for a note
-that is not dirty, a provider's schedule firing after one of them costs
-nothing — which is why the contract has no cancel, and a provider never has to
-be told its request came too late.
+The host keeps the moments that are not a schedule: a note switch and the
+window closing flush the note, because those are the app about to lose the
+ability to save it at all, and a delete drops the note's edits with it. Either
+way `flushSave` then finds nothing dirty, so a provider's schedule firing
+after one of them costs nothing — which is why the contract has no cancel, and
+a provider never has to be told its request came too late. The host's own
+default schedule has the same shape (a pause, then a request naming the note,
+honoured only while that note is open), so it needs no cancelling either.
 
 *Chosen:* a provider that implements neither is written on the host's own
 default pause. A minimal provider is still a provider, and it should not have
@@ -432,6 +459,16 @@ nothing left here to carry, and marking it would spend a request re-sending
 text that is gone or already on its way. Nothing reruns on its own: this is
 one note marked as what it is, and the app is still not a sync engine.
 
+*Chosen:* a save the provider could not send is a failed save. The request
+lanes answer a job they dropped — a sign-out emptying the lane, the provider
+being turned off — with no result, and the providers used to pass that on as
+`{}`, the same answer as a save that landed; the host cleared the dot and
+nobody was told. Superseded still answers `{}`, since the newer save carries
+the intent, but cancelled answers `{ error }` (`unsentSave`), which is what
+"an accepted save finishes or fails out loud" means. Turning a provider off
+while its note holds unflushed edits drops them and says so, rather than
+flushing them into a conversion whose answer would find the provider gone.
+
 ### The converter's answer is framed, so a failure cannot read as an empty note
 
 Both directions of the conversion answer with JSON. That is not about what
@@ -449,6 +486,22 @@ the failure, always. On the way out nothing is sent and the note stays
 unsaved; on the way in the note is held read-only with the reason said, which
 is what goal 2 asks for — a note that cannot be written back safely opens
 read-only and says why.
+
+*Chosen:* the frame is parsed once, where the process ends (`run` in
+Markdown.qml), and every way a process can end resolves its caller: a finished
+stream, an exit without one, and a start that failed — which Qt reports with
+neither an exit nor a stream end, and which would otherwise have left a note
+marked saving for ever and its edits dropped at the next close.
+
+*Chosen:* a note is loading until its document is on screen. The conversion
+into the editor is asynchronous too, and the load used to end — read-only
+lifted, edits accepted — the moment the provider answered, while the document
+was still empty: a keystroke in that gap was a real edit of a blank, and a
+flush inside it wrote the blank over the note. Now `setNote` reports when the
+document holds the note (or could not), and the host's two load endings —
+`noteReady`, `noteUnavailable` — are the only places that spell what a loaded
+or an unavailable note is, for a first load, a reload and a render that failed
+alike.
 
 ### Sticky Notes: plain text, no title, no reordering
 

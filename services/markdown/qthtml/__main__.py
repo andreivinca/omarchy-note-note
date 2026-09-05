@@ -4,22 +4,22 @@
                                    [--link '#4282d7'] [--quote-ink '#9399b2']
                                    [--code-background '#313244'] [--code-chip '#2a2c3c']
                                    [--base /dir]
-    python3 -m qthtml to-markdown  [--with-map] [--base /dir]
+    python3 -m qthtml to-markdown  [--base /dir]
 
 `--base` is the note's own directory, for both directions: it is how an image
 the note names by a relative path is found and measured (the display cap for
 large images, and telling that cap from a width the author chose).
 
-`--with-map` answers with JSON — the Markdown, the document block each line
-came from, and how many blocks there are — which is what lets the toolbar turn
-a caret position into a Markdown line.
-
-`to-html` answers with JSON as well (`{"html": …}`), for a reason that has
-nothing to do with what it carries: a run that dies writes nothing, and raw
-HTML has no failed answer that could not also be a real one — an empty note
-converts to an empty string, and so does a crash. Framing the answer is what
-tells the two apart, and telling them apart is what stops a conversion that
-failed from being read as "the note is empty" and saved back over the note.
+Both directions answer with one JSON object. `to-markdown` answers with the
+Markdown, the document block each line came from, and how many blocks there
+are — which is what lets the toolbar turn a caret position into a Markdown
+line. `to-html` carries one string, `{"html": …}`, and is framed anyway, for
+a reason that has nothing to do with what it carries: a run that dies writes
+nothing, and raw text has no failed answer that could not also be a real one
+— an empty note converts to an empty string, and so does a crash. The frame
+is what tells the two apart, and telling them apart is what stops a
+conversion that failed from being read as "the note is empty" and saved back
+over the note.
 
 Payloads arrive on stdin rather than argv so a note never appears in the
 process list (docs/security.md rule 2). The options are parsed by hand
@@ -47,15 +47,13 @@ def parse_args(argv):
     options = {"highlight": dialect.DEFAULT_HIGHLIGHT, "ink": dialect.DEFAULT_HIGHLIGHT_INK,
                "link": dialect.DEFAULT_LINK, "quote_ink": dialect.DEFAULT_QUOTE_INK,
                "code_background": dialect.DEFAULT_CODE_BACKGROUND,
-               "code_chip": dialect.DEFAULT_CODE_CHIP, "base": "", "map": False}
+               "code_chip": dialect.DEFAULT_CODE_CHIP, "base": ""}
     if not argv or argv[0] not in ("to-html", "to-markdown"):
         raise SystemExit(__doc__)
     direction, rest = argv[0], argv[1:]
     while rest:
         flag = rest.pop(0)
-        if flag == "--with-map":
-            options["map"] = True
-        elif flag in FLAGS and rest:
+        if flag in FLAGS and rest:
             options[FLAGS[flag]] = rest.pop(0)
         else:
             raise SystemExit("qthtml: unknown option %r" % flag)
@@ -75,10 +73,8 @@ def main(argv=None):
         json.dump({"html": to_html(text, options["highlight"], options["ink"], options["link"],
                                    options["quote_ink"], options["code_background"],
                                    options["code_chip"], options["base"])}, sys.stdout)
-    elif options["map"]:
-        json.dump(convert(text, options["base"]), sys.stdout)
     else:
-        sys.stdout.write(to_markdown(text, options["base"]))
+        json.dump(convert(text, options["base"]), sys.stdout)
     return 0
 
 

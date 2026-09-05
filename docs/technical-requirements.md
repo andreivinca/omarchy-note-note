@@ -71,9 +71,11 @@ lists live as data in `ui/KeyBindings.js`, beside a note in `handleShortcut`
 saying the two are edited together.
 
 **The host must not** know any backend, path format, credential or API. Every
-branch of the form `if (provider.id === "…")` is a design failure; the two
-that exist (`local` for the default "new note" target and the autosave
-debounce) are the exceptions to remove first if a third appears. The request
+branch of the form `if (provider.id === "…")` is a design failure; the one
+that exists (`local` for the default "new note" target) is the exception to
+remove first if a second appears — the autosave debounce was another until
+the provider took over its own schedule (`noteEdited` / `saveRequested`,
+PROVIDERS.md). The request
 queues are host-owned but backend-agnostic: the host knows a *rate key* is a
 string a provider chose, and nothing else about it.
 
@@ -97,9 +99,11 @@ people write against: change it additively, never silently.
 - `version` is an opaque change marker (file mtime, `lastModifiedDateTime`,
   `last_edited_time`). The host reloads the open note when a listing reports a
   newer version and the note has no unsaved edits.
-- Host state (`~/.local/state/omarchy/note-note.json`, version 3): detached
-  flag, the open tab's section key, and a `providers` object each provider owns.
-  Version 2's two fold lists are ignored on read and dropped on the next write.
+- Host state (`~/.local/state/omarchy/note-note.json`, version 4): detached
+  flag, the open tab's section key, `lastNotes` (section key → the note last
+  chosen in that tab), and a `providers` object each provider owns. Older
+  versions are read for what they have and rewritten whole on the next save;
+  version 2's two fold lists are ignored.
 
 ## Storage
 

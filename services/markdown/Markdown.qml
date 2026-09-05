@@ -43,13 +43,10 @@ Item {
 
   // Markdown -> HTML for `TextEdit.text`.  callback(html, ok)
   //
-  // `ok` is false when the converter failed, and only then — the rule
-  // `toMarkdown` answers by, said here for the same reason. A caller that
+  // `ok` is false when the converter failed, and only then. A caller that
   // cannot tell a failure from an empty note puts the empty one in the
-  // editor, and autosave writes it back over the note; an answer that does
-  // not parse is the failure, and a run that dies writes nothing, which does
-  // not parse. The callback always runs: a failed conversion must never lose
-  // the note.
+  // editor, and autosave writes it back over the note — so the answer is
+  // framed (see run), and an empty note is `{"html": ""}`, not nothing.
   //
   // `base` (optional) is the note's own directory, for notes that name their
   // images by a relative path (local notebooks): it is how the converter
@@ -61,11 +58,9 @@ Item {
          "--link", root.link, "--quote-ink", root.quoteInk,
          "--code-background", root.codeBackground,
          "--code-chip", root.codeChip].concat(base ? ["--base", base] : []),
-        markdown, function(text) {
-      var result = null
-      try { result = JSON.parse(text) } catch (error) { result = null }
-      if (!result || typeof result.html !== "string") { console.warn("note-note: could not render the note"); callback("", false); return }
-      callback(result.html, true)
+        markdown, function(answer) {
+      if (!answer || typeof answer.html !== "string") { console.warn("note-note: could not render the note"); callback("", false); return }
+      callback(answer.html, true)
     })
   }
 
@@ -75,32 +70,39 @@ Item {
   // is how the toolbar finds the line the caret is on; `map.count` is how many
   // blocks the document has. `map.ok` is false when the converter failed, and
   // only then — an empty answer is not a failure: a note holding one blank
-  // line converts to no Markdown at all, and that is the truth about it. The
-  // callback always runs: a failed conversion must never lose the note.
+  // line converts to no Markdown at all, and that is the truth about it.
   function toMarkdown(html, callback, base) {
     if (!html) { callback("", { blocks: [], count: 0, ok: true }); return }
-    run(["to-markdown", "--with-map"].concat(base ? ["--base", base] : []), html, function(text) {
-      var result = null
-      try { result = JSON.parse(text) } catch (error) { result = null }
-      if (!result || typeof result.markdown !== "string") { console.warn("note-note: could not read the editor's document"); callback("", { blocks: [], count: 0, ok: false }); return }
-      callback(result.markdown, { blocks: result.blocks || [], count: result.count || 0, ok: true })
+    run(["to-markdown"].concat(base ? ["--base", base] : []), html, function(answer) {
+      if (!answer || typeof answer.markdown !== "string") { console.warn("note-note: could not read the editor's document"); callback("", { blocks: [], count: 0, ok: false }); return }
+      callback(answer.markdown, { blocks: answer.blocks || [], count: answer.count || 0, ok: true })
     })
   }
 
   // ── running the converter ───────────────────────────────────────────
   // One process per conversion. They are short, they overlap (a save can run
   // while the toolbar converts), and sharing one would mean queueing them.
+  //
+  // callback(answer) runs exactly once, whatever happens to the process:
+  // `answer` is the JSON object the converter wrote, or null when it wrote
+  // nothing that parses — because it crashed, exited early, or never started
+  // at all. The frame is what makes a failure distinguishable from an empty
+  // note, since raw text has no failed answer that could not also be a real
+  // one. A caller left without an answer would be a note stuck half-saved,
+  // so every way a process can end resolves it: a finished stream, an exit
+  // without one, and a start that failed (which Qt reports with neither).
   function run(args, payload, callback) {
     var proc = converter.createObject(root, { command: ["python3", root.script].concat(args), callback: callback })
-    // The callback runs even then: both directions read an answer that does
-    // not parse as a failed conversion, and a converter that never started
-    // is one of those. A caller left without an answer at all is a note
-    // stuck half-saved.
-    if (!proc) { console.warn("note-note: could not start the converter"); callback(""); return }
+    if (!proc) { console.warn("note-note: could not start the converter"); callback(null); return }
     proc.stdinEnabled = true                 // stdin must be open before it starts
     proc.running = true
     proc.write(payload)
     proc.stdinEnabled = false                // close stdin: the script reads to EOF
+  }
+  function parse(text) {
+    var answer = null
+    try { answer = JSON.parse(text) } catch (error) { answer = null }
+    return (answer && typeof answer === "object") ? answer : null
   }
 
   Component {
@@ -109,18 +111,25 @@ Item {
       id: proc
       // The note itself goes over stdin, never argv (docs/security.md rule 2).
       property var callback: null
-      stdout: StdioCollector {
-        onStreamFinished: {
-          var done = proc.callback
-          proc.callback = null
-          if (done) done(this.text)
-          Qt.callLater(function() { proc.destroy() })
-        }
+      property bool launched: false
+      // The one place a run ends. Whichever event gets here first answers;
+      // the others find no callback left.
+      function finish(text) {
+        var done = proc.callback
+        proc.callback = null
+        if (done) done(root.parse(text))
+        Qt.callLater(function() { proc.destroy() })
       }
+      onStarted: proc.launched = true
+      stdout: StdioCollector { onStreamFinished: proc.finish(this.text) }
       onExited: function(code) {
         if (code !== 0) console.warn("note-note: qthtml exited with", code)
-        if (proc.callback) { var done = proc.callback; proc.callback = null; done("") }
+        proc.finish("")
       }
+      // A process that could not be started (no python3 on the shell's PATH)
+      // goes running -> not running without ever having started, and Qt
+      // emits neither an exit nor a stream end for it.
+      onRunningChanged: if (!proc.running && !proc.launched) { console.warn("note-note: could not start the converter"); proc.finish("") }
     }
   }
 }

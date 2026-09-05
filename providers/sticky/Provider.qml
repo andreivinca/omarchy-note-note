@@ -22,10 +22,9 @@ Item {
   // of Sticky Notes here signs in through. OneNote has one of its own.
   readonly property string microsoftClientId: "867770a1-477d-4864-9e09-8e3019ca336c"
 
-  // When the note is written is this provider's own to decide; the host only
-  // says that it changed. A save is a Graph request like any other, and a
-  // sticky note is short enough that waiting for the typing to stop costs the
-  // user nothing.
+  // A save is a Graph request like any other, and a sticky note is short
+  // enough that waiting for the typing to stop costs the user nothing
+  // (noteEdited / saveRequested, PROVIDERS.md).
   signal saveRequested(string path)
   function noteEdited(path) { saveSchedule.path = path; saveSchedule.restart() }
   Timer {
@@ -162,6 +161,15 @@ Item {
     cb(n ? { title: "", body: n.body, editable: true, version: n.modified || "" } : { error: "unknown note" })
   }
 
+  // A save the lane never sent. Superseded means a newer save of the same
+  // note carries this one's intent and answers for it: `{}`. Cancelled — the
+  // lane emptied on sign-out, or this provider going — means nobody will, and
+  // that is a failure the host must hear: an accepted save finishes or fails
+  // out loud (business-requirements.md), never silently.
+  function unsentSave(info) {
+    return (info && info.cancelled) ? { error: "not saved — the request was cancelled" } : {}
+  }
+
   function save(path, title, body, cb) {
     var n = noteAt(path)
     if (n) n.body = body
@@ -173,8 +181,8 @@ Item {
     // after the window closes.
     root.rq.enqueue({ key: "note:" + id, mode: "replace", priority: 0, owner: root, flush: true, label: "save" },
       function(ctx) { root.runScript(["update", id, "-"], payload, ctx) },
-      function(r) {
-        if (!r) { if (cb) cb({}); return }     // superseded: the newer save answers
+      function(r, info) {
+        if (!r) { if (cb) cb(root.unsentSave(info)); return }
         if (cb) cb(r.error ? { error: r.error } : {})
       })
   }

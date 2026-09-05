@@ -26,10 +26,9 @@ Item {
                                 "h1", "h2", "h3", "p", "ul", "ol", "todo", "indent", "outdent",
                                 "quote", "codeblock", "rule", "link"]
 
-  // When the note is written is this provider's own to decide; the host only
-  // says that it changed. A save is a request against Notion's API, and one
-  // that rewrites the page's blocks rather than patching a character, so the
-  // typing is let settle first.
+  // A save is a request against Notion's API, and one that rewrites the
+  // page's blocks rather than patching a character, so the typing is let
+  // settle first (noteEdited / saveRequested, PROVIDERS.md).
   signal saveRequested(string path)
   function noteEdited(path) { saveSchedule.path = path; saveSchedule.restart() }
   Timer {
@@ -156,6 +155,15 @@ Item {
       })
   }
 
+  // A save the lane never sent. Superseded means a newer save of the same
+  // note carries this one's intent and answers for it: `{}`. Cancelled — the
+  // lane emptied on sign-out, or this provider going — means nobody will, and
+  // that is a failure the host must hear: an accepted save finishes or fails
+  // out loud (business-requirements.md), never silently.
+  function unsentSave(info) {
+    return (info && info.cancelled) ? { error: "not saved — the request was cancelled" } : {}
+  }
+
   function save(path, title, body, cb) {
     var id = idOf(path), b = root.bodies
     b[id] = { title: title, body: body, editable: true, version: "" }
@@ -168,8 +176,8 @@ Item {
     var payload = JSON.stringify({ title: title, body: body })
     root.rq.enqueue({ key: "page:" + id, mode: "replace", priority: 0, owner: root, flush: true, label: "save" },
       function(ctx) { root.runScript(["update", id, "-"], payload, ctx) },
-      function(r) {
-        if (!r) { if (cb) cb({}); return }     // superseded: the newer save answers
+      function(r, info) {
+        if (!r) { if (cb) cb(root.unsentSave(info)); return }
         if (cb) cb(r.error ? { error: r.error } : {})
       })
   }

@@ -140,30 +140,30 @@ Item {
   // is still being converted must win: only the newest token may assign.
   property int noteToken: 0
 
-  function setNote(t, body) {
+  // Puts a note in the editor.  shown(ok), optional, runs once the document
+  // holds it — which for a Markdown note is after an asynchronous conversion,
+  // so a caller that has state to settle when the note is really on screen
+  // (the host's loading flag, its read-only hold) settles it there and not
+  // before. `ok` is false when the note was read but could not be rendered:
+  // the document is then left empty on purpose, since an editable blank is
+  // what autosave would write back over the note, and the host holds it
+  // read-only with the reason said (business-requirements.md, goal 2).
+  // A setNote that a newer one overtook never calls its `shown`: the editor
+  // now belongs to the newer note, and so does the host's state.
+  function setNote(t, body, shown) {
     clearPending()
     var token = ++root.noteToken
     settingText = true
     titleField.text = t
     titleField.cursorPosition = 0
     settingText = false
-    if (root.plain || !root.markdown || !body) { showBody(body || "", token); return }
+    if (root.plain || !root.markdown || !body) { showBody(body || "", token); if (shown) shown(true); return }
     root.markdown.toHtml(body, function(html, ok) {
       if (token !== root.noteToken) return        // a newer note won the race
-      // The note was read but could not be rendered. Its text does not go
-      // into the document — an empty document is what autosave would write
-      // back — and the host is told, so the note says why rather than sitting
-      // there looking like a note somebody emptied.
-      if (!ok) { root.renderFailed(); return }
-      root.showBody(html, token)
+      root.showBody(ok ? html : "", token)
+      if (shown) shown(ok)
     }, root.documentBase)
   }
-
-  // The open note could not be turned into a document. The host answers by
-  // holding it read-only with a reason, the way it does for a note it could
-  // not read at all — a note that cannot be written back safely opens
-  // read-only and says so (business-requirements.md, goal 2).
-  signal renderFailed()
 
   function showBody(document, token) {
     if (token !== root.noteToken) return          // a newer note won the race

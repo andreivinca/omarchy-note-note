@@ -216,6 +216,46 @@ def check_typed_filler(verbose):
     return failures
 
 
+def check_command_line(verbose):
+    """The frame Markdown.qml reads: one JSON object per run, both directions.
+
+    Markdown.qml parses stdout and treats anything that does not parse as a
+    failed conversion, so the contract worth pinning is the shape of what
+    __main__.py writes — an empty note is `{"html": ""}`, never nothing — and
+    that a bad invocation writes nothing parseable at all.
+    """
+    main_py = os.path.join(os.path.dirname(os.path.abspath(__file__)), "__main__.py")
+
+    def run(args, payload):
+        proc = subprocess.run([sys.executable, main_py] + args, input=payload,
+                              capture_output=True, timeout=60)
+        return proc.returncode, proc.stdout.decode("utf-8", "replace")
+
+    failures = 0
+    cases = [
+        ("to-html frames the note", ["to-html"], b"# x\n", {"html": to_html("# x\n")}),
+        ("to-html frames an empty note", ["to-html"], b"", {"html": ""}),
+        ("to-markdown answers with its map", ["to-markdown"], to_html("- a\n").encode("utf-8"),
+         convert(to_html("- a\n"))),
+    ]
+    for name, args, payload, expected in cases:
+        code, out = run(args, payload)
+        try:
+            actual = json.loads(out)
+        except ValueError:
+            actual = None
+        if code != 0 or actual != expected:
+            failures += 1
+            report(name, "command line", expected, actual, verbose)
+    code, out = run(["to-html", "--no-such-option"], b"x")
+    if code == 0 or out.strip():
+        failures += 1
+        report("a bad invocation writes nothing", "command line", "non-zero exit, empty stdout", (code, out), verbose)
+    print("command line (the JSON frame Markdown.qml reads)")
+    print("  %d/%d cases" % (len(cases) + 1 - failures, len(cases) + 1))
+    return failures
+
+
 def report(name, stage, expected, actual, verbose):
     print("  FAIL  %-18s (%s)" % (name, stage))
     if verbose:
@@ -243,6 +283,7 @@ def main():
     failures += check_display_cap(args.verbose)
     failures += check_code_chip(args.verbose)
     failures += check_typed_filler(args.verbose)
+    failures += check_command_line(args.verbose)
 
     # The chip rides through Qt too: the span must keep both halves — the
     # family that means code and the colour that shows it — and still read

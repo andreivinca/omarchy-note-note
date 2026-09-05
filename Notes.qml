@@ -349,7 +349,7 @@ Item {
   }
   function providerById(id) { return providerOf(id + ":") }
   // The provider of the open tab. Section keys start with the provider's id.
-  function activeProvider() { var k = activeKey(); return k ? providerById(k.substring(0, k.indexOf("/"))) : null }
+  function activeProvider() { var k = activeKey(); return k ? providerOfKey(k) : null }
   // The provider a "New notebook…" would go to: the open tab's — or, when it
   // cannot and the local provider has no notebook at all yet (a fresh
   // ~/Notes), the local one. Without that a fresh install has no tab that can
@@ -391,9 +391,9 @@ Item {
     p.persistRequested.connect(function() { root.saveState() })
     // The provider asking for the write it was told about. Answered for the
     // open note only, since the text to be written is the editor's — and it
-    // costs nothing when the note has already gone (a switch, a close, a
-    // delete all flush it), because flushSave has nothing to do for a note
-    // that is not dirty. That is what lets a provider's schedule fire late
+    // costs nothing when the note has already gone: a switch and a close
+    // flush it, a delete drops its edits with it, so flushSave finds nothing
+    // dirty either way. That is what lets a provider's schedule fire late
     // without the host having to reach back and cancel it.
     if (p.saveRequested) p.saveRequested.connect(function(path) {
       if (path === root.currentPath) root.flushSave()
@@ -618,7 +618,16 @@ Item {
     }
     if (!target) return
     var cur = root.providerOf(root.currentPath)
-    if (cur && cur.id === id) root.selectPath("")
+    if (cur && cur.id === id) {
+      // Nothing can be written to this provider any more: an edit the editor
+      // still holds is dropped and said so, rather than flushed into a
+      // conversion whose answer would find the provider gone; a conversion
+      // already running is cancelled the same way. A save the provider's
+      // lane already holds is its own to answer as it goes (unsentSave).
+      if (root.dirty) { root.dirty = false; root.reportSave(target.name + ": unsaved changes were dropped — the provider was turned off") }
+      root.cancelPendingSave(root.currentPath)
+      root.selectPath("")
+    }
     root.providers = kept
     target.destroy()
   }
@@ -626,10 +635,13 @@ Item {
   // ── sidebar rows ────────────────────────────────────────────────────
   property var rows: []
   property int revision: 0
-  // How many times the list has actually been handed a new model, as against
-  // how many times rebuildRows ran (`revision`). The two used to be the same
-  // number and should not be: every write here throws away every delegate.
+  // Assignments to `rows`, each of which destroys and rebuilds every delegate.
+  // Read beside `revision` (rebuildRows calls) it says how many rebuilds
+  // produced a list that was already on screen — which should be most of
+  // them (docs/testing.md).
   property int rowWrites: 0
+  // The one place `rows` is written, so the count means what it says.
+  function setRows(out) { root.rows = out; root.rowWrites++ }
   // ── what a tab opens with ───────────────────────────────────────────
   // A tab opens on the note you last had open in it. That is a fact about
   // where the user was rather than about any backend — OneNote's API has no
@@ -642,25 +654,30 @@ Item {
   // each and back: keys the host has never seen, about notebooks the user has
   // been reading all along.
   property var lastNotes: ({})       // section key -> the note last open there
-  // True while the tab on screen has not been given its opening note yet: set
-  // at startup and on every switch, cleared as soon as it is answered or the
+  // True while the tab on screen is still owed its opening note: set at
+  // startup and on every switch, cleared as soon as it is given one or the
   // user picks something themselves. It stays set while a provider is still
   // listing — OneNote answers a second or two after the window is up — so the
   // note is opened when its row arrives rather than lost to the race, and it
   // costs nothing left set for a note that never comes back.
   property bool defaultOwed: true
 
-  // Told to the note's own provider, and kept here for the tab it was opened
-  // in — which are two different questions, and a search landing in another
-  // tab is where they come apart.
-  function noteWasOpened(path) {
+  // The user chose this note: it is what its tab opens with next time. Told
+  // to the note's own provider, and kept here for the tab it was chosen in —
+  // two different questions, and a search landing in another tab is where
+  // they come apart. A provider that answers `defaultNote` itself keeps its
+  // own memory and is not remembered here as well: the entry would never be
+  // read. Entries for providers no longer loaded go with the next write.
+  function rememberOpened(path) {
     var owner = providerOf(path)
     if (owner && typeof owner.noteOpened === "function") owner.noteOpened(path)
+    if (owner && typeof owner.defaultNote === "function") return
     var key = activeKey()
     if (!key || root.lastNotes[key] === path) return
-    // Replaced wholesale, never mutated, like contentHits above it.
+    // Replaced wholesale, never mutated, like contentHits (below): a binding
+    // sees the reassignment and nothing else.
     var next = {}
-    for (var k in root.lastNotes) next[k] = root.lastNotes[k]
+    for (var k in root.lastNotes) if (providerOfKey(k)) next[k] = root.lastNotes[k]
     next[key] = path
     root.lastNotes = next
     saveState()
@@ -668,29 +685,34 @@ Item {
 
   // Empty means open nothing: a tab you have not been in, or one whose note
   // is gone, opens empty rather than opening something you did not ask for.
+  // A provider is asked with the section's own key, the one it gave the
+  // section, as setOrder is.
   function defaultNoteFor(key) {
-    var p = providerById(String(key).split("/")[0])
-    if (p && typeof p.defaultNote === "function") return p.defaultNote(key) || ""
+    var p = providerOfKey(key)
+    if (p && typeof p.defaultNote === "function") return p.defaultNote(ownKey(key)) || ""
     return root.lastNotes[key] || ""
   }
 
   function openDefaultNote() {
-    // The tab on screen while a provider is still listing is a stand-in:
+    // The tab on screen while a provider is still listing may be a stand-in:
     // activeKey() falls back to the first section that exists, and the tab
     // the user actually left open — activeSection, which is deliberately not
     // resolved against the live list so that a slow provider cannot cost them
     // their tab — may be a OneNote one that arrives a second later. Answering
-    // the stand-in opens a note from a tab they are about to stop looking at,
-    // and spends the claim doing it. A tab that never arrives at all (signed
-    // out of its provider since) simply leaves the claim standing, which
-    // costs a comparison per rebuild and opens nothing.
+    // the stand-in would open a note from a tab they are about to stop
+    // looking at, and spend what the real tab is owed doing it. A tab that
+    // never arrives at all (signed out of its provider since) leaves the
+    // note owed, which costs a comparison per rebuild and opens nothing,
+    // until the user names a tab by clicking one. No intent at all — a fresh
+    // state file, a user who has never switched — means the first tab is the
+    // tab, and it is owed its note like any other.
     var key = activeKey()
-    if (key !== root.activeSection) return
+    if (root.activeSection && key !== root.activeSection) return
     var path = defaultNoteFor(key)
     // Not yet, rather than not at all: a provider still listing has no row to
     // find the note in, and the next rebuild asks again.
     if (!path || !noteExists(path)) return
-    selectPath(path)
+    choosePath(path)
     // Deferred: revealPath rebuilds the provider's rows, and this is being
     // called from inside a rebuild.
     Qt.callLater(function() { root.revealCurrent() })
@@ -706,7 +728,12 @@ Item {
   // stay a stable model and only these numbers change under them.
   property var tabMatches: ({})
   property bool switchingTab: false
+  // A tab's key is the provider's id and the section's own key, and these two
+  // are the only places that spelling is known: everything else goes through
+  // them, in one direction or the other.
   function sectionKey(p, s) { return p.id + "/" + s.key }
+  function providerOfKey(key) { return providerById(key.substring(0, key.indexOf("/"))) }
+  function ownKey(key) { return key.substring(key.indexOf("/") + 1) }
   function sectionKeys() { var out = []; eachSection(function(p, s, k) { out.push(k) }); return out }
   // What the rail actually opens: the stored tab while it exists, else the
   // first section listed. Providers are registered local-first (loadProviders),
@@ -727,21 +754,34 @@ Item {
   // hopping to the tab that has hits): they are not worth a state-file write
   // per keystroke, and not the tab to come back to next run.
   function setActiveSection(key, persist) {
-    if (!key || key === activeKey()) return
-    // The tab being opened is owed the note it opens with — the one last open
-    // in it, or its provider's own answer. This is where the app used to
-    // decide the opposite, that a switch means no note is picked unasked;
-    // what survives of that is the rule that nothing is picked when there is
-    // nothing remembered (docs/decisions.md).
+    if (!key || key === root.activeSection) return
+    // The tab already on screen, standing in for one that is not listed or
+    // for no intent at all: naming it makes it the tab, and there is nothing
+    // to put away — the note in the editor is this tab's own.
+    if (key === activeKey()) {
+      root.activeSection = key
+      rebuildRows()
+      if (persist !== false) saveState()
+      return
+    }
+    // The tab being opened is owed the note it opens with — the one last
+    // chosen in it, or its provider's own answer — and nothing at all when
+    // nothing is remembered (docs/decisions.md).
     root.defaultOwed = true
     // Opening another notebook puts the one you were reading away: a note from
     // a tab you have left is not what the panel beside it is showing. Unsaved
     // edits are flushed on the way out.
     selectPath("")
+    showSection(key)
+    if (persist !== false) saveState()
+  }
+  // Puts a tab on screen, and only that: for a caller that brings its own
+  // note (newNote, whose note may have been filed in another provider's tab)
+  // and so has nothing to be owed and nothing to put away.
+  function showSection(key) {
     root.activeSection = key
     root.switchingTab = true
     rebuildRows()
-    if (persist !== false) saveState()
   }
   function cycleSection(delta) {
     var keys = sectionKeys()
@@ -839,11 +879,15 @@ Item {
     var words = text.split(/\s+/).slice(0, 5).join(" ")
     return words.length < text.length ? words + "…" : words
   }
+  // A row carries what the list shows or drags on, and nothing else: rows are
+  // compared before they are handed over (rebuildRows), and a field the
+  // delegates never read — a note's `version`, which moves on every save —
+  // would make two lists that look the same compare different. The version
+  // is read where it is needed, from the providers' own sections (versionOf).
   function row(provider, key, r) {
     return { provider: provider.id, notebook: key, kind: r.kind || "note", path: r.path || "",
              title: r.title || "", preview: r.preview || "", icon: r.icon || "",
-             fixed: r.fixed === true || !provider.canReorder, level: r.level || 0, expanded: r.expanded === true,
-             version: r.version || "" }
+             fixed: r.fixed === true || !provider.canReorder, level: r.level || 0, expanded: r.expanded === true }
   }
   function rebuildRows() {
     root.revision++
@@ -881,23 +925,22 @@ Item {
     var newTabs = decollide(tabs)
     if (JSON.stringify(newTabs) !== JSON.stringify(root.tabs)) root.tabs = newTabs
     root.tabMatches = hits
-    // The same rule as the tabs above, and for a stronger reason: the rows sit
-    // behind a DelegateModel, so assigning one is not an update to a list but
-    // a different list — every delegate is destroyed and built again (see
-    // ui/NoteList.qml, which says the same thing about a write mid-drag).
-    // This function runs six times over a single open, as each provider's
-    // refresh, OneNote's cached read and then its listing, and the account's
-    // own refresh each land, and all six almost always produce exactly the
-    // rows already on screen. Six identical models handed to the list, six
-    // sets of delegates thrown away and remade, is what the flicker was.
+    // The same rule as the tabs above, and for a stronger reason: `rows` is a
+    // plain JS array handed to the view as a value, so assigning one is not
+    // an update to a list but a different list, and every delegate is
+    // destroyed and built again — with or without the DelegateModel in
+    // ui/NoteList.qml, which is there for the drag. This function runs once
+    // per provider refresh, per OneNote listing and per account refresh, and
+    // nearly every run reproduces the rows already on screen; a list that
+    // differs in nothing the list shows is not handed over. That is what
+    // `row()` carrying only what the list shows buys: a field the delegates
+    // never read would make equal lists unequal.
     var rowsChanged = JSON.stringify(out) !== JSON.stringify(root.rows)
-    if (rowsChanged) { root.rows = out; root.rowWrites++ }
+    if (rowsChanged) setRows(out)
     // The view bar's source chip follows the open tab: its provider's name
     // and logo, and the tab's own colour — read from newTabs, where decollide
     // has just settled the colours the rail will wear.
-    var provId = active.split("/")[0], sourceProv = null, sourceTab = null
-    for (var pi = 0; pi < root.providers.length; pi++)
-      if (root.providers[pi].id === provId) { sourceProv = root.providers[pi]; break }
+    var sourceProv = active ? providerOfKey(active) : null, sourceTab = null
     for (var ti = 0; ti < newTabs.length; ti++)
       if (newTabs[ti].key === active) { sourceTab = newTabs[ti]; break }
     root.sourceName = sourceProv ? sourceProv.name : "Note Note"
@@ -909,7 +952,7 @@ Item {
     // on a list scrolled down to a note in an open tree.
     if (rowsChanged && keep > 0) Qt.callLater(function() { list.setScrollOffset(keep) })
     // The tab on screen opens with the note it is owed. Asked on every
-    // rebuild while the claim stands, because a tab whose notes have not
+    // rebuild while it is still owed, because a tab whose notes have not
     // listed yet (OneNote is async) can only be answered by the rebuild that
     // brings them — and never once the user has picked for themselves, so a
     // note you closed is not reopened behind your back.
@@ -937,17 +980,44 @@ Item {
     root.loadedVersion = versionOf(path)
     root.loadHandle = p.load(path, function(r) {
       if (root.currentPath !== path) return
-      if (r.error) { root.loadingNote = false; root.loadFailed = true; return }
-      root.loadFailed = false
+      if (r.error) { root.noteUnavailable(p.name + ": " + r.error); return }
       var pos = editor.cursorPosition()
       editor.documentBase = r.base || ""
-      editor.setNote(r.title || "", r.body || "")
-      editor.setCursorPosition(pos)
-      editor.readOnly = r.editable === false
-      root.loadingNote = false
-      root.dirty = false
-      showStatus(p.name + ": reloaded, changed elsewhere")
+      editor.setNote(r.title || "", r.body || "", function(shown) {
+        if (root.currentPath !== path) return
+        if (!shown) { root.noteUnavailable(root.notDisplayable); return }
+        editor.setCursorPosition(pos)
+        root.noteReady(r.editable === false)
+        showStatus(p.name + ": reloaded, changed elsewhere")
+      })
     }) || null
+  }
+
+  // A load ends in one of two states, and these are the only two places that
+  // spell them. Until one of them runs the note is still loading: the host
+  // ignores edits (onEdited) and the editor is held read-only, because the
+  // document is empty until the conversion answers and an editable blank is
+  // what autosave would write back over the note.
+  //
+  // The note is on screen and is the note: it may be edited, unless its
+  // provider said otherwise.
+  function noteReady(readOnly) {
+    editor.readOnly = readOnly
+    root.loadFailed = false
+    root.loadingNote = false
+    root.dirty = false
+  }
+  // The note could not be read, or was read but could not be shown. Held
+  // read-only with the reason said, so it cannot be written back to
+  // (business-requirements.md, goal 2); loadFailed asks for it again on the
+  // next open().
+  readonly property string notDisplayable: "This note could not be displayed — it has not been changed"
+  function noteUnavailable(message) {
+    editor.readOnly = true
+    root.loadFailed = true
+    root.loadingNote = false
+    root.dirty = false
+    showStatus(message)
   }
   // A note is "in" its provider while a section shows its row — or holds it
   // in `notes`, the section's searchable whole: a folded tree hides the row
@@ -1035,7 +1105,7 @@ Item {
                    cooldown: Math.round(root.queueList[q].cooldownRemaining) })
     return JSON.stringify({ currentPath: root.currentPath, loadingPath: root.loadingPath, loadingNote: root.loadingNote,
                             status: root.statusText, readOnly: editor.readOnly, words: editor.wordCount, notice: editor.noticeTitle, viewFocused: editor.viewHasFocus,
-                            dirty: root.dirty, saving: root.saveInFlight(root.currentPath), loadSeq: root.noteLoadSeq,
+                            dirty: root.dirty, saving: root.saveInFlight(root.currentPath),
                             defaultOwed: root.defaultOwed,
                             rows: root.rows.length, revision: root.revision, rowWrites: root.rowWrites,
                             offset: Math.round(list.scrollOffset()),
@@ -1089,15 +1159,22 @@ Item {
     }
   }
 
+  // The user chose this note — a click, the keyboard, a note they just made,
+  // or the tab being given the one it was owed. That settles what the tab
+  // opens with next time and ends what it is owed; before selectPath's early
+  // return, because re-picking the note already open is still a choice.
+  // Everything else that puts a note on screen — a search landing on its
+  // first hit, the neighbour picked after a delete, a tab switch putting the
+  // note away — is selectPath alone: shown, not chosen.
+  function choosePath(path) {
+    if (path) { root.defaultOwed = false; root.rememberOpened(path) }
+    selectPath(path)
+  }
+
   function selectPath(path) {
     // Any selection pulls the list's keyboard cursor back to the note —
     // a click, a search landing, a tab switch putting the note away.
     root.treeCursor = ""
-    // Any real selection settles what this tab opens with next time and ends
-    // its claim on being given one — the user choosing, or openDefaultNote
-    // answering the claim itself. Before the early return below, because
-    // re-picking the note already open is still a choice.
-    if (path) { root.defaultOwed = false; root.noteWasOpened(path) }
     if (path === root.currentPath) return
     var p = providerOf(path)
     if (path && !p) return
@@ -1121,14 +1198,14 @@ Item {
     root.loadHandle = p.load(path, function(r) {
       if (root.currentPath !== path) return
       root.loadingPath = ""
-      if (r.error) { root.loadingNote = false; root.loadFailed = true; showStatus(p.name + ": " + r.error); return }
-      root.loadFailed = false
+      if (r.error) { root.noteUnavailable(p.name + ": " + r.error); return }
       root.loadedVersion = r.version || versionOf(path)
       editor.documentBase = r.base || ""
-      editor.setNote(r.title || "", r.body || "")
-      editor.readOnly = r.editable === false
-      root.loadingNote = false
-      root.dirty = false
+      editor.setNote(r.title || "", r.body || "", function(shown) {
+        if (root.currentPath !== path) return
+        if (!shown) { root.noteUnavailable(root.notDisplayable); return }
+        root.noteReady(r.editable === false)
+      })
     }) || null
   }
 
@@ -1151,7 +1228,7 @@ Item {
     if (cur < 0) { next = delta < 0 ? idx.length - 1 : 0 }
     var row = root.rows[idx[next]]
     if (row.kind === "tree") { root.treeCursor = row.path }
-    else { selectPath(row.path) }
+    else { choosePath(row.path) }
     list.positionViewAtIndex(idx[next], ListView.Contain)
   }
   function atCursor(r) {
@@ -1217,8 +1294,8 @@ Item {
       // (ctrl+n on a tab with no create target): open that tab, or the note
       // sits in the editor with no row anywhere on screen.
       var home = sectionKeyOf(r.path)
-      if (home && home !== activeKey()) setActiveSection(home)
-      selectPath(r.path)
+      if (home && home !== activeKey()) showSection(home)
+      choosePath(r.path)
       var mi = rowIndexOf(r.path)
       Qt.callLater(function() { if (mi >= 0) list.positionViewAtIndex(mi, ListView.Contain) })
       if (p.hasTitle) editor.focusTitle(); else editor.focusEditor()
@@ -1272,8 +1349,11 @@ Item {
     root.deletePath = ""
     if (!path || !p) return
     var wasCurrent = path === root.currentPath, mi = rowIndexOf(path)
+    // The deleted note's edits go with it: a conversion still running for it
+    // is cancelled, and the editor's text is not flushed. Deleting another
+    // note flushes the open one first, as any moment the app might lose it.
     root.cancelPendingSave(path)
-    if (wasCurrent) { saveTimer.stop(); root.dirty = false } else root.flushSave()
+    if (wasCurrent) root.dirty = false; else root.flushSave()
     var next = ""
     if (wasCurrent) {
       for (var k = Math.max(mi, 0); k >= 0 && k < root.rows.length; k--)
@@ -1349,25 +1429,36 @@ Item {
   //
   // What stays here is the handful of moments that are not a schedule at all:
   // the note is flushed when the app is about to lose the ability to save it
-  // (a note switch, the window closing, a delete). That is "never lose a
-  // note" rather than a cadence, and it is the host's to keep.
+  // (a note switch, the window closing), and a delete drops its edits with
+  // it. That is "never lose a note" rather than a cadence, and it is the
+  // host's to keep.
+  //
+  // The default schedule has the shape the contract asks of a provider's — a
+  // pause, then a request naming the note, honoured only while that note is
+  // still the open one — so it needs no cancelling either.
   readonly property int defaultSaveDebounce: 1500
   function onEdited() {
     if (root.loadingNote || !root.currentPath) return
     root.dirty = true
     var p = providerOf(root.currentPath)
     if (p && typeof p.noteEdited === "function") { p.noteEdited(root.currentPath); return }
-    saveTimer.interval = root.defaultSaveDebounce
-    saveTimer.restart()
+    defaultSchedule.path = root.currentPath
+    defaultSchedule.restart()
   }
-  Timer { id: saveTimer; interval: root.defaultSaveDebounce; onTriggered: root.flushSave() }
+  Timer {
+    id: defaultSchedule
+    property string path: ""
+    interval: root.defaultSaveDebounce
+    onTriggered: if (path === root.currentPath) root.flushSave()
+  }
 
   // Ordering, retrying and coalescing saves is the provider's queue's job now
   // (services/requests/), so what is left here is only what the host knows:
   // which note is being saved, and whether the text it captured is still the
-  // newest. There is no `saving` flag and no re-derivation of the body — the
-  // payload is captured whole per dispatch, which is what stopped a save
-  // requested during another one from writing the *wrong note's* text.
+  // newest. `savesPending` is a count per note rather than a flag, and there
+  // is no re-derivation of the body — the payload is captured whole per
+  // dispatch, which is what stopped a save requested during another one from
+  // writing the *wrong note's* text.
   //
   // A save passes through three states, and the note is unsaved in all of
   // them: the editor holds edits nobody has captured (`dirty`), the document
@@ -1376,10 +1467,8 @@ Item {
   // snapshot is taken, so a second flush cannot send the same text twice;
   // the two asynchronous states are counted per path, because a save outlives
   // the note being open. The count covers the conversion as well as the
-  // request — a note whose text is inside a converter is not saved, and the
-  // gap where it looked saved was both a dot that blinked off mid-save and a
-  // window in which a change arriving from elsewhere was free to reload the
-  // editor out from under the text about to be sent.
+  // request: a note whose text is inside a converter is not saved, so the dot
+  // stays on and noteChanged (above) does not reload the editor over it.
   property var saveEpoch: ({})       // path -> seq: drops a stale or cancelled conversion
   property var savesPending: ({})    // path -> count: converting, or in flight
   // Bumped with every savesPending move: a plain JS object is invisible to a
@@ -1395,21 +1484,24 @@ Item {
 
   function saveInFlight(path) { return (root.savesPending[path] || 0) > 0 }
 
-  // Every move of the count goes through here: the count is what the unsaved
-  // dot reads, and the revision beside it is what makes a plain object's
-  // change visible to a binding at all.
-  function markSaving(path, delta) {
+  // Every move of the count goes through these two: the count is what the
+  // unsaved dot reads, and the revision beside it is what makes a plain
+  // object's change visible to a binding at all.
+  function saveBegan(path) { countSave(path, 1) }
+  function saveEnded(path) { countSave(path, -1) }
+  function countSave(path, delta) {
     var n = (root.savesPending[path] || 0) + delta
     if (n > 0) root.savesPending[path] = n
     else delete root.savesPending[path]
     root.saveRevision++
   }
 
-  // Nothing may be written back to this note any more — it is being deleted,
-  // or its provider is going. Moving the epoch is what a conversion still
-  // running will find when it answers, and it releases its own share of the
-  // count then. A save already handed to the provider is past recall: it was
-  // accepted, and an accepted save finishes (business-requirements.md).
+  // Nothing may be written back to this note any more — it is being deleted
+  // (confirmDelete), or its provider is going (disableProviderInstance).
+  // Moving the epoch is what a conversion still running will find when it
+  // answers, and it releases its own share of the count then. A save already
+  // handed to the provider is past recall: it was accepted, and an accepted
+  // save finishes or fails out loud (business-requirements.md).
   function cancelPendingSave(path) {
     if (!path) return
     root.saveEpoch[path] = (root.saveEpoch[path] || 0) + 1
@@ -1420,7 +1512,6 @@ Item {
     var path = root.currentPath, p = providerOf(path)
     if (!p) return
     if (editor.readOnly) { root.dirty = false; return }
-    saveTimer.stop()
     var title = editor.title, loadSeq = root.noteLoadSeq
     // Cleared here, where the snapshot is taken: a keystroke after this one
     // marks the note dirty again and earns a save of its own, and a flush
@@ -1430,10 +1521,10 @@ Item {
     root.loadedVersion = ""
     var seq = (root.saveEpoch[path] || 0) + 1
     root.saveEpoch[path] = seq
-    // Taken here and released on whichever of the three ways out this
-    // attempt takes: the note is unsaved for the whole of it, and the
-    // converter's share of that is not a gap in which it looks saved.
-    root.markSaving(path, 1)
+    // Begun here and ended on whichever of the three ways out this attempt
+    // takes: the note is unsaved for the whole of it, and the converter's
+    // share of that is not a gap in which it looks saved.
+    root.saveBegan(path)
     // The document is rich text and the note is Markdown, so the body arrives
     // asynchronously — but requestMarkdown snapshots the document *now*, so
     // this text belongs to `path` even if the user moves to another note
@@ -1441,16 +1532,19 @@ Item {
     editor.requestMarkdown(function(body, ok) {
       // Superseded by a newer snapshot of this note, or cancelled with the
       // note itself: either way this text is not the one to write.
-      if (root.saveEpoch[path] !== seq) { root.markSaving(path, -1); return }
+      if (root.saveEpoch[path] !== seq) { root.saveEnded(path); return }
       // The converter failed, so `body` is its empty answer and not the note.
       // Sending it would replace the note with nothing, which is the one
       // thing this app promises never to do.
-      if (!ok) { root.markSaving(path, -1); root.saveFailed(path, seq, loadSeq, "the note could not be read for saving"); return }
+      if (!ok) { root.saveEnded(path); root.saveFailed(path, seq, loadSeq, "the note could not be read for saving"); return }
       p.save(path, title, body, function(r) {
-        root.markSaving(path, -1)
-        // `{}` for a save the provider superseded as well as one that landed
+        root.saveEnded(path)
+        // `{}` for a save that landed, and for one the provider superseded
         // (PROVIDERS.md): the newer save carries this one's intent and is
-        // counted in its own right, so the note stays marked until it answers.
+        // counted in its own right, so the note stays marked until it
+        // answers. A save the provider could not send at all — its lane
+        // emptied by a sign-out, the provider going — is an error like any
+        // other, and the note is marked unsaved again below.
         if (r && r.error) { root.saveFailed(path, seq, loadSeq, p.name + ": " + r.error); return }
         if (r && r.warning) root.reportSave(p.name + ": " + r.warning)
       })
@@ -1479,19 +1573,33 @@ Item {
   }
 
   // ── state ───────────────────────────────────────────────────────────
+  // Asked for by anyone whose state moved — a provider through
+  // persistRequested, the host itself — and written once per turn of the
+  // event loop, however many asked: one selection can move the host's memory
+  // and a provider's in the same breath, and that is one write, not two.
+  property bool stateWriteDue: false
   function saveState() {
+    root.providerState = providerSnapshot()
+    if (root.stateWriteDue) return
+    root.stateWriteDue = true
+    Qt.callLater(root.writeState)
+  }
+  // Kept live, not only on disk: a provider recreated on a settings change
+  // (applyProviderDiff) is restored from providerState, which would otherwise
+  // still hold the startup snapshot — and lose the fold state made since.
+  function providerSnapshot() {
     var ps = {}
     for (var i = 0; i < root.providers.length; i++) ps[root.providers[i].id] = root.providers[i].saveState()
-    // Kept live, not only on disk: a provider recreated on a settings change
-    // (applyProviderDiff) is restored from providerState, which would
-    // otherwise still hold the startup snapshot — and lose the fold state
-    // made since.
-    root.providerState = ps
+    return ps
+  }
+  function writeState() {
+    root.stateWriteDue = false
+    root.providerState = providerSnapshot()
     // version 4: what each tab opens with, where 3 added the open tab itself
     // and 2 kept two lists of folded sections. An older file simply has no
     // `lastNotes`, and every tab opens empty until it has been used once.
     var st = { version: 4, detached: root.detached, active: root.activeSection,
-               lastNotes: root.lastNotes, providers: ps }
+               lastNotes: root.lastNotes, providers: root.providerState }
     if (root.listWidth > 0) st.listWidth = Math.round(root.listWidth)
     stateFile.setText(JSON.stringify(st, null, 2) + "\n")
   }
@@ -1503,7 +1611,13 @@ Item {
       // The stored width is trusted only as a number; the list's own binding
       // clamps it against whatever window it wakes up in.
       if (typeof s.listWidth === "number" && isFinite(s.listWidth) && s.listWidth > 0) root.listWidth = s.listWidth
-      if (s.lastNotes && typeof s.lastNotes === "object") root.lastNotes = s.lastNotes
+      // Trusted entry by entry, as a map of strings and nothing else — the
+      // way the two fields above are trusted only as their type.
+      if (s.lastNotes && typeof s.lastNotes === "object") {
+        var remembered = {}
+        for (var key in s.lastNotes) if (typeof s.lastNotes[key] === "string") remembered[key] = s.lastNotes[key]
+        root.lastNotes = remembered
+      }
       if (s.providers) root.providerState = s.providers
     } catch (e) { /* a corrupt state file costs nothing */ }
     scanProviders.running = true
@@ -1603,7 +1717,7 @@ Item {
           accent: root.accent
           fontFamily: root.interfaceFont
           titleFor: root.displayTitle
-          onActivated: function(path) { root.selectPath(path); editor.focusEditor() }
+          onActivated: function(path) { root.choosePath(path); editor.focusEditor() }
           onNewRequested: function(target) {
             for (var i = 0; i < root.rows.length; i++)
               if (root.rows[i].kind === "new" && root.rows[i].path === target) { root.newNote(root.rows[i].provider, target); return }
@@ -1638,10 +1752,10 @@ Item {
               }
               rr[slots[j]] = r
             }
-            root.rows = rr
+            root.setRows(rr)
             var p = root.providerOf(paths[0])
             if (p && p.canReorder) {
-              p.setOrder(key.substring(p.id.length + 1), paths)
+              p.setOrder(root.ownKey(key), paths)
             }
           }
         }
@@ -1717,18 +1831,6 @@ Item {
           bodyFontFamily: root.interfaceFont
           shortcutHandler: root.handleShortcut
           onEdited: root.onEdited()
-          // The note was read but could not be rendered, so the editor is
-          // showing nothing of it. Held read-only with the reason said, the
-          // way a note that could not be read at all is — an editable blank
-          // is what autosave would write back over the note. loadFailed asks
-          // for it again on the next open().
-          onRenderFailed: {
-            root.loadingNote = false
-            root.dirty = false
-            root.loadFailed = true
-            editor.readOnly = true
-            root.showStatus("This note could not be displayed — it has not been changed")
-          }
           onStatusRequestedTextChanged: if (statusRequestedText) { root.showStatus(statusRequestedText); statusRequestedText = "" }
         }
       }

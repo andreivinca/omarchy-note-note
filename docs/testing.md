@@ -286,10 +286,17 @@ given its opening note yet, false once it has been or the user has picked.
 
 1. A tab you have never been in opens empty and stays `defaultOwed` — nothing
    is picked for you. Select a note there, switch away, switch back: that note.
+   A note the app put on screen by itself does not count as picking: search
+   for something, let the landing select the first hit, clear the search and
+   restart — the tab still opens on the note *you* chose last, and the state
+   file was not written per keystroke.
 2. Restart the shell. The app opens on the tab you left, and on that tab's
    note — not on the first tab's. That distinction is the bug worth watching:
    while OneNote is still listing, `activeKey()` stands in with the first
    section that exists, and answering the stand-in opens the wrong tab's note.
+   The other half: with a fresh state file, or with only one tab, there is no
+   intent to wait for, so the tab on screen is the tab and opens on its note
+   — and clicking the tab already on screen commits it as the open tab.
 3. Flip `notebookTabs` for OneNote and open its tab. A tab per notebook opens
    each notebook's own page; the one tree tab opens the page of the notebook
    last read in, and unfolds that notebook to show it. Neither shape loses the
@@ -347,6 +354,15 @@ inotifywait -m -e close_write,moved_to --format '%e %f' ~/Notes   # writes are a
 5. Delete the open note while a save is converting: nothing is written back to
    it (`cancelPendingSave` moves the epoch the conversion checks). A save
    already handed to the provider still finishes; that one is past recall.
+6. On a OneNote note, edit and sign out of the account before the save is
+   sent (the lane parked on a 429 is the easy way to see it): the bar says the
+   save was cancelled, and `debugState` shows nothing still `saving`. The same
+   when the provider is turned off in Settings with a save queued; with edits
+   still unflushed the bar says they were dropped.
+7. Move `python3` off the shell's PATH and `$C onEdited ""`: `saving` goes true
+   and comes back false, the bar says the note could not be read for saving,
+   and `dirty` is true again — the converter never started, and that is still
+   an answer.
 
 ## Checklist for a UI change
 

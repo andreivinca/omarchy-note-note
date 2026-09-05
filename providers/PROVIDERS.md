@@ -94,10 +94,14 @@ them.
   the editor resolves the links against it and the converter measures the
   files through it. Leave it out when every image is an absolute file:// URL.
 - `save(path, title, body, cb)` → `cb({ error, warning })`
-  Call `cb` exactly once, always — including when the save was superseded by a
-  newer one (answer `{}`: the newer save contains this one's intent) and when
-  it was cancelled. The host counts saves in flight per note, and a save that
-  is never answered is one that looks unfinished for ever.
+  Call `cb` exactly once, always. A save superseded by a newer one answers
+  `{}`: the newer save contains this one's intent and answers for it. A save
+  you could not send at all — your lane emptied by a sign-out, your provider
+  being turned off — answers `{ error }`: nobody else will write that text,
+  and the host marks the note unsaved and says so rather than showing it as
+  saved (see `unsentSave` in any of the request-lane providers). The host
+  counts saves in flight per note, and a save that is never answered is one
+  that looks unfinished for ever.
   A `body` from a provider with `canImages` may contain `![alt](file:///…)`
   pointing either at a file the provider itself cached on `load()` (the same
   picture, already on the backend) or at a freshly pasted file staged in
@@ -114,25 +118,32 @@ them.
   request, a longer one still while your lane is cooling, or nothing at all
   until something you are waiting for arrives — and emit `saveRequested(path)`
   when you want the write. It is called on every edit, so debouncing is the
-  usual shape and the one every built-in provider takes: see the four-line
-  `Timer` at the head of any `Provider.qml`.
+  usual shape and the one every built-in provider takes: see the
+  `saveRequested` signal, `noteEdited` and the `Timer` beside them near the
+  top of any built-in `Provider.qml`.
   Implement neither this nor `saveRequested` and your notes are written on the
   host's own default pause (1500 ms), so a provider that does not care about
   the question still autosaves.
-- `noteOpened(path)` (optional) — that note is now the one on screen. The
-  host keeps its own record of the note last open in each tab and needs
-  nothing from you for it; take this only when the tab is not the unit you
-  want to answer by. OneNote does, because its `notebookTabs` setting turns
-  one tab holding every notebook into a tab each and back, so it remembers
-  per notebook instead and keeps that in its `saveState()`.
-- `defaultNote(sectionKey)` (optional) → the path a tab should open with, or
-  `""` for none. Asked when that tab becomes the open one — on a switch and at
+- `noteOpened(path)` (optional) — the user chose that note; it is now the one
+  on screen. The host keeps its own record of the note last chosen in each
+  tab and needs nothing from you for it; take this only when the tab is not
+  the unit you want to answer by. OneNote does, because its `notebookTabs`
+  setting turns one tab holding every notebook into a tab each and back, so
+  it remembers per notebook instead, keeps that in its `saveState()` and
+  emits `persistRequested()` when it moves. Notes the app put on screen
+  without the user choosing them — a search landing on its first hit — are
+  not reported here.
+- `defaultNote(key)` (optional) → the path a tab should open with, or `""`
+  for none. `key` is the section's own key, the one you gave it in
+  `sections` — the same shape `setOrder` receives, never the host's composite
+  tab key. Asked when that tab becomes the open one — on a switch and at
   startup — and asked again on every rebuild until it can be answered, so a
   note whose row has not listed yet is opened when it arrives rather than
   lost. Answer `""` and the tab opens empty; the host never falls back to
   picking a note of its own. Implement neither this nor `noteOpened` and your
-  tabs open on the note last open in them, which is what the host remembers
-  for everyone.
+  tabs open on the note last chosen in them, which is what the host remembers
+  for everyone (a provider that implements `defaultNote` is not remembered by
+  the host as well: the entry would never be read).
 - `create(target, cb)` → `cb({ path, error })`
 - `remove(path, cb)` → `cb({ error })`
 - `createSection(name, cb)` → `cb({ key, target, error })`. `key` is the new
@@ -195,9 +206,10 @@ them.
   your schedule says so, having been told by `noteEdited(path)`.
   It is answered only for the note that is open, because the text being
   written is the editor's, and it is free to arrive late or never: a note the
-  user has moved away from, closed the window on, or deleted has already been
-  written by then, and a request to write a note with nothing pending does
-  nothing. So you never have to cancel a schedule — let it fire.
+  user has moved away from or closed the window on has already been written
+  by then, one they deleted has had its edits dropped with it, and a request
+  to write a note with nothing pending does nothing. So you never have to
+  cancel a schedule — let it fire.
 
 ## Setup and settings
 

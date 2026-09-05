@@ -29,11 +29,10 @@ Item {
   // of OneNote here signs in through. Sticky Notes has one of its own.
   readonly property string microsoftClientId: "1ed713b0-195a-4360-88b4-993f3aeaa262"
 
-  // When the note is written is this provider's own to decide; the host only
-  // says that it changed. Every save is a PATCH against Graph, paced and
-  // retried by the lane behind it and counted against an account's budget, so
-  // the typing is let settle first: long enough that a sentence is one
-  // request rather than one per word.
+  // Every save is a PATCH against Graph, paced and retried by the lane behind
+  // it and counted against an account's budget, so the typing is let settle
+  // first: long enough that a sentence is one request rather than one per
+  // word (noteEdited / saveRequested, PROVIDERS.md).
   signal saveRequested(string path)
   function noteEdited(path) { saveSchedule.path = path; saveSchedule.restart() }
   Timer {
@@ -207,23 +206,22 @@ Item {
     if (!pg) return
     var sec = sectionAt(pg.sectionId)
     if (!sec) return
-    root.lastNotebook = sec.notebookId
-    if (root.lastPages[sec.notebookId] === path) return
+    var book = sec.notebookId
+    if (root.lastNotebook === book && root.lastPages[book] === path) return
+    root.lastNotebook = book
     var next = {}
     for (var k in root.lastPages) next[k] = root.lastPages[k]
-    next[sec.notebookId] = path
+    next[book] = path
     root.lastPages = next
     root.persistRequested()
   }
 
-  // A notebook tab's section key is the notebook's own id; the single tree
-  // tab's is this provider's, and the notebook it means is the last one read
-  // in — which is what makes that tab open where it was left, notebook and
-  // page both, rather than merely on a page.
-  function defaultNote(sectionKey) {
-    var key = sectionKey.substring(root.id.length + 1)
-    var book = root.notebookTabs ? key : root.lastNotebook
-    return root.lastPages[book] || ""
+  // A notebook tab's key is the notebook's own id; the single tree tab's key
+  // is "onenote", and the notebook it means is the last one read in — which
+  // is what makes that tab open where it was left, notebook and page both,
+  // rather than merely on a page.
+  function defaultNote(key) {
+    return root.lastPages[root.notebookTabs ? key : root.lastNotebook] || ""
   }
 
   function toggleTree(id) {
@@ -491,6 +489,15 @@ Item {
       })
   }
 
+  // A save the lane never sent. Superseded means a newer save of the same
+  // note carries this one's intent and answers for it: `{}`. Cancelled — the
+  // lane emptied on sign-out, or this provider going — means nobody will, and
+  // that is a failure the host must hear: an accepted save finishes or fails
+  // out loud (business-requirements.md), never silently.
+  function unsentSave(info) {
+    return (info && info.cancelled) ? { error: "not saved — the request was cancelled" } : {}
+  }
+
   function save(path, title, body, cb) {
     var id = idOf(path), b = root.bodies
     var original = b[id] && b[id].originalTitle !== undefined ? b[id].originalTitle : title
@@ -507,8 +514,8 @@ Item {
     var payload = JSON.stringify({ title: title, originalTitle: original, body: body })
     root.rq.enqueue({ key: "page:" + id, mode: "replace", priority: 0, owner: root, flush: true, label: "save" },
       function(ctx) { root.runScript(["update", id, "-"], payload, ctx) },
-      function(r) {
-        if (!r) { if (cb) cb({}); return }    // superseded or cancelled: the newer save answers
+      function(r, info) {
+        if (!r) { if (cb) cb(root.unsentSave(info)); return }
         if (r.error) { if (cb) cb({ error: r.error }); return }
         var bodiesNow = root.bodies, k = root.idOf(path)
         if (!r.warning && bodiesNow[k]) { bodiesNow[k].originalTitle = bodiesNow[k].title; root.bodies = bodiesNow }

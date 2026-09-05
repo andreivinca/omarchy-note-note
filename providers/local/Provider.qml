@@ -25,16 +25,12 @@ Item {
   readonly property bool canDelete: true
   readonly property bool canReorder: true
   readonly property bool canCreateSection: true
-  // A write here is a file on this disk, not a request: the note can follow
-  // the typing closely, and the pause before it is only long enough that a
-  // word being typed is one write rather than five.
-  readonly property int saveDebounce: 500
   readonly property var microsoftScopes: []
 
-  // When the note is written is this provider's own to decide; the host only
-  // says that it changed. A write here is a file on this disk rather than a
-  // request, so the note can follow the typing closely — the pause is long
-  // enough only that a word being typed is one write and not five.
+  // A write here is a file on this disk rather than a request, so the note
+  // can follow the typing closely: the pause is only long enough that a word
+  // being typed is one write and not five (noteEdited / saveRequested,
+  // PROVIDERS.md).
   signal saveRequested(string path)
   function noteEdited(path) { saveSchedule.path = path; saveSchedule.restart() }
   Timer {
