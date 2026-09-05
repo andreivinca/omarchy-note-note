@@ -18,7 +18,7 @@ from . import dialect
 from . import htmltree
 from ._vendor import parse, walk_text
 from .imagesize import local_path, width_of
-from .mdtext import escape_inline, escape_line_start
+from .mdtext import escape_inline, escape_line_start, code_span, code_fence
 
 # Four non-breaking spaces per level: Markdown has no paragraph indent, and
 # this is the form the providers already translate into a real one.
@@ -56,7 +56,7 @@ def to_markdown(html, base=""):
     return "\n".join(lines) + "\n" if lines else ""
 
 
-def convert(html, base=""):
+def convert(html, base="", as_text=None):
     """Markdown plus the line -> block map the editor needs for the caret.
 
         {"markdown": str, "blocks": [int], "count": int}
@@ -66,11 +66,18 @@ def convert(html, base=""):
     list item, table cell and rule is one, in document order. `base` is the
     note's own directory — how a relative image is measured, the same way
     `writer` measures it (see `_Reader.image_width`).
+
+    `as_text` is a document block index: the code block holding it is read
+    as the paragraphs its lines would be — the code block tool toggling off
+    (NoteEditor.toggleCodeBlock), which is a read with this one instruction
+    and a re-render. Every other block reads as it always does.
     """
     tree = htmltree.parse(dialect.strip_fragment_markers(html))
-    result = _Reader(strict=False, base=base).render(tree)
+    result = _Reader(strict=False, base=base, as_text=as_text).render(tree)
     if _loses_text(result["markdown"], tree):
-        result = _Reader(strict=True, base=base).render(tree)
+        result = _Reader(strict=True, base=base, as_text=as_text).render(tree)
+    if _loses_text(result["markdown"], tree):
+        raise ValueError("the document cannot be saved without changing its text")
     return result
 
 
@@ -90,13 +97,35 @@ class _Chunk:
 
 
 class _Reader:
-    def __init__(self, strict=False, base=""):
+    def __init__(self, strict=False, base="", as_text=None):
         self.strict = strict
         self.base = base
+        self.as_text = as_text
         self.next_block = 0
 
     def render(self, body):
-        return _join(_merge_code(_drop_leading_spacer(self.walk(body))), self.next_block)
+        chunks = _merge_code(_drop_leading_spacer(self.walk(body)))
+        if self.as_text is not None:
+            chunks = self.unfence(chunks)
+        return _join(_fence(chunks), self.next_block)
+
+    def unfence(self, chunks):
+        """The code block holding block `as_text`, read as paragraphs. Each
+        line keeps its block: its text escaped the way any paragraph's is,
+        an empty line as the dialect's blank — so the document that comes
+        back has the same blocks with the same characters in them, and the
+        caret's position means what it did."""
+        out = []
+        for chunk in chunks:
+            if chunk.kind != "code" or self.as_text not in chunk.blocks:
+                out.append(chunk)
+                continue
+            for line, block in zip(chunk.lines, chunk.blocks):
+                if line:
+                    out.append(_Chunk("text", [self.text_line(line)], [block]))
+                else:
+                    out.append(_Chunk("blank", [dialect.BLANK_PARAGRAPH], [block]))
+        return out
 
     def take(self, count=1):
         """Claim the next `count` document blocks and return the first."""
@@ -260,7 +289,8 @@ class _Reader:
             elif node.tag == "br":
                 out.append("\n")
             elif node.tag == "a":
-                out.append(self.plain(node.children).strip() or node.attrs.get("href", ""))
+                out.append(self.plain(node.children).strip() or
+                           ("" if _contains_image(node) else node.attrs.get("href", "")))
             else:
                 out.append(self.plain(node.children))
         return "".join(out)
@@ -283,7 +313,7 @@ class _Reader:
             elif node.tag == "span":
                 style = dialect.style_map(node.style)
                 if dialect.is_mono(style):
-                    out.append(_Run("`%s`" % self.plain(node.children), active))
+                    out.append(_Run(code_span(self.plain(node.children)), active))
                 else:
                     out.extend(self.runs(node.children, active | self.styles_of(style, active)))
             else:
@@ -416,7 +446,7 @@ def _drop_leading_spacer(chunks):
 
 
 def _merge_code(chunks):
-    """Neighbouring monospace paragraphs are one fenced block."""
+    """Neighbouring monospace paragraphs are one code block."""
     merged = []
     for chunk in chunks:
         if chunk.kind == "code" and merged and merged[-1].kind == "code":
@@ -424,9 +454,21 @@ def _merge_code(chunks):
             merged[-1].blocks.extend(chunk.blocks)
         else:
             merged.append(_Chunk(chunk.kind, list(chunk.lines), list(chunk.blocks)))
-    # The fences are ours, not the document's: they belong to no block.
-    return [_Chunk("fence", ["```"] + c.lines + ["```"], [NO_BLOCK] + c.blocks + [NO_BLOCK])
-            if c.kind == "code" else c for c in merged]
+    return merged
+
+
+def _fence(chunks):
+    """A code block is written fenced. The fences are ours, not the
+    document's: they belong to no block."""
+    out = []
+    for chunk in chunks:
+        if chunk.kind == "code":
+            fence = code_fence("\n".join(chunk.lines))
+            out.append(_Chunk("fence", [fence] + chunk.lines + [fence],
+                              [NO_BLOCK] + chunk.blocks + [NO_BLOCK]))
+        else:
+            out.append(chunk)
+    return out
 
 
 def _join(chunks, total):
@@ -450,3 +492,7 @@ def _loses_text(markdown, tree):
 
 def _words(text):
     return "".join((text or "").split())
+
+
+def _contains_image(node):
+    return node.tag == "img" or any(_contains_image(child) for child in node.children)

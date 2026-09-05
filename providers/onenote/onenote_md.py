@@ -8,6 +8,13 @@ import html as _html
 import re
 from html.parser import HTMLParser
 
+# All renderers share escaping and code delimiters.
+import os as _os
+import sys as _sys
+_sys.path.insert(0, _os.path.join(_os.path.dirname(_os.path.abspath(__file__)), "..", "..", "services", "markdown"))
+from mdtext import escape_text, escape_line_start  # noqa: E402
+from parse import parse as _parse  # noqa: E402
+
 # OneNote note tags -> a prefix we can recognise again on save.
 TAG_PREFIX = {
     "important": "⭐ ", "question": "❓ ", "idea": "💡 ", "critical": "❗ ",
@@ -58,28 +65,6 @@ class TreeBuilder(HTMLParser):
     def handle_data(self, data):
         self.stack[-1].children.append(Node(None, text=data))
 
-
-
-# Plain text from the backend must not be read as Markdown by the editor:
-# escape inline markers, and line starts that would become a heading, list,
-# quote, rule or table. Qt re-escapes on save; our parser unescapes.
-_INLINE_ESC = re.compile(r"([\\*_`~\[\]<>|])")
-_LINE_ESC = re.compile(r"^(\s*)([#>+\-*]|[-=]{3,}\s*$|\|)")
-_LINE_NUM = re.compile(r"^(\s*\d+)([.)])")
-
-
-def escape_text(text):
-    return _INLINE_ESC.sub(r"\\\1", text)
-
-
-def escape_line_start(text):
-    m = _LINE_NUM.match(text)
-    if m:                      # "1. x" -> "1\. x"
-        return text[:m.start(2)] + "\\" + text[m.start(2):]
-    m = _LINE_ESC.match(text)
-    if not m:
-        return text
-    return text[:m.start(2)] + "\\" + text[m.start(2):]
 
 
 # ---------------------------------------------------------------- HTML -> Markdown
@@ -411,10 +396,6 @@ def html_to_markdown(html, image_path_for=None):
 # Markdown is parsed by the vendored mistune (services/markdown/parse.py);
 # this is only the renderer into the HTML OneNote accepts.
 
-import os as _os  # noqa: E402
-import sys as _sys  # noqa: E402
-_sys.path.insert(0, _os.path.join(_os.path.dirname(_os.path.abspath(__file__)), "..", "..", "services", "markdown"))
-from parse import parse as _parse  # noqa: E402
 
 _QUOTE_STYLE = ' style="margin-left:20pt;color:#595959"'
 

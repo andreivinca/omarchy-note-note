@@ -141,27 +141,35 @@ def http(method, url, data=None, headers=None, form=False, max_bytes=MAX_BODY,
         else:
             body = json.dumps(data).encode()
             hdrs["Content-Type"] = "application/json"
-    req = urllib.request.Request(url, data=body, method=method, headers=hdrs)
+    status, raw = request(method, url, body, hdrs, max_bytes=max_bytes,
+                          transient_5xx=transient_5xx)
+    try:
+        return status, json.loads(raw) if raw else {}
+    except ValueError:
+        return status, {"error": raw.decode(errors="replace")}
+
+
+def request(method, url, body=None, headers=None, max_bytes=MAX_BODY,
+            timeout=30, transient_5xx=True):
+    """Shared bounded transport; response decoding belongs to the caller."""
+    req = urllib.request.Request(url, data=body, method=method, headers=headers or {})
 
     def once():
         try:
-            with urllib.request.urlopen(req, timeout=30) as r:
-                raw = read_bounded(r, max_bytes)
-                return r.status, (json.loads(raw) if raw else {})
-        except OverflowError as e:
-            fail(str(e))
-        except urllib.error.HTTPError as e:
-            raw = e.read(max_bytes + 1)[:max_bytes]
-            if e.code in THROTTLED_STATUSES:
-                raise ratelimit.Retry(wait_asked_by(e))
-            if transient_5xx and e.code in TRANSIENT_STATUSES:
-                fail_transient(e.code, raw)
-            try:
-                return e.code, json.loads(raw)
-            except ValueError:
-                return e.code, {"error": raw.decode(errors="replace")}
-        except urllib.error.URLError as e:
-            fail("network error: %s" % e.reason)
+            with urllib.request.urlopen(req, timeout=timeout) as response:
+                return response.status, read_bounded(response, max_bytes)
+        except OverflowError as error:
+            fail(str(error))
+        except urllib.error.HTTPError as error:
+            with error:
+                raw = error.read(max_bytes + 1)[:max_bytes]
+            if error.code in THROTTLED_STATUSES:
+                raise ratelimit.Retry(wait_asked_by(error))
+            if transient_5xx and error.code in TRANSIENT_STATUSES:
+                fail_transient(error.code, raw)
+            return error.code, raw
+        except urllib.error.URLError as error:
+            fail("network error: %s" % error.reason)
 
     return ratelimit.attempt_loop(rate_key_for(url), RATE_WINDOWS, once)
 

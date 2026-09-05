@@ -4,7 +4,7 @@ oldest-first by birth time, as the tab-separated stream Provider.qml parses:
     B<TAB>key                                        notebook order (.notebooks)
     D<TAB>key                                        a notebook ("" = root)
     O<TAB>key<TAB>name                               saved note order (.order)
-    N<TAB>key<TAB>path<TAB>title<TAB>preview<TAB>size<TAB>mtime
+    N<TAB>key<TAB>path<TAB>title<TAB>preview<TAB>size<TAB>mtime_ns
 
 The birth time comes from statx(2), not from os.stat(): a stat_result only
 carries st_birthtime where the platform's own struct stat does, which on Linux
@@ -192,7 +192,7 @@ def main():
                     # and reshuffled the list as a note was typed into.
                     notes.append(((birth_time(path) or int(st.st_mtime),
                                    int(st.st_mtime), entry.name),
-                                  st.st_size, int(st.st_mtime), path))
+                                  st.st_size, st.st_mtime_ns, path))
         except OSError:
             continue
         for _, size, mtime, path in sorted(notes):

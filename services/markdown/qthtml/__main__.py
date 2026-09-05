@@ -4,11 +4,15 @@
                                    [--link '#4282d7'] [--quote-ink '#9399b2']
                                    [--code-background '#313244'] [--code-chip '#2a2c3c']
                                    [--base /dir]
-    python3 -m qthtml to-markdown  [--base /dir]
+    python3 -m qthtml to-markdown  [--base /dir] [--as-text BLOCK]
 
 `--base` is the note's own directory, for both directions: it is how an image
 the note names by a relative path is found and measured (the display cap for
 large images, and telling that cap from a width the author chose).
+
+`--as-text` names a document block: the code block holding it is read as the
+paragraphs its lines would be — the code block tool toggling off (see
+`reader.convert`).
 
 Both directions answer with one JSON object. `to-markdown` answers with the
 Markdown, the document block each line came from, and how many blocks there
@@ -31,23 +35,23 @@ import sys
 
 if __package__ in (None, ""):                      # run as a path, not a module
     sys.path.insert(0, __file__.rsplit("/", 2)[0])
-    from qthtml import convert, dialect, to_html, to_markdown
+    from qthtml import convert, dialect, to_html
 else:
-    from . import convert, dialect, to_html, to_markdown
+    from . import convert, dialect, to_html
 
 # One note; far above any note the editor will open, and bounded on purpose.
 MAX_BYTES = 8 * 1024 * 1024
 
 FLAGS = {"--highlight": "highlight", "--highlight-ink": "ink", "--link": "link",
          "--quote-ink": "quote_ink", "--code-background": "code_background",
-         "--code-chip": "code_chip", "--base": "base"}
+         "--code-chip": "code_chip", "--base": "base", "--as-text": "as_text"}
 
 
 def parse_args(argv):
     options = {"highlight": dialect.DEFAULT_HIGHLIGHT, "ink": dialect.DEFAULT_HIGHLIGHT_INK,
                "link": dialect.DEFAULT_LINK, "quote_ink": dialect.DEFAULT_QUOTE_INK,
                "code_background": dialect.DEFAULT_CODE_BACKGROUND,
-               "code_chip": dialect.DEFAULT_CODE_CHIP, "base": ""}
+               "code_chip": dialect.DEFAULT_CODE_CHIP, "base": "", "as_text": None}
     if not argv or argv[0] not in ("to-html", "to-markdown"):
         raise SystemExit(__doc__)
     direction, rest = argv[0], argv[1:]
@@ -57,6 +61,8 @@ def parse_args(argv):
             options[FLAGS[flag]] = rest.pop(0)
         else:
             raise SystemExit("qthtml: unknown option %r" % flag)
+    if options["as_text"] is not None and not options["as_text"].isdigit():
+        raise SystemExit("qthtml: --as-text takes a document block index")
     return direction, options
 
 
@@ -74,7 +80,8 @@ def main(argv=None):
                                    options["quote_ink"], options["code_background"],
                                    options["code_chip"], options["base"])}, sys.stdout)
     else:
-        json.dump(convert(text, options["base"]), sys.stdout)
+        as_text = int(options["as_text"]) if options["as_text"] is not None else None
+        json.dump(convert(text, options["base"], as_text), sys.stdout)
     return 0
 
 

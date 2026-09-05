@@ -65,11 +65,13 @@ def parse(markdown):
 
 
 def walk_text(tokens):
-    """Plain text of an inline token list (links/emphasis flattened)."""
+    """Visible document text, excluding image alt labels and markup."""
     out = []
     for t in tokens or []:
-        if t["type"] in ("text", "codespan"):
+        if t["type"] in ("text", "codespan", "block_code"):
             out.append(t.get("raw", ""))
+        elif t["type"] == "image":
+            continue
         elif t["type"] == "softbreak":
             out.append(" ")
         elif t["type"] == "linebreak":

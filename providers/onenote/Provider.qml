@@ -1,6 +1,7 @@
 import Quickshell
 import Quickshell.Io
 import QtQuick
+import "../../services/processes"
 import qs.Commons
 import qs.Ui
 
@@ -471,52 +472,14 @@ Item {
   // answers, so the callback travels with the process instead of living in a
   // single `saveCb`-shaped slot that the next save would overwrite. (That
   // slot is where a second save used to drop the first one's answer.)
-  Component {
-    id: jobProcess
-    Process {
-      id: proc
-      property var ctx: null
-      environment: root.ms ? root.ms.env : ({})
-      stdout: StdioCollector {
-        onStreamFinished: {
-          var answer = proc.ctx
-          proc.ctx = null
-          if (answer) {
-            answer.done(root.parse(this.text))
-          }
-          Qt.callLater(function() { proc.destroy() })
-        }
-      }
-      // A script that died without writing anything — killed, or crashed
-      // before its own error handler — would otherwise leave its job in
-      // flight for ever, and everything behind it in the lane with it.
-      onExited: {
-        if (!proc.ctx) {
-          return
-        }
-        var answer = proc.ctx
-        proc.ctx = null
-        answer.done({ error: "unexpected reply" })
-        Qt.callLater(function() { proc.destroy() })
-      }
-    }
-  }
+  ProcessRunner { id: scriptRunner }
+  readonly property bool busy: scriptRunner.active > 0
 
   function runScript(args, payload, ctx) {
-    var proc = jobProcess.createObject(root, { ctx: ctx })
-    if (!proc) {
-      ctx.done({ error: "could not start onenote.py" })
-      return
-    }
-    proc.command = ["python3", root.script].concat(args)
-    if (payload) {
-      proc.stdinEnabled = true               // stdin must be open before it starts
-      proc.running = true
-      proc.write(payload)                    // the note goes over stdin, never argv
-      proc.stdinEnabled = false              // close stdin: the script reads to EOF
-    } else {
-      proc.running = true
-    }
+    scriptRunner.run({ command: ["python3", root.script].concat(args),
+                       environment: root.ms ? root.ms.env : ({}),
+                       payload: payload || undefined,
+                       timeoutMs: 600000 }, function(result) { ctx.done(result) })
   }
 
   function refresh() {

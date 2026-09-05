@@ -22,7 +22,7 @@ one filler, undone together with the split (docs/engine-notes.md).
     sh cpp/build.sh
     python3 cpp/selftest.py [--verbose]
 
-Skipped with a warning when the library is not built or `qml6` is missing.
+Requires the built library and `qml6`; a missing runtime fails the suite.
 """
 import argparse
 import json
@@ -203,8 +203,8 @@ def main():
     args = parser.parse_args()
 
     if not os.path.isdir(MODULE):
-        print("SKIPPED: %s not built (sh cpp/build.sh)" % MODULE)
-        return 0
+        print("FAILED: %s not built (sh cpp/build.sh)" % MODULE)
+        return 1
 
     documents = {name: to_html(markdown) for name, markdown in CASES.items()}
     png_dir = tempfile.mkdtemp(prefix="note-note-selftest-")
@@ -223,12 +223,20 @@ def main():
         env = dict(os.environ, QT_QPA_PLATFORM="offscreen", QT_FORCE_STDERR_LOGGING="1")
         proc = subprocess.run(["qml6", path], capture_output=True, text=True, timeout=120, env=env)
     except (OSError, subprocess.SubprocessError) as error:
-        print("SKIPPED: %s" % error)
-        return 0
+        print("FAILED: %s" % error)
+        return 1
     finally:
         os.unlink(path)
         os.unlink(png)
         os.rmdir(png_dir)
+    if proc.returncode != 0:
+        print("FAILED: qml6 exited with code %s:\n%s" % (proc.returncode, proc.stderr[-2000:]))
+        return 1
+    errors = [line for line in proc.stderr.splitlines()
+              if any(marker in line for marker in ("ReferenceError:", "TypeError:", "Binding loop", "Unable to assign"))]
+    if errors:
+        print("FAILED: QML errors:\n" + "\n".join(errors))
+        return 1
     blob = proc.stderr.split("<<<RESULT>>>")
     if len(blob) < 2:
         print("FAILED to run qml6:\n" + proc.stderr[-2000:])

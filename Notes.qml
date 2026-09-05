@@ -11,6 +11,10 @@ import "services/clipboard" as Clipboard
 import "services/markdown" as Markdown
 import "services/microsoft" as Microsoft
 import "services/requests" as Requests
+import "services/notes" as NoteServices
+import "services/notes/sidebar.js" as Sidebar
+import "services/providers" as ProviderServices
+import "services/files" as Files
 
 // Note Note — notes for the Omarchy shell, laid out the way a desktop IDE
 // is: a title bar in a browser's shape (the binder's tabs from the left, the
@@ -72,21 +76,15 @@ Item {
 
   // Current note. `loadingNote` guards against editor change signals firing
   // a save while a note is being swapped in.
-  property string currentPath: ""
-  property bool loadingNote: false
+  property alias currentPath: session.currentPath
+  property alias loadingNote: session.loadingNote
   // The open note's load ended in an error and the pane is showing nothing.
   // Retried on the next open() — a queued read is dropped when the window
   // hides, so this is the ordinary way a hidden window ends a load.
-  property bool loadFailed: false
-  property bool dirty: false
-  property string currentCrumb: ""
-  property string loadingPath: ""
-  // The pending load's cancel handle — null when there is none, or when the
-  // provider answered without one (a cache hit, a sync provider). Cancelling
-  // withdraws only a read still queued in the provider's lane; one already in
-  // flight lands anyway, and the path guard on its callback drops it.
-  property var loadHandle: null
-
+  property alias loadFailed: session.loadFailed
+  property alias dirty: session.dirty
+  readonly property string currentCrumb: root.revision >= 0 ? crumbOf(root.currentPath) : ""
+  property alias loadingPath: session.loadingPath
   // Shares the [menu] surface tokens, so a theme that styles the launcher
   // styles this too.
   property color background: Color.menu.background
@@ -233,7 +231,7 @@ Item {
     id: pollTimer
     interval: 20000
     repeat: true
-    running: root.opened && root.providersLoaded
+    running: root.opened && root.providersLoaded && !lifecycle.busy
     onTriggered: {
       for (var i = 0; i < root.providers.length; i++) {
         if (typeof root.providers[i].poll === "function") {
@@ -645,8 +643,8 @@ Item {
   function loadConfig(raw) {
     var trimmed = (raw || "").replace(/^\s+|\s+$/g, "")
     if (trimmed.length === 0) {
-      // readfile.py prints "" for both "missing" and "genuinely empty" —
-      // both mean first run: write the defaults now, so the file is
+      // Only a missing or successfully read empty file reaches here.
+      // Write the defaults now, so the file is
       // self-documenting (every known setting, with its default) from the
       // moment it exists.
       root.config = root.defaultConfig()
@@ -666,123 +664,42 @@ Item {
     root.configReady = true
     root.maybeLoadProviders()
   }
-  // ~/.config/notenote/ is this plugin's own, brand-new directory — unlike
-  // ~/.local/state/omarchy/ it won't exist on a fresh install, and FileView
-  // does not create parents — so every write mkdir -p's first, the same
-  // shape as providers/local/Provider.qml's mkdirProc before a new notebook.
-  property string pendingConfigWrite: ""
-  function writeConfig(cfg) {
-    root.pendingConfigWrite = JSON.stringify(cfg, null, 2) + "\n"
-    configDirProc.command = ["mkdir", "-p", "--", root.configDir]
-    configDirProc.running = true
+  Files.FileStore {
+    id: files
+    onFailed: function(message) { root.reportSave(message) }
   }
-  Process {
-    id: configDirProc
-    onExited: { configFile.setText(root.pendingConfigWrite); root.pendingConfigWrite = "" }
+  ProviderServices.ProviderLifecycle {
+    id: lifecycle
+    host: root
+    session: session
+    editor: editor
+    files: files
   }
-  FileView { id: configFile; path: root.configPath; atomicWrites: true; printErrors: false }
-
   readonly property int maxConfigBytes: 1024 * 1024
-  Process {
-    id: configRead
-    command: ["python3", root.readScript, root.configPath, String(root.maxConfigBytes + 1)]
-    stdout: StdioCollector {
-      onStreamFinished: {
-        if (this.text.length > root.maxConfigBytes) {
-          console.warn("note-note: config file too large, using defaults")
-          root.loadConfig("")
-          return
-        }
-        root.loadConfig(this.text)
-      }
-    }
+  function writeConfig(cfg, callback) {
+    files.write(root.configPath, JSON.stringify(cfg, null, 2) + "\n", callback)
   }
-
-  // The settings dialog's one entry point: validate, write exactly what was
-  // typed (so what's on disk is honestly what was saved — no silent key
-  // revival), then bring live providers in line with the new enabled set.
-  function applySettingsJson(text) {
-    var parsed
-    try { parsed = JSON.parse(text) } catch (e) { return { ok: false, error: "Invalid JSON: " + e.message } }
-    if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
-      return { ok: false, error: "Invalid JSON: the top level must be an object" }
-    }
-    var oldConfig = root.config
-    var merged = root.mergeConfigDefaults(parsed)
-    root.config = merged
-    root.writeConfig(parsed)
-    root.applyProviderDiff(oldConfig, merged)
-    return { ok: true }
+  function applySettingsJson(text, callback) {
+    lifecycle.apply(text, callback)
   }
-  function applyProviderDiff(oldConfig, newConfig) {
-    for (var id in root.providerUrls) {
-      var was = root.providerEnabledIn(oldConfig, id)
-      var now = root.providerEnabledIn(newConfig, id)
-      // A provider that stayed enabled but whose own settings changed (a new
-      // notesDir, say) is recreated too — nothing here hot-patches a live
-      // provider's directory, watcher and already-loaded notebooks, so a
-      // fresh instance is the simplest correct way to make that take.
-      var settingsChanged = was && now &&
-        JSON.stringify((oldConfig.providers || {})[id]) !== JSON.stringify((newConfig.providers || {})[id])
-      if (was === now && !settingsChanged) {
-        continue
-      }
-      if (was && root.providerById(id)) {
-        root.disableProviderInstance(id)
-      }
-      if (now) {
-        // addProvider() alone leaves a provider empty: at startup, listing
-        // is what open()'s own loop over root.providers triggers, but the
-        // overlay is already open by the time Settings can be reached, so
-        // that loop has already run and won't run again on its own.
-        var p = root.addProvider(root.providerUrls[id])
-        if (p) {
-          p.refresh()
-          if (typeof p.watch === "function") {
-            p.watch(true)
-          }
-        }
-      }
+  function providerBusy(provider) {
+    if (provider.busy === true) {
+      return true
     }
-    // Reorders the tabs of providers that were already loaded too, not only
-    // ones just added/removed — moving a name in the config moves its tab.
+    return root.queueList.some(function(queue) { return queue.pendingFor(provider, true) > 0 })
+  }
+  function retireProvider(provider) {
+    root.cancelQueuedFor(provider)
+    root.providers = root.providers.filter(function(p) { return p !== provider })
+    provider.destroy()
+  }
+  function reorderProviders() {
     var byId = {}
     for (var i = 0; i < root.providers.length; i++) {
       byId[root.providers[i].id] = root.providers[i]
     }
-    var ids = root.orderProviderIds(root.providers.map(function(x) { return x.id }), newConfig)
-    root.providers = ids.map(function(pid) { return byId[pid] })
-    root.rebuildRows()
-    root.saveState()
-  }
-  function disableProviderInstance(id) {
-    var kept = [], target = null
-    for (var i = 0; i < root.providers.length; i++) {
-      if (root.providers[i].id === id) {
-        target = root.providers[i]
-      } else {
-        kept.push(root.providers[i])
-      }
-    }
-    if (!target) {
-      return
-    }
-    var cur = root.providerOf(root.currentPath)
-    if (cur && cur.id === id) {
-      // Nothing can be written to this provider any more: an edit the editor
-      // still holds is dropped and said so, rather than flushed into a
-      // conversion whose answer would find the provider gone; a conversion
-      // already running is cancelled the same way. A save the provider's
-      // lane already holds is its own to answer as it goes (unsentSave).
-      if (root.dirty) {
-        root.dirty = false
-        root.reportSave(target.name + ": unsaved changes were dropped — the provider was turned off")
-      }
-      root.cancelPendingSave(root.currentPath)
-      root.selectPath("")
-    }
-    root.providers = kept
-    target.destroy()
+    var ids = root.orderProviderIds(Object.keys(byId), root.config)
+    root.providers = ids.map(function(id) { return byId[id] })
   }
 
   // ── sidebar rows ────────────────────────────────────────────────────
@@ -927,6 +844,9 @@ Item {
   // hopping to the tab that has hits): they are not worth a state-file write
   // per keystroke, and not the tab to come back to next run.
   function setActiveSection(key, persist) {
+    if (session.locked) {
+      return
+    }
     if (!key || key === root.activeSection) {
       return
     }
@@ -996,9 +916,7 @@ Item {
     }
     return tabs
   }
-  function matchesQuery(r, q) {
-    return (r.title || "").toLowerCase().indexOf(q) >= 0 || (r.preview || "").toLowerCase().indexOf(q) >= 0
-  }
+
   // ── content search ────────────────────────────────────────────────────
   // Titles and previews are matched right here, on every keystroke — that is
   // matchesQuery, and it is instant because the rows are already in memory.
@@ -1093,57 +1011,14 @@ Item {
     var words = text.split(/\s+/).slice(0, 5).join(" ")
     return words.length < text.length ? words + "…" : words
   }
-  // A row carries what the list shows or drags on, and nothing else: rows are
-  // compared before they are handed over (rebuildRows), and a field the
-  // delegates never read — a note's `version`, which moves on every save —
-  // would make two lists that look the same compare different. The version
-  // is read where it is needed, from the providers' own sections (versionOf).
-  function row(provider, key, r) {
-    return { provider: provider.id, notebook: key, kind: r.kind || "note", path: r.path || "",
-             title: r.title || "", preview: r.preview || "", icon: r.icon || "",
-             fixed: r.fixed === true || !provider.canReorder, level: r.level || 0, expanded: r.expanded === true }
-  }
   function rebuildRows() {
     root.revision++
-    root.currentCrumb = crumbOf(root.currentPath)
     // Opening another tab starts at the top; a refresh of the one already open
     // keeps its place.
-    var keep = root.switchingTab ? 0 : list.scrollOffset(), out = [], tabs = [], hits = {}, active = activeKey()
-    var q = root.filterText.toLowerCase()
+    var keep = root.switchingTab ? 0 : list.scrollOffset(), active = activeKey()
     root.switchingTab = false
-    // The providers' content answers, flattened once for the whole pass.
-    var contentSet = {}
-    for (var ph in root.contentHits) {
-      var pm = root.contentHits[ph]
-      for (var cp in pm) {
-        contentSet[cp] = true
-      }
-    }
-    eachSection(function(prov, s, key) {
-      var all = s.rows || []
-      // Every tab counts its own hits, the closed ones included — that is what
-      // the number on a tab says while a search is running. A search reads
-      // every note the section holds, not only the rows its tree is showing:
-      // a provider whose rows fold away (OneNote) lists them all in s.notes,
-      // for the rest the note rows already are all of them.
-      var notes = q ? s.notes || all.filter(function(r) { return r.kind === "note" }) : all
-      var found = q ? notes.filter(function(r) { return matchesQuery(r, q) || contentSet[r.path] === true }) : []
-      tabs.push({ key: key, name: s.name, color: s.color || "", logo: prov.logo || "",
-                  count: s.count !== undefined ? s.count : all.filter(function(r) { return r.kind === "note" }).length })
-      hits[key] = found.length
-      if (key !== active) {
-        return
-      }
-      if (q) {
-        for (var i = 0; i < found.length; i++) {
-          out.push(row(prov, key, found[i]))
-        }
-        return
-      }
-      for (var j = 0; j < all.length; j++) {
-        out.push(row(prov, key, all[j]))
-      }
-    })
+    var model = Sidebar.build(root.providers, active, root.filterText, root.contentHits)
+    var out = model.rows, tabs = model.tabs, hits = model.hits
     // The tabs themselves change rarely (a notebook made, a colour given); the
     // hit counts change per keystroke. Keeping the model still while only the
     // counts move is what keeps the rail from rebuilding its delegates.
@@ -1160,7 +1035,7 @@ Item {
     // per provider refresh, per OneNote listing and per account refresh, and
     // nearly every run reproduces the rows already on screen; a list that
     // differs in nothing the list shows is not handed over. That is what
-    // `row()` carrying only what the list shows buys: a field the delegates
+    // the sidebar builder carrying only what the list shows buys: a field the delegates
     // never read would make equal lists unequal.
     var rowsChanged = JSON.stringify(out) !== JSON.stringify(root.rows)
     if (rowsChanged) {
@@ -1186,30 +1061,19 @@ Item {
     if (rowsChanged && keep > 0) {
       Qt.callLater(function() { list.setScrollOffset(keep) })
     }
-    // The tab on screen opens with the note it is owed. Asked on every
-    // rebuild while it is still owed, because a tab whose notes have not
-    // listed yet (OneNote is async) can only be answered by the rebuild that
-    // brings them — and never once the user has picked for themselves, so a
-    // note you closed is not reopened behind your back.
+    // Selection/reload runs after model publication, outside provider signals.
+    Qt.callLater(root.reconcileNote)
+  }
+
+  function reconcileNote() {
+    if (session.locked) {
+      return
+    }
     if (root.defaultOwed && !root.filterText) {
       openDefaultNote()
     }
-    // A note that vanished from its provider (deleted elsewhere, signed out)
-    // is deselected; one merely sitting in another tab is kept.
-    if (root.currentPath && !root.filterText && !noteExists(root.currentPath)) {
-      selectPath("")
-      return
-    }
-    // The open note changed elsewhere (its version moved): reload it, unless
-    // there are unsaved edits here.
-    var v = versionOf(root.currentPath)
-    if (root.currentPath && v && root.loadedVersion !== "" && v !== root.loadedVersion && !root.dirty && !root.saveInFlight(root.currentPath) && !root.loadingNote) {
-      reloadCurrent()
-    } else if (v && root.loadedVersion === "") {
-      root.loadedVersion = v
-    }
+    session.reconcile(root.filterText !== "" || noteExists(root.currentPath), versionOf(root.currentPath))
   }
-  property string loadedVersion: ""
   function versionOf(path) {
     var v = ""
     eachSection(function(prov, s, key) {
@@ -1221,65 +1085,8 @@ Item {
     })
     return v
   }
-  function reloadCurrent() {
-    var path = root.currentPath, p = providerOf(path)
-    if (!p) {
-      return
-    }
-    root.loadingNote = true
-    root.noteLoadSeq++
-    root.loadedVersion = versionOf(path)
-    root.loadHandle = p.load(path, function(r) {
-      if (root.currentPath !== path) {
-        return
-      }
-      if (r.error) {
-        root.noteUnavailable(p.name + ": " + r.error)
-        return
-      }
-      var pos = editor.cursorPosition()
-      editor.documentBase = r.base || ""
-      editor.setNote(r.title || "", r.body || "", function(shown) {
-        if (root.currentPath !== path) {
-          return
-        }
-        if (!shown) {
-          root.noteUnavailable(root.notDisplayable)
-          return
-        }
-        editor.setCursorPosition(pos)
-        root.noteReady(r.editable === false)
-        showStatus(p.name + ": reloaded, changed elsewhere")
-      })
-    }) || null
-  }
+  function reloadCurrent() { session.reloadCurrent() }
 
-  // A load ends in one of two states, and these are the only two places that
-  // spell them. Until one of them runs the note is still loading: the host
-  // ignores edits (onEdited) and the editor is held read-only, because the
-  // document is empty until the conversion answers and an editable blank is
-  // what autosave would write back over the note.
-  //
-  // The note is on screen and is the note: it may be edited, unless its
-  // provider said otherwise.
-  function noteReady(readOnly) {
-    editor.readOnly = readOnly
-    root.loadFailed = false
-    root.loadingNote = false
-    root.dirty = false
-  }
-  // The note could not be read, or was read but could not be shown. Held
-  // read-only with the reason said, so it cannot be written back to
-  // (business-requirements.md, goal 2); loadFailed asks for it again on the
-  // next open().
-  readonly property string notDisplayable: "This note could not be displayed — it has not been changed"
-  function noteUnavailable(message) {
-    editor.readOnly = true
-    root.loadFailed = true
-    root.loadingNote = false
-    root.dirty = false
-    showStatus(message)
-  }
   // A note is "in" its provider while a section shows its row — or holds it
   // in `notes`, the section's searchable whole: a folded tree hides the row
   // without the note going anywhere (PROVIDERS.md).
@@ -1460,19 +1267,6 @@ Item {
   }
 
   // ── selection ───────────────────────────────────────────────────────
-  // Withdraws the load the editor is waiting on, for when its answer no
-  // longer matters: the user has stepped to another note, and a read the
-  // queue still holds for the old one would only make the new one wait its
-  // turn. Cancelling a load that already answered is a no-op by the queue's
-  // design, so a stale handle is harmless.
-  function cancelLoad() {
-    var h = root.loadHandle
-    root.loadHandle = null
-    if (h) {
-      h.cancel()
-    }
-  }
-
   // The user chose this note — a click, the keyboard, a note they just made,
   // or the tab being given the one it was owed. That settles what the tab
   // opens with next time and ends what it is owed; before selectPath's early
@@ -1489,59 +1283,8 @@ Item {
   }
 
   function selectPath(path) {
-    // Any selection pulls the list's keyboard cursor back to the note —
-    // a click, a search landing, a tab switch putting the note away.
     root.treeCursor = ""
-    if (path === root.currentPath) {
-      return
-    }
-    var p = providerOf(path)
-    if (path && !p) {
-      return
-    }
-    root.flushSave()
-    editor.clearNotice()
-    root.loadingNote = true
-    root.noteLoadSeq++
-    root.currentPath = path
-    // Cancelled only now, after currentPath moved on: the cancelled answer —
-    // or an in-flight read landing late — hits the path guard below and is
-    // dropped, instead of reading as a failure of the note being opened.
-    root.cancelLoad()
-    root.currentCrumb = crumbOf(path)
-    editor.readOnly = false
-    editor.documentBase = ""
-    if (!path) {
-      editor.setNote("", "")
-      root.loadingNote = false
-      return
-    }
-    root.loadingPath = path
-    editor.setNote("", "")
-    editor.readOnly = true
-    root.loadedVersion = ""
-    root.loadHandle = p.load(path, function(r) {
-      if (root.currentPath !== path) {
-        return
-      }
-      root.loadingPath = ""
-      if (r.error) {
-        root.noteUnavailable(p.name + ": " + r.error)
-        return
-      }
-      root.loadedVersion = r.version || versionOf(path)
-      editor.documentBase = r.base || ""
-      editor.setNote(r.title || "", r.body || "", function(shown) {
-        if (root.currentPath !== path) {
-          return
-        }
-        if (!shown) {
-          root.noteUnavailable(root.notDisplayable)
-          return
-        }
-        root.noteReady(r.editable === false)
-      })
-    }) || null
+    session.selectPath(path)
   }
 
   // The list's keyboard cursor. Usually it is the open note; Ctrl+up/down
@@ -1639,6 +1382,9 @@ Item {
 
   // ── create / delete ─────────────────────────────────────────────────
   function newNote(providerId, target) {
+    if (session.locked) {
+      return
+    }
     root.flushSave()
     if (root.filterText) {
       titleBar.setSearchText("")
@@ -1664,7 +1410,6 @@ Item {
         showStatus(p.name + ": " + r.error)
         return
       }
-      root.currentPath = ""
       // The fallback above may have filed the note in another provider's tab
       // (ctrl+n on a tab with no create target): open that tab, or the note
       // sits in the editor with no row anywhere on screen.
@@ -1703,6 +1448,9 @@ Item {
   // a tab of its own when the provider spreads notebooks into tabs, the one
   // tab that holds them all when it folds them (createSection's cb).
   function newNotebook(name) {
+    if (session.locked) {
+      return
+    }
     var p = notebookMaker()
     if (!p) {
       return
@@ -1735,6 +1483,9 @@ Item {
 
   property string deletePath: ""
   function requestDelete(path) {
+    if (session.locked) {
+      return
+    }
     var target = path || root.currentPath, p = providerOf(target)
     if (!target || !p || !p.canDelete) {
       return
@@ -1752,15 +1503,6 @@ Item {
       return
     }
     var wasCurrent = path === root.currentPath, mi = rowIndexOf(path)
-    // The deleted note's edits go with it: a conversion still running for it
-    // is cancelled, and the editor's text is not flushed. Deleting another
-    // note flushes the open one first, as any moment the app might lose it.
-    root.cancelPendingSave(path)
-    if (wasCurrent) {
-      root.dirty = false
-    } else {
-      root.flushSave()
-    }
     var next = ""
     if (wasCurrent) {
       for (var k = Math.max(mi, 0); k >= 0 && k < root.rows.length; k--) {
@@ -1777,17 +1519,17 @@ Item {
           }
         }
       }
-      root.currentPath = ""
     }
-    p.remove(path, function(r) {
-      if (r.error) {
-        showStatus(p.name + ": " + r.error)
+    session.remove(path, function(result) {
+      if (result.error) {
+        showStatus(p.name + ": " + result.error)
+        return
+      }
+      if (wasCurrent) {
+        selectPath(next)
+        editor.focusEditor()
       }
     })
-    if (wasCurrent) {
-      selectPath(next)
-      editor.focusEditor()
-    }
   }
 
   // ── keys ────────────────────────────────────────────────────────────
@@ -1803,273 +1545,43 @@ Item {
     if (openPage) {
       return openPage.handleKey(event)
     }
-    var ctrl = event.modifiers & Qt.ControlModifier
-    if (event.key === Qt.Key_Escape) {
-      root.goBack()
-      return true
+    var context = editor.bodyFocused && !editor.plain && !editor.readOnly ? "editor" : "workspace"
+    var action = KeyBindings.match(event, context)
+    var handlers = {
+      back: root.goBack,
+      search: titleBar.focusSearch,
+      newNote: root.newNote,
+      newNotebook: root.startNewNotebook,
+      deleteNote: function() { root.requestDelete(root.currentPath) },
+      nextNote: function() { root.moveSelection(1) },
+      previousNote: function() { root.moveSelection(-1) },
+      openTree: root.openTreeCursor,
+      closeTree: root.closeTreeCursor,
+      nextTab: function() { root.cycleSection(1) },
+      previousTab: function() { root.cycleSection(-1) },
+      bold: function() { editor.toggleFormat("bold") },
+      italic: function() { editor.toggleFormat("italic") },
+      underline: function() { editor.toggleFormat("underline") },
+      strikeout: function() { editor.toggleFormat("strikeout") },
+      highlight: editor.highlightSelection,
+      paste: editor.paste,
+      pastePlain: editor.pastePlain
     }
-    if (ctrl && (event.key === Qt.Key_K || event.key === Qt.Key_L)) {
-      titleBar.focusSearch()
-      return true
-    }
-    if (ctrl && event.key === Qt.Key_N) {
-      if (event.modifiers & Qt.ShiftModifier) {
-        root.startNewNotebook()
-      } else {
-        root.newNote()
-      }
-      return true
-    }
-    if (ctrl && event.key === Qt.Key_D) {
-      root.requestDelete(root.currentPath)
-      return true
-    }
-    if (ctrl && (event.key === Qt.Key_Down || event.key === Qt.Key_J)) {
-      root.moveSelection(1)
-      return true
-    }
-    if (ctrl && event.key === Qt.Key_Up) {
-      root.moveSelection(-1)
-      return true
-    }
-    // Ctrl+left/right drive the section tree the cursor is on. Shift and Alt
-    // stay out so select-word survives, and a press with nothing to do (a
-    // note with no parent) falls through to the editor's word jump.
-    if (ctrl && !(event.modifiers & (Qt.ShiftModifier | Qt.AltModifier))) {
-      if (event.key === Qt.Key_Right && root.openTreeCursor()) {
-        return true
-      }
-      if (event.key === Qt.Key_Left && root.closeTreeCursor()) {
-        return true
-      }
-    }
-    // Ctrl+Tab walks the binder, the way Ctrl+up/down walks the notes in it.
-    // Shift+Tab arrives as Key_Backtab on some layouts and as Key_Tab on others.
-    if (ctrl && (event.key === Qt.Key_Tab || event.key === Qt.Key_Backtab)) {
-      root.cycleSection((event.key === Qt.Key_Backtab || (event.modifiers & Qt.ShiftModifier)) ? -1 : 1)
-      return true
-    }
-    if (ctrl && editor.bodyFocused && !editor.plain && !editor.readOnly) {
-      if (event.key === Qt.Key_B) {
-        editor.toggleFormat("bold")
-        return true
-      }
-      if (event.key === Qt.Key_I) {
-        editor.toggleFormat("italic")
-        return true
-      }
-      if (event.key === Qt.Key_U) {
-        editor.toggleFormat("underline")
-        return true
-      }
-      if (event.key === Qt.Key_S) {
-        editor.toggleFormat("strikeout")
-        return true
-      }
-      if (event.key === Qt.Key_H && (event.modifiers & Qt.ShiftModifier)) {
-        editor.highlightSelection()
-        return true
-      }
-      // The editor decides whether this paste is a picture or text; with
-      // Shift the source's formatting stays behind.
-      if (event.key === Qt.Key_V) {
-        if (event.modifiers & Qt.ShiftModifier) {
-          editor.pastePlain()
-        } else {
-          editor.paste()
-        }
-        return true
-      }
-    }
-    return false
+    return action && handlers[action] ? handlers[action]() !== false : false
   }
 
-  // ── autosave ────────────────────────────────────────────────────────
-  // The host says *that* the note changed; the provider says *when* it is
-  // written. Only the provider knows what one of its writes costs: a file on
-  // this disk can follow the typing closely, a note behind an API spends a
-  // request every time and wants the typing to settle first, and a backend
-  // with rules of its own may want a schedule neither of those describes —
-  // longer while its lane is cooling, say, or none at all until something it
-  // is waiting for arrives. So there is no interval here to read and no
-  // provider named: `noteEdited` tells the provider, the provider keeps
-  // whatever schedule it likes, and `saveRequested` asks for the write.
-  //
-  // A provider that takes no part — one written before this, one that simply
-  // does not care — is written on the host's own default, so the least a
-  // provider can be is still a provider that autosaves.
-  //
-  // What stays here is the handful of moments that are not a schedule at all:
-  // the note is flushed when the app is about to lose the ability to save it
-  // (a note switch, the window closing), and a delete drops its edits with
-  // it. That is "never lose a note" rather than a cadence, and it is the
-  // host's to keep.
-  //
-  // The default schedule has the shape the contract asks of a provider's — a
-  // pause, then a request naming the note, honoured only while that note is
-  // still the open one — so it needs no cancelling either.
-  readonly property int defaultSaveDebounce: 1500
-  function onEdited() {
-    if (root.loadingNote || !root.currentPath) {
-      return
-    }
-    root.dirty = true
-    var p = providerOf(root.currentPath)
-    if (p && typeof p.noteEdited === "function") {
-      p.noteEdited(root.currentPath)
-      return
-    }
-    defaultSchedule.path = root.currentPath
-    defaultSchedule.restart()
+  NoteServices.NoteSession {
+    id: session
+    editor: editor
+    providerFor: root.providerOf
+    versionFor: root.versionOf
+    report: root.reportSave
   }
-  Timer {
-    id: defaultSchedule
-    property string path: ""
-    interval: root.defaultSaveDebounce
-    onTriggered: if (path === root.currentPath) {
-      root.flushSave()
-    }
-  }
-
-  // Ordering, retrying and coalescing saves is the provider's queue's job now
-  // (services/requests/), so what is left here is only what the host knows:
-  // which note is being saved, and whether the text it captured is still the
-  // newest. `savesPending` is a count per note rather than a flag, and there
-  // is no re-derivation of the body — the payload is captured whole per
-  // dispatch, which is what stopped a save requested during another one from
-  // writing the *wrong note's* text.
-  //
-  // A save passes through three states, and the note is unsaved in all of
-  // them: the editor holds edits nobody has captured (`dirty`), the document
-  // is being turned into Markdown, or the provider has the text and has not
-  // answered. `dirty` is the open note's alone and is cleared where the
-  // snapshot is taken, so a second flush cannot send the same text twice;
-  // the two asynchronous states are counted per path, because a save outlives
-  // the note being open. The count covers the conversion as well as the
-  // request: a note whose text is inside a converter is not saved, so the dot
-  // stays on and noteChanged (above) does not reload the editor over it.
-  property var saveEpoch: ({})       // path -> seq: drops a stale or cancelled conversion
-  property var savesPending: ({})    // path -> count: converting, or in flight
-  // Bumped with every savesPending move: a plain JS object is invisible to a
-  // binding, and the view bar's unsaved dot watches saves through this — the
-  // queues' queueRevision, said again for saves.
-  property int saveRevision: 0
-  // A save that failed while the window was hidden, held until it reopens.
-  // In memory only: this is not an offline queue (business-requirements.md).
+  property alias saveRevision: session.saveRevision
   property string missedSaveNotice: ""
-  // Bumped by every load. A save captures it to tell, when its answer comes
-  // back, whether the editor still holds the text that save was carrying.
-  property int noteLoadSeq: 0
-
-  function saveInFlight(path) { return (root.savesPending[path] || 0) > 0 }
-
-  // Every move of the count goes through these two: the count is what the
-  // unsaved dot reads, and the revision beside it is what makes a plain
-  // object's change visible to a binding at all.
-  function saveBegan(path) { countSave(path, 1) }
-  function saveEnded(path) { countSave(path, -1) }
-  function countSave(path, delta) {
-    var n = (root.savesPending[path] || 0) + delta
-    if (n > 0) {
-      root.savesPending[path] = n
-    } else {
-      delete root.savesPending[path]
-    }
-    root.saveRevision++
-  }
-
-  // Nothing may be written back to this note any more — it is being deleted
-  // (confirmDelete), or its provider is going (disableProviderInstance).
-  // Moving the epoch is what a conversion still running will find when it
-  // answers, and it releases its own share of the count then. A save already
-  // handed to the provider is past recall: it was accepted, and an accepted
-  // save finishes or fails out loud (business-requirements.md).
-  function cancelPendingSave(path) {
-    if (!path) {
-      return
-    }
-    root.saveEpoch[path] = (root.saveEpoch[path] || 0) + 1
-  }
-
-  function flushSave() {
-    if (!root.dirty || !root.currentPath) {
-      return
-    }
-    var path = root.currentPath, p = providerOf(path)
-    if (!p) {
-      return
-    }
-    if (editor.readOnly) {
-      root.dirty = false
-      return
-    }
-    var title = editor.title, loadSeq = root.noteLoadSeq
-    // Cleared here, where the snapshot is taken: a keystroke after this one
-    // marks the note dirty again and earns a save of its own, and a flush
-    // arriving before the converter answers finds nothing left to send
-    // rather than sending this same text a second time.
-    root.dirty = false
-    root.loadedVersion = ""
-    var seq = (root.saveEpoch[path] || 0) + 1
-    root.saveEpoch[path] = seq
-    // Begun here and ended on whichever of the three ways out this attempt
-    // takes: the note is unsaved for the whole of it, and the converter's
-    // share of that is not a gap in which it looks saved.
-    root.saveBegan(path)
-    // The document is rich text and the note is Markdown, so the body arrives
-    // asynchronously — but requestMarkdown snapshots the document *now*, so
-    // this text belongs to `path` even if the user moves to another note
-    // before the converter answers.
-    editor.requestMarkdown(function(body, ok) {
-      // Superseded by a newer snapshot of this note, or cancelled with the
-      // note itself: either way this text is not the one to write.
-      if (root.saveEpoch[path] !== seq) {
-        root.saveEnded(path)
-        return
-      }
-      // The converter failed, so `body` is its empty answer and not the note.
-      // Sending it would replace the note with nothing, which is the one
-      // thing this app promises never to do.
-      if (!ok) {
-        root.saveEnded(path)
-        root.saveFailed(path, seq, loadSeq, "the note could not be read for saving")
-        return
-      }
-      p.save(path, title, body, function(r) {
-        root.saveEnded(path)
-        // `{}` for a save that landed, and for one the provider superseded
-        // (PROVIDERS.md): the newer save carries this one's intent and is
-        // counted in its own right, so the note stays marked until it
-        // answers. A save the provider could not send at all — its lane
-        // emptied by a sign-out, the provider going — is an error like any
-        // other, and the note is marked unsaved again below.
-        if (r && r.error) {
-          root.saveFailed(path, seq, loadSeq, p.name + ": " + r.error)
-          return
-        }
-        if (r && r.warning) {
-          root.reportSave(p.name + ": " + r.warning)
-        }
-      })
-    })
-  }
-
-  // A save that did not land. The note goes back to being unsaved, so the
-  // next flush carries it and the dot says so meanwhile — but only while the
-  // editor still holds the text this save was carrying: the same note, no
-  // reload over it, and no newer attempt that now owns the note's state.
-  // Failing any of those there is nothing here left to carry, and marking it
-  // would spend a request re-sending text that is gone or already on its way.
-  //
-  // Nothing reruns on its own: this is one note marked as what it is, not a
-  // retry loop and not a queue (business-requirements.md).
-  function saveFailed(path, seq, loadSeq, message) {
-    if (path === root.currentPath && loadSeq === root.noteLoadSeq
-        && root.saveEpoch[path] === seq && !editor.readOnly) {
-      root.dirty = true
-    }
-    root.reportSave(message)
-  }
+  function onEdited() { session.onEdited() }
+  function flushSave() { session.flushSave() }
+  function saveInFlight(path) { return session.saveInFlight(path) }
 
   // Said now if anyone is looking, on the next open() otherwise.
   function reportSave(message) {
@@ -2095,7 +1607,7 @@ Item {
     Qt.callLater(root.writeState)
   }
   // Kept live, not only on disk: a provider recreated on a settings change
-  // (applyProviderDiff) is restored from providerState, which would otherwise
+  // (ProviderLifecycle) is restored from providerState, which would otherwise
   // still hold the startup snapshot — and lose the fold state made since.
   function providerSnapshot() {
     var ps = {}
@@ -2115,7 +1627,7 @@ Item {
     if (root.listWidth > 0) {
       st.listWidth = Math.round(root.listWidth)
     }
-    stateFile.setText(JSON.stringify(st, null, 2) + "\n")
+    files.write(root.statePath, JSON.stringify(st, null, 2) + "\n")
   }
   function loadState(raw) {
     try {
@@ -2148,33 +1660,24 @@ Item {
     } catch (e) { /* a corrupt state file costs nothing */ }
     scanProviders.running = true
   }
-  // The state file is the host's only input from disk; it holds a few flags
-  // and ids. It is read exactly once, through one descriptor
-  // (lib/readfile.py): no symlink following, regular files only, at most
-  // maxStateBytes+1 bytes against a deadline — and those bytes are what gets
-  // parsed. No size check followed by a reopen.
   readonly property int maxStateBytes: 1024 * 1024
-  readonly property string readScript: Qt.resolvedUrl("lib/readfile.py").toString().replace(/^file:\/\//, "")
-  Process {
-    id: stateRead
-    command: ["python3", root.readScript, root.statePath, String(root.maxStateBytes + 1)]
-    stdout: StdioCollector {
-      onStreamFinished: {
-        if (this.text.length > root.maxStateBytes) {
-          console.warn("note-note: state file too large, ignoring")
-          root.loadState("")
-          return
-        }
-        root.loadState(this.text)
+  Component.onCompleted: {
+    files.read(root.statePath, root.maxStateBytes, function(result) {
+      if (result.error && result.kind !== "missing") {
+        console.warn("note-note: could not read state:", result.error)
       }
-    }
-  }
-  Component.onCompleted: { stateRead.running = true; configRead.running = true }
-  FileView {
-    id: stateFile
-    path: root.statePath
-    atomicWrites: true
-    printErrors: false
+      root.loadState(result.text || "")
+    })
+    files.read(root.configPath, root.maxConfigBytes, function(result) {
+      if (result.error && result.kind !== "missing") {
+        console.warn("note-note: could not read config:", result.error)
+        root.config = root.defaultConfig()
+        root.configReady = true
+        root.maybeLoadProviders()
+        return
+      }
+      root.loadConfig(result.text || "")
+    })
   }
 
   // ── content: lives in the overlay card or the detached window ───────
@@ -2402,12 +1905,10 @@ Item {
         // not a question you answer, and a bad key is easiest to fix while
         // the text that holds it is still in front of you.
         onActionRequested: function(text) {
-          var result = root.applySettingsJson(text)
-          if (result.ok) {
-            settingsPage.showNotice("Saved.", false)
-          } else {
-            settingsPage.showNotice(result.error, true)
-          }
+          settingsPage.showNotice("Saving…", false)
+          root.applySettingsJson(text, function(result) {
+            settingsPage.showNotice(result.error || "Saved.", !!result.error)
+          })
         }
       }
 

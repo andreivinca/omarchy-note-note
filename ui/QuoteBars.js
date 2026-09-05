@@ -1,3 +1,6 @@
+.pragma library
+.import "Dialect.js" as Dialect
+
 // Where the editor's block decorations go: runs of quote blocks (the bar),
 // runs of code blocks (the slab) and the checkbox items (the drawn box), as
 // character ranges the editor turns into rectangles with
@@ -12,7 +15,6 @@
 // Mirrors dialect (services/markdown/qthtml/dialect.py): a quote is the
 // pair of margins at or past QUOTE_PX (an indent sets the left one only),
 // and a code line is a block background without a quote's margins.
-var QUOTE_PX = 40
 
 function styleMargins(style) {
   var ml = /margin-left\s*:\s*(-?\d+)px/.exec(style)
@@ -22,7 +24,7 @@ function styleMargins(style) {
 
 function kindOfStyle(style) {
   var m = styleMargins(style)
-  if (m.left >= QUOTE_PX && m.right >= QUOTE_PX) {
+  if (m.left >= Dialect.QUOTE_PX && m.right >= Dialect.QUOTE_PX) {
     return "quote"
   }
   if (/background-color\s*:/.test(style)) {
@@ -35,7 +37,7 @@ function kindOfBlock(block) {
   if (block.rule) {
     return "rule"
   }
-  if (block.marginLeft >= QUOTE_PX && block.marginRight >= QUOTE_PX) {
+  if (block.marginLeft >= Dialect.QUOTE_PX && block.marginRight >= Dialect.QUOTE_PX) {
     return "quote"
   }
   if (block.background) {

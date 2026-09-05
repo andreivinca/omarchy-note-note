@@ -55,10 +55,19 @@ Item {
   //   settled:  function(result, info) — info is
   //             { superseded, cancelled, attempts }.
   function enqueue(opts, start, settled) {
+    // A unique waiter also distinguishes two enqueues using the same callback.
+    var answered = false
+    var waiter = function(result, info) {
+      if (answered) {
+        return
+      }
+      answered = true
+      root.call(settled, result, info)
+    }
     var o = opts || {}
     var r = Scheduler.enqueue(root.queue, {
       key: o.key, mode: o.mode, priority: o.priority, owner: o.owner,
-      flush: o.flush, label: o.label, start: start, settled: settled })
+      flush: o.flush, label: o.label, start: start, settled: waiter })
     if (r.superseded) {
       root.answer(r.superseded, null, { superseded: true, cancelled: false,
                                         attempts: r.superseded.attempts })
@@ -68,7 +77,13 @@ Item {
     // Not dispatched inline: `start` would then run before the caller's own
     // next statement, which is a surprise nobody writing a provider wants.
     Qt.callLater(root.pump)
-    return { cancel: function() { root.cancelHandle(job, settled) } }
+    return { cancel: function() { root.cancelHandle(job, waiter) } }
+  }
+
+  function pendingFor(owner, writesOnly) {
+    return root.queue.jobs.concat(root.queue.running).filter(function(job) {
+      return job.owner === owner && (!writesOnly || job.flush)
+    }).length
   }
 
   // A provider being destroyed or signed out. What has not started is
@@ -108,7 +123,7 @@ Item {
   }
 
   function cancelHandle(job, settled) {
-    if (!job) {
+    if (!job || job.settled.indexOf(settled) < 0) {
       return
     }
     if (job.settled.length > 1) {

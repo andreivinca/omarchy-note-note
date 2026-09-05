@@ -188,7 +188,7 @@ Item {
   RequestQueue { id: lonely; domain: "selftest-cancel"; concurrency: 1 }
 
   property var scenarios: [orderAndOnce, replaceThroughTheQueue, dedupeThroughTheQueue,
-                           throttleThroughTheQueue, hidingTheWindow, badCallbacks, cancelThroughTheQueue]
+                           throttleThroughTheQueue, hidingTheWindow, badCallbacks, cancelThroughTheQueue, repeatedCancel]
   property int at: -1
   function next() {
     harness.at++
@@ -343,6 +343,29 @@ Item {
         harness.check("a handle cancels its own job", info !== null && info.cancelled === true)
         harness.next()
       })
+    })
+  }
+
+  function repeatedCancel() {
+    var answered = 0, cancelled = 0, started = 0
+    var callback = function(result, info) {
+      answered++
+      if (info.cancelled) {
+        cancelled++
+      }
+    }
+    var start = function(ctx) { started++; ctx.done({}) }
+    var first = lane.enqueue({ key: "dedupe-cancel", mode: "dedupe" }, start, callback)
+    lane.enqueue({ key: "dedupe-cancel", mode: "dedupe" }, start, callback)
+    lane.enqueue({ key: "dedupe-cancel", mode: "dedupe" }, start, callback)
+    first.cancel()
+    first.cancel()
+    harness.delay(100, function() {
+      first.cancel()
+      harness.check("repeated cancellation answers its waiter once", cancelled === 1, cancelled)
+      harness.check("equal callbacks remain independent waiters", answered === 3, answered)
+      harness.check("cancelling a waiter preserves deduplicated work", started === 1, started)
+      harness.next()
     })
   }
 

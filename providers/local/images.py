@@ -68,18 +68,12 @@ def place(data, name, assets):
     return ""
 
 
-def main():
-    if len(sys.argv) < 3:
-        fail("usage: images.py <notesDir> <noteFile>")
-    notes_dir = os.path.realpath(sys.argv[1])
-    note_file = os.path.realpath(sys.argv[2])
+def stage(body, notes_dir, note_file):
+    """Resolve staged assets, or fail the save while the original note survives."""
+    notes_dir = os.path.realpath(notes_dir)
+    note_file = os.path.abspath(note_file)
     if os.path.commonpath([notes_dir, note_file]) != notes_dir:
-        fail("the note is not inside the notes directory")
-    body = sys.stdin.buffer.read(MAX_BODY + 1)
-    if len(body) > MAX_BODY:
-        fail("the note is too large")
-    body = body.decode("utf-8", "replace")
-
+        raise ValueError("the note is not inside the notes directory")
     note_dir = os.path.dirname(note_file)
     deadline = time.monotonic() + DEADLINE
     moved = {}                                   # staged url -> relative link
@@ -93,7 +87,9 @@ def main():
         if url in moved:
             return "](%s)" % moved[url] if moved[url] else match.group(0)
         name = ""
-        data = read_capped(path, MAX_IMAGE, deadline)
+        data = read_capped(path, MAX_IMAGE + 1, deadline)
+        if len(data) > MAX_IMAGE:
+            data = b""
         if data:
             assets = os.path.join(note_dir, ASSETS)
             try:
@@ -110,7 +106,20 @@ def main():
 
     result = {"body": FILE_LINK.sub(replace, body)}
     if failed:
-        result["warning"] = "a pasted image could not be copied into the notebook"
+        raise OSError("a pasted image could not be copied into the notebook")
+    return result["body"]
+
+
+def main():
+    if len(sys.argv) < 3:
+        fail("usage: images.py <notesDir> <noteFile>")
+    body = sys.stdin.buffer.read(MAX_BODY + 1)
+    if len(body) > MAX_BODY:
+        fail("the note is too large")
+    try:
+        result = {"body": stage(body.decode("utf-8"), sys.argv[1], sys.argv[2])}
+    except (OSError, ValueError) as error:
+        result = {"error": str(error)}
     json.dump(result, sys.stdout)
 
 

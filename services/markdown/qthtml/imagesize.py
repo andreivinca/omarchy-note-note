@@ -5,9 +5,17 @@ natural size and clips at the pane — so the writer caps the *display* width
 with a `width` attribute, and needs the natural width to know when. Reading
 the header is enough; anything unreadable simply reports 0 and gets no cap.
 """
+import io
 import os
+import sys
+import time
 import struct
 import urllib.parse
+
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "..", "lib"))
+from readfile import open_regular, read_bytes  # noqa: E402
+
+MAX_HEADER_BYTES = 256 * 1024
 
 
 def local_path(url, base=""):
@@ -37,7 +45,9 @@ def local_path(url, base=""):
 def width_of(path):
     """Pixel width of a PNG/JPEG/GIF/BMP file, or 0 when unknown."""
     try:
-        with open(path, "rb") as handle:
+        with open_regular(path) as source:
+            header = read_bytes(source, MAX_HEADER_BYTES, time.monotonic() + 2)
+        with io.BytesIO(header) as handle:
             head = handle.read(32)
             if head.startswith(b"\x89PNG\r\n\x1a\n") and len(head) >= 24:
                 return struct.unpack(">I", head[16:20])[0]

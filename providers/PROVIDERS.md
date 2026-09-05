@@ -243,8 +243,8 @@ itself; it only retains what `sections` and `load()` hand it, so an unbounded
 provider means unbounded shell memory. Each built-in declares its limits at
 the top of its files (`maxNoteBytes` in `providers/local/Provider.qml`,
 `MAX_*` in `sticky.py` / `onenote.py`); a note that is too large should be
-listed but returned as `editable: false` with an explanatory body rather
-than loaded. Read a file once with a hard ceiling and use those bytes — a
+listed but fail `load()` with an explanatory error, or return an explanatory
+body with `editable: false`. It must never become an editable partial note. Read a file once with a hard ceiling and use those bytes — a
 size check followed by a separate open is not a bound, because the file can
 change in between. For local files use `lib/readfile.py` (one descriptor,
 no symlink following, regular files only, capped, with a deadline), as the
@@ -363,3 +363,18 @@ created. What providers share is only the code. A user who prefers a
 registration of their own gives it to your provider alone, in
 `~/.config/omarchy/note-note.json` as
 `{"microsoft": {"<providerId>": {"clientId": "…", "tenant": "…"}}}`.
+
+
+### Retirement and process ownership
+
+A provider may expose `busy` while it owns active operations outside the host's
+request queue. The settings controller drains accepted writes and this busy
+state before destroying an instance; it leaves the instance intact if a note
+cannot be saved. `notebookTabs` is a presentation change and calls `rebuild()`
+on the existing provider. Other setting changes replace the drained instance.
+
+Use `services/processes/ProcessRunner.qml` for framed script requests. It sends
+stdin after startup, waits for both output and exit, and settles failure,
+cancellation or timeout exactly once. Streaming device-code sign-in remains a
+separate protocol. Editable local files use `lib/readfile.py --json`, which
+returns either complete UTF-8 text with byte count/version or an explicit error.

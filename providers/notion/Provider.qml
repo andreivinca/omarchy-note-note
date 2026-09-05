@@ -1,6 +1,7 @@
 import Quickshell
 import Quickshell.Io
 import QtQuick
+import "../../services/processes"
 import qs.Commons
 import qs.Ui
 
@@ -309,48 +310,14 @@ Item {
 
   // One process per job, so its callback travels with it (the same shape as
   // providers/onenote/Provider.qml).
-  Component {
-    id: jobProcess
-    Process {
-      id: proc
-      property var ctx: null
-      stdout: StdioCollector {
-        onStreamFinished: {
-          var answer = proc.ctx
-          proc.ctx = null
-          if (answer) {
-            answer.done(root.parse(this.text))
-          }
-          Qt.callLater(function() { proc.destroy() })
-        }
-      }
-      onExited: {
-        if (!proc.ctx) {
-          return
-        }
-        var answer = proc.ctx
-        proc.ctx = null
-        answer.done({ error: "unexpected reply" })
-        Qt.callLater(function() { proc.destroy() })
-      }
-    }
-  }
+  ProcessRunner { id: scriptRunner }
+  readonly property bool busy: scriptRunner.active > 0
 
   function runScript(args, payload, ctx) {
-    var proc = jobProcess.createObject(root, { ctx: ctx })
-    if (!proc) {
-      ctx.done({ error: "could not start notion.py" })
-      return
-    }
-    proc.command = ["python3", root.script].concat(args)
-    if (payload) {
-      proc.stdinEnabled = true               // stdin must be open before it starts
-      proc.running = true
-      proc.write(payload)                    // the secret and the note go over stdin
-      proc.stdinEnabled = false              // close stdin: the script reads to EOF
-    } else {
-      proc.running = true
-    }
+    scriptRunner.run({ command: ["python3", root.script].concat(args),
+                       environment: ({}),
+                       payload: payload || undefined,
+                       timeoutMs: 600000 }, function(result) { ctx.done(result) })
   }
 
   // ── processes ───────────────────────────────────────────────────────

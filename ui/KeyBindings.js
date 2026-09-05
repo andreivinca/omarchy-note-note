@@ -1,77 +1,67 @@
 .pragma library
 
-// The keys for getting around and for the notes themselves, written out for
-// the page behind the menu's "Key bindings". Not every key the app answers
-// to: the editor's formatting shortcuts are left out deliberately, since
-// ctrl+b for bold is a thing you already know and a thing the toolbar above
-// the note says for itself.
-//
-// This is a second telling of part of what handleShortcut() in Notes.qml
-// does — the two are edited together, and that function's own comment says
-// so — because the alternative is a user who can only learn a shortcut by
-// finding it in the source.
-//
-// Key names are spelled in ASCII on purpose. The page is monospace and its
-// columns are aligned by counting characters; an arrow glyph that a font
-// gives a wider cell than a letter would pull every line after it out of
-// true.
-var GROUPS = [
-  {
-    title: "Getting around",
-    rows: [
-      ["ctrl+k", "Search your notes"],
-      ["up / down", "In the search: walk the list without leaving the field"],
-      ["enter", "In the search: leave it for the note"],
-      ["ctrl+up", "The note above"],
-      ["ctrl+down", "The note below"],
-      ["ctrl+tab", "The next notebook"],
-      ["ctrl+shift+tab", "The notebook before it"],
-      ["ctrl+right", "Open the notebook the cursor rests on"],
-      ["ctrl+left", "Fold it, and climb to the one holding it"],
-      ["esc", "Clear the search; again to put the window away"]
-    ]
-  },
-  {
-    title: "Notes",
-    rows: [
-      ["ctrl+n", "A new note in the open notebook"],
-      ["ctrl+shift+n", "A new notebook"],
-      ["ctrl+d", "Delete the note you are reading"]
-    ]
-  }
-];
+// Help and dispatch share these definitions. Aliases have no separate label.
+var CTRL = Qt.ControlModifier
+var SHIFT = Qt.ShiftModifier
+var ACTIONS = [
+  { id: "search", key: Qt.Key_K, modifiers: CTRL, group: "Getting around", label: "ctrl+k", description: "Search your notes" },
+  { id: "search", key: Qt.Key_L, modifiers: CTRL },
+  { id: "nextSearch", key: Qt.Key_Down, context: "search", group: "Getting around", label: "up / down", description: "In the search: walk the list without leaving the field" },
+  { id: "previousSearch", key: Qt.Key_Up, context: "search" },
+  { id: "acceptSearch", key: Qt.Key_Return, context: "search", group: "Getting around", label: "enter", description: "In the search: leave it for the note" },
+  { id: "acceptSearch", key: Qt.Key_Enter, context: "search" },
+  { id: "acceptSearch", key: Qt.Key_Tab, context: "search" },
+  { id: "previousNote", key: Qt.Key_Up, modifiers: CTRL, group: "Getting around", label: "ctrl+up", description: "The note above" },
+  { id: "nextNote", key: Qt.Key_Down, modifiers: CTRL, group: "Getting around", label: "ctrl+down", description: "The note below" },
+  { id: "nextNote", key: Qt.Key_J, modifiers: CTRL },
+  { id: "nextTab", key: Qt.Key_Tab, modifiers: CTRL, group: "Getting around", label: "ctrl+tab", description: "The next notebook" },
+  { id: "previousTab", key: Qt.Key_Tab, modifiers: CTRL | SHIFT, group: "Getting around", label: "ctrl+shift+tab", description: "The notebook before it" },
+  { id: "previousTab", key: Qt.Key_Backtab, modifiers: CTRL | SHIFT },
+  { id: "previousTab", key: Qt.Key_Backtab, modifiers: CTRL },
+  { id: "openTree", key: Qt.Key_Right, modifiers: CTRL, group: "Getting around", label: "ctrl+right", description: "Open the notebook the cursor rests on" },
+  { id: "closeTree", key: Qt.Key_Left, modifiers: CTRL, group: "Getting around", label: "ctrl+left", description: "Fold it, and climb to the one holding it" },
+  { id: "back", key: Qt.Key_Escape, group: "Getting around", label: "esc", description: "Clear the search; again to put the window away" },
+  { id: "newNote", key: Qt.Key_N, modifiers: CTRL, group: "Notes", label: "ctrl+n", description: "A new note in the open notebook" },
+  { id: "newNotebook", key: Qt.Key_N, modifiers: CTRL | SHIFT, group: "Notes", label: "ctrl+shift+n", description: "A new notebook" },
+  { id: "deleteNote", key: Qt.Key_D, modifiers: CTRL, group: "Notes", label: "ctrl+d", description: "Delete the note you are reading" },
+  { id: "bold", key: Qt.Key_B, modifiers: CTRL, context: "editor" },
+  { id: "italic", key: Qt.Key_I, modifiers: CTRL, context: "editor" },
+  { id: "underline", key: Qt.Key_U, modifiers: CTRL, context: "editor" },
+  { id: "strikeout", key: Qt.Key_S, modifiers: CTRL, context: "editor" },
+  { id: "highlight", key: Qt.Key_H, modifiers: CTRL | SHIFT, context: "editor" },
+  { id: "paste", key: Qt.Key_V, modifiers: CTRL, context: "editor" },
+  { id: "pastePlain", key: Qt.Key_V, modifiers: CTRL | SHIFT, context: "editor" }
+]
 
-function pad(s, width) {
-  var out = s;
-  while (out.length < width) {
-    out += " ";
+function match(event, context) {
+  var modifiers = event.modifiers & (Qt.ControlModifier | Qt.ShiftModifier | Qt.AltModifier | Qt.MetaModifier)
+  for (var i = 0; i < ACTIONS.length; i++) {
+    var action = ACTIONS[i]
+    if (action.key === event.key && (action.modifiers || 0) === modifiers
+        && (!action.context || action.context === context)) {
+      return action.id
+    }
   }
-  return out;
+  return ""
 }
 
-// The whole listing as one block of monospace text: a group's name on its
-// own line, its rows indented under it, and the key column as wide as the
-// widest key in the whole page so the descriptions line up across groups
-// rather than only within one.
 function text() {
-  var width = 0;
-  for (var g = 0; g < GROUPS.length; g++) {
-    for (var r = 0; r < GROUPS[g].rows.length; r++) {
-      width = Math.max(width, GROUPS[g].rows[r][0].length);
+  var visible = ACTIONS.filter(function(action) { return !!action.label })
+  var width = visible.reduce(function(value, action) { return Math.max(value, action.label.length) }, 0)
+  var lines = [], previous = ""
+  visible.forEach(function(action) {
+    if (action.group !== previous) {
+      if (lines.length) {
+        lines.push("")
+      }
+      lines.push(action.group, "")
+      previous = action.group
     }
-  }
-
-  var lines = [];
-  for (var i = 0; i < GROUPS.length; i++) {
-    var group = GROUPS[i];
-    if (i > 0) {
-      lines.push("");
+    var label = action.label
+    while (label.length < width) {
+      label += " "
     }
-    lines.push(group.title);
-    lines.push("");
-    for (var j = 0; j < group.rows.length; j++) {
-      lines.push("  " + pad(group.rows[j][0], width) + "   " + group.rows[j][1]);
-    }
-  }
-  return lines.join("\n");
+    lines.push("  " + label + "   " + action.description)
+  })
+  return lines.join("\n")
 }

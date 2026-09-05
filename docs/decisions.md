@@ -561,6 +561,30 @@ empty line *inside* the fence (`reader.paragraph`), not as a blank between
 blocks — which also stopped a typed blank line from splitting a code block
 on save.
 
+### Right steps past a block that ends the note, and the code block tool toggles
+
+A rule holds no characters and a code block's last line has nothing behind
+it, so either at the end of a note left the caret with nowhere to go — and an
+empty code block at the top of a note could not be removed at all: Backspace
+has no block before it to join, and the block keeps its marker.
+
+Right at the note's very end now steps past a rule or a code block the way
+the second Enter leaves one: a blank landing paragraph goes in after the
+whole block (`NoteEditor.stepPastBlock`) and the caret takes it, filler
+selected. It is the trip Enter and typing on a rule already took; the
+rule-only branch became the general one, and `escapeForward` asks the
+caret's block once and dispatches.
+
+The code block tool is a toggle: inside a code block it takes the block off.
+*Considered:* unfencing the Markdown lines in the editor. *Rejected:* a code
+line put back as a paragraph must be escaped exactly as the reader escapes
+every paragraph it writes, and that escaper lives in Python — a second one
+in JS would drift from it. *Chosen:* the converter takes one instruction,
+`to-markdown --as-text BLOCK`: the code block holding that document block is
+read as the paragraphs its lines would be (`reader.convert`), and
+re-rendering the answer is the whole edit. Each line keeps its block with the
+same characters in it, so the caret's position survives the trip.
+
 ### Read-only rather than lossy writes
 
 A OneNote page with images or more than the block/section caps, a Notion page
@@ -688,3 +712,32 @@ hundreds of pages opens closed. The sign-out row rides on every OneNote
 notebook tab, since any of them is equally the account's. And older config
 files need no migration: mergeConfigDefaults fills the new key in on read,
 which is that function's whole reason to exist.
+
+
+## Document operations and provider retirement (2026-09-05)
+
+`services/notes/NoteSession.qml` owns load generations, dirty state, retained
+save snapshots and completion. An asynchronous editor action carries the note
+identity, revision and selection it read; a changed context cancels that action.
+Sidebar construction is a pure read of provider models; selection and reload
+reconciliation follows model publication in a separate event-loop turn.
+
+All local mutations use one queue, including image staging, ordinary writes,
+creation, ordering and deletion. Python commits files atomically and returns
+explicit success or failure before the model is changed. Editable reads use
+`read_document`'s JSON frame: byte limits and errors cannot become blank or
+truncated editable notes. Inotify events are coalesced and reconciled using
+nanosecond file versions, with periodic refresh as recovery.
+
+Provider presentation settings update the existing instance. Resource changes
+and disabling go through `ProviderLifecycle`: retain the current document,
+drain accepted mutations, verify saves, commit the configuration, then retire
+the old instance. A failed note or configuration write keeps the old setup.
+The process runner owns startup, stdin delivery, both output and exit, the
+deadline and exactly-once completion for providers and conversion services.
+
+Notion text is split into bounded rich-text entries, then recombined by style
+when read back. Outgoing requests are validated before the first mutation;
+unrepresentable documents produce an error instead of losing their tail.
+Markdown escaping and adaptive code delimiters are shared by the serializers,
+and the strict serialization fallback is checked before a save can proceed.

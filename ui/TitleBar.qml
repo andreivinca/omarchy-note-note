@@ -1,3 +1,4 @@
+import "KeyBindings.js" as KeyBindings
 import QtQuick
 import QtQuick.Controls as QQC
 import qs.Commons
@@ -172,14 +173,14 @@ Item {
 
       Keys.priority: Keys.BeforeItem
       Keys.onPressed: function(event) {
-        if (event.key === Qt.Key_Down) {
+        var action = KeyBindings.match(event, "search")
+        if (action === "nextSearch") {
           root.moveRequested(1)
           event.accepted = true
-        } else if (event.key === Qt.Key_Up) {
+        } else if (action === "previousSearch") {
           root.moveRequested(-1)
           event.accepted = true
-        } else if (event.key === Qt.Key_Return || event.key === Qt.Key_Enter
-                   || (event.key === Qt.Key_Tab && !(event.modifiers & Qt.ControlModifier))) {
+        } else if (action === "acceptSearch") {
           root.acceptRequested()
           event.accepted = true
         } else if (root.shortcutHandler && root.shortcutHandler(event)) {

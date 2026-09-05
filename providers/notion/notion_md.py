@@ -5,51 +5,47 @@ numbered_list_item, to_do, quote, code, divider, and nested children as
 indentation. Rich text: bold, italic, underline, strikethrough, code, links.
 Anything else marks the page as not editable (see blocks_to_markdown()).
 """
-import re
 
+
+# All renderers share escaping and code delimiters.
+import os as _os
+import sys as _sys
+_sys.path.insert(0, _os.path.join(_os.path.dirname(_os.path.abspath(__file__)), "..", "..", "services", "markdown"))
+from mdtext import escape_text, escape_line_start, code_span, code_fence  # noqa: E402
+from parse import parse as _parse  # noqa: E402
 SUPPORTED = {"paragraph", "heading_1", "heading_2", "heading_3", "bulleted_list_item",
              "numbered_list_item", "to_do", "quote", "code", "divider", "toggle"}
 
 
 
-# Plain text from the backend must not be read as Markdown by the editor:
-# escape inline markers, and line starts that would become a heading, list,
-# quote, rule or table. Qt re-escapes on save; our parser unescapes.
-_INLINE_ESC = re.compile(r"([\\*_`~\[\]<>|])")
-_LINE_ESC = re.compile(r"^(\s*)([#>+\-*]|[-=]{3,}\s*$|\|)")
-_LINE_NUM = re.compile(r"^(\s*\d+)([.)])")
-
-
-def escape_text(text):
-    return _INLINE_ESC.sub(r"\\\1", text)
-
-
-def escape_line_start(text):
-    m = _LINE_NUM.match(text)
-    if m:                      # "1. x" -> "1\. x"
-        return text[:m.start(2)] + "\\" + text[m.start(2):]
-    m = _LINE_ESC.match(text)
-    if not m:
-        return text
-    return text[:m.start(2)] + "\\" + text[m.start(2):]
-
-
 # ---------------------------------------------------------------- blocks -> markdown
+
+def _joined_rich(rich):
+    """Backend chunk limits must not introduce adjacent Markdown delimiters."""
+    out = []
+    for item in rich or []:
+        if (out and out[-1].get("annotations", {}) == item.get("annotations", {})
+                and out[-1].get("href") == item.get("href")):
+            out[-1]["plain_text"] += item.get("plain_text", "")
+        else:
+            out.append(dict(item, plain_text=item.get("plain_text", "")))
+    return out
+
 
 def rich_to_md(rich):
     out = []
-    for r in rich or []:
+    for r in _joined_rich(rich):
         t = r.get("plain_text", "")
         a = r.get("annotations", {})
         if not t:
             continue
-        t = escape_text(t)
+        t = t if a.get("code") else escape_text(t)
         lead = t[:len(t) - len(t.lstrip())]
         trail = t[len(t.rstrip()):]
         core = t.strip()
         if core:
             if a.get("code"):
-                core = "`%s`" % core
+                core = code_span(core)
             if a.get("bold"):
                 core = "**%s**" % core
             if a.get("italic"):
@@ -120,10 +116,12 @@ def blocks_to_markdown(blocks, depth=0):
             if lines and lines[-1] != "":
                 lines.append("")
             lang = body.get("language", "") or ""
-            lines.append(pad + "```" + ("" if lang in ("plain text", "plain_text") else lang))
-            for l in "".join(r.get("plain_text", "") for r in body.get("rich_text", [])).split("\n"):
+            code = "".join(r.get("plain_text", "") for r in body.get("rich_text", []))
+            fence = code_fence(code)
+            lines.append(pad + fence + ("" if lang in ("plain text", "plain_text") else lang))
+            for l in code.split("\n"):
                 lines.append(pad + l)
-            lines.append(pad + "```")
+            lines.append(pad + fence)
             lines.append("")
         if kids:
             sub, ok = blocks_to_markdown(kids, depth + 1)
@@ -150,10 +148,63 @@ def blocks_to_markdown(blocks, depth=0):
 # Markdown is parsed by the vendored mistune (services/markdown/parse.py);
 # this is only the renderer into Notion blocks.
 
-import os as _os  # noqa: E402
-import sys as _sys  # noqa: E402
-_sys.path.insert(0, _os.path.join(_os.path.dirname(_os.path.abspath(__file__)), "..", "..", "services", "markdown"))
-from parse import parse as _parse  # noqa: E402
+
+
+TEXT_LIMIT = 2000
+ARRAY_LIMIT = 100
+PAYLOAD_LIMIT = 500 * 1024
+BLOCK_LIMIT = 1000
+
+
+def text_items(text, annotations=None, link=None):
+    """Keep every character, with the same metadata on each bounded entry."""
+    if not isinstance(text, str):
+        raise ValueError("note text must be a string")
+    if link and len(link) > TEXT_LIMIT:
+        raise ValueError("a link exceeds Notion's 2000-character limit")
+    out = []
+    for start in range(0, len(text), TEXT_LIMIT):
+        item = {"type": "text", "text": {"content": text[start:start + TEXT_LIMIT]}}
+        if annotations:
+            item["annotations"] = dict(annotations)
+        if link:
+            item["text"]["link"] = {"url": link}
+        out.append(item)
+    return out
+
+
+def validate_payload(payload):
+    """Check the complete representation before any backend mutation."""
+    import json
+    blocks = 0
+
+    def visit(value):
+        nonlocal blocks
+        if isinstance(value, list):
+            if len(value) > ARRAY_LIMIT:
+                raise ValueError("a Notion array exceeds 100 entries; split the paragraph or document")
+            for item in value:
+                visit(item)
+        elif isinstance(value, dict):
+            if value.get("type") in SUPPORTED:
+                blocks += 1
+            for key, item in value.items():
+                if key in ("content", "url") and isinstance(item, str) and len(item) > TEXT_LIMIT:
+                    raise ValueError("Notion text or link exceeds 2000 characters")
+                visit(item)
+
+    visit(payload)
+    if blocks > BLOCK_LIMIT or len(json.dumps(payload).encode("utf-8")) > PAYLOAD_LIMIT:
+        raise ValueError("the note exceeds Notion's request size limit")
+    return payload
+
+
+def append_batches(blocks):
+    """Plan and validate every append before the first one is sent."""
+    batches = [{"children": blocks[i:i + ARRAY_LIMIT]} for i in range(0, len(blocks), ARRAY_LIMIT)]
+    for batch in batches:
+        validate_payload(batch)
+    return batches
 
 
 def _rich(tokens, ann=None, link=None):
@@ -162,14 +213,7 @@ def _rich(tokens, ann=None, link=None):
     ann = dict(ann or {})
 
     def emit(text):
-        if not text:
-            return
-        item = {"type": "text", "text": {"content": text[:2000]}}
-        if link:
-            item["text"]["link"] = {"url": link}
-        if ann:
-            item["annotations"] = dict(ann)
-        out.append(item)
+        out.extend(text_items(text, ann, link))
 
     for t in tokens or []:
         ty = t["type"]
@@ -181,10 +225,7 @@ def _rich(tokens, ann=None, link=None):
             emit("\n")
         elif ty == "codespan":
             a = dict(ann); a["code"] = True
-            item = {"type": "text", "text": {"content": t.get("raw", "")[:2000]}, "annotations": a}
-            if link:
-                item["text"]["link"] = {"url": link}
-            out.append(item)
+            out.extend(text_items(t.get("raw", ""), a, link))
         elif ty in ("strong", "emphasis", "underline", "strikethrough"):
             a = dict(ann); a[{"strong": "bold", "emphasis": "italic", "underline": "underline", "strikethrough": "strikethrough"}[ty]] = True
             out.extend(_rich(t.get("children"), a, link))
@@ -266,7 +307,7 @@ def _blocks(tokens):
             out.append({"type": "divider", "divider": {}})
         elif ty == "block_code":
             lang = (t.get("attrs", {}).get("info") or "plain text").strip() or "plain text"
-            out.append({"type": "code", "code": {"language": lang, "rich_text": [{"type": "text", "text": {"content": t.get("raw", "").rstrip("\n")[:2000]}}]}})
+            out.append({"type": "code", "code": {"language": lang, "rich_text": text_items(t.get("raw", "").removesuffix("\n"))}})
         elif ty == "block_quote":
             inner = _blocks(t.get("children"))
             for b in inner:

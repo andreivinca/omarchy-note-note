@@ -1,5 +1,5 @@
 import Quickshell
-import Quickshell.Io
+import "../processes"
 import QtQuick
 
 // The clipboard, for pasting into a note: its image, and its text for the
@@ -42,35 +42,9 @@ Item {
     run(["html"], function(result) { callback(result && result.html ? result.html : "") })
   }
 
-  function run(args, callback) {
-    var proc = reader.createObject(root, { command: ["python3", root.script].concat(args), callback: callback })
-    proc.running = true
-  }
+  ProcessRunner { id: runner }
 
-  Component {
-    id: reader
-    Process {
-      id: proc
-      property var callback: null
-      stdout: StdioCollector {
-        onStreamFinished: {
-          var done = proc.callback
-          proc.callback = null
-          var result = null
-          try { result = JSON.parse(this.text) } catch (error) { result = null }
-          if (done) {
-            done(result)
-          }
-          Qt.callLater(function() { proc.destroy() })
-        }
-      }
-      onExited: function(code) {
-        if (proc.callback) {
-          var done = proc.callback
-          proc.callback = null
-          done(null)
-        }
-      }
-    }
+  function run(args, callback) {
+    return runner.run({ command: ["python3", root.script].concat(args), timeoutMs: 60000 }, callback)
   }
 }

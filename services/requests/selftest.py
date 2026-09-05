@@ -14,7 +14,7 @@ the timers, the callbacks and the re-entrancy are real.
 
     python3 services/requests/selftest.py [-v]
 
-Skipped with a warning when `qml6` is missing.
+Requires `qml6`; missing dependencies and runtime errors fail the suite.
 """
 import argparse
 import json
@@ -32,6 +32,8 @@ def run_scenarios():
                               capture_output=True, text=True, timeout=120, env=env)
     except FileNotFoundError:
         raise RuntimeError("qml6 is not installed")
+    if proc.returncode != 0:
+        raise RuntimeError("qml6 failed (%s):\n%s" % (proc.returncode, proc.stderr[-2000:]))
     blob = proc.stderr.split("<<<RESULT>>>")
     if len(blob) < 2:
         raise RuntimeError("no result from qml6:\n" + proc.stderr[-2000:])
@@ -46,8 +48,8 @@ def main():
     try:
         results, stderr = run_scenarios()
     except (OSError, RuntimeError, ValueError, subprocess.SubprocessError) as error:
-        print("SKIPPED: %s" % error)
-        return 0
+        print("FAILED: %s" % error)
+        return 1
 
     # A QML warning during the run is a finding in itself: the queue catches
     # what providers throw, and says so on the way past.

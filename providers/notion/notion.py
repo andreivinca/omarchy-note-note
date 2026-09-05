@@ -212,6 +212,15 @@ def cmd_update(page_id, path):
     payload = read_payload(path)
     if payload is None:
         fail("cannot read payload")
+    try:
+        title = notion_md.text_items(payload.get("title", ""))
+        notion_md.validate_payload({"title": title})
+        batches = notion_md.append_batches(notion_md.markdown_to_blocks(payload.get("body", "")))
+    except ValueError as error:
+        fail(str(error))
+    old, truncated = fetch_children(page_id, [MAX_BLOCKS + 1])
+    if truncated:
+        fail("the existing page is too large to replace safely")
     quoted = urllib.parse.quote(page_id, safe="")
     # Title: the page's title property (name varies; find it).
     status, pg = api("GET", "/pages/" + quoted)
@@ -219,7 +228,7 @@ def cmd_update(page_id, path):
         fail(err(pg, status))
     tprop = next((k for k, v in (pg.get("properties") or {}).items() if v.get("type") == "title"), None)
     if tprop and "title" in payload and payload["title"] != title_of(pg):
-        status, res = api("PATCH", "/pages/" + quoted, {"properties": {tprop: {"title": [{"type": "text", "text": {"content": payload["title"][:2000]}}]}}})
+        status, res = api("PATCH", "/pages/" + quoted, {"properties": {tprop: {"title": title}}})
         if status != 200:
             fail(err(res, status))
     # Body: replace the top-level blocks (children come along with their
@@ -237,10 +246,8 @@ def cmd_update(page_id, path):
     # cannot name anything that was just written and deleting them last cannot
     # touch it. The worst case becomes the note twice over — visible, and
     # something the user can fix.
-    old, _ = fetch_children(page_id, [MAX_BLOCKS + 1])
-    new = notion_md.markdown_to_blocks(payload.get("body", ""))
-    for i in range(0, len(new), 100):
-        status, res = api("PATCH", "/blocks/%s/children" % quoted, {"children": new[i:i + 100]})
+    for batch in batches:
+        status, res = api("PATCH", "/blocks/%s/children" % quoted, batch)
         if status != 200:
             fail(err(res, status))
     for b in old:
@@ -251,9 +258,16 @@ def cmd_update(page_id, path):
 
 
 def cmd_create(parent_id, path):
-    payload = read_payload(path) or {}
-    body = {"parent": {"page_id": parent_id}, "properties": {"title": {"title": [{"type": "text", "text": {"content": payload.get("title", "") or ""}}]}},
-            "children": notion_md.markdown_to_blocks(payload.get("body", ""))[:100]}
+    payload = read_payload(path)
+    if payload is None:
+        fail("cannot read payload")
+    try:
+        body = notion_md.validate_payload({
+            "parent": {"page_id": parent_id},
+            "properties": {"title": {"title": notion_md.text_items(payload.get("title", ""))}},
+            "children": notion_md.markdown_to_blocks(payload.get("body", ""))})
+    except ValueError as error:
+        fail(str(error))
     # Never re-run on a 5xx: a 502 or a 504 here is the gateway losing the
     # answer to a page that Notion may already have created, and the retry
     # would leave the user with the same note two or three times over. The

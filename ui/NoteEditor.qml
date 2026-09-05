@@ -3,6 +3,9 @@ import QtQuick.Controls as QQC
 import qs.Commons
 import qs.Ui
 import "QuoteBars.js" as QuoteBars
+import "EditContext.js" as EditContext
+import "Dialect.js" as Dialect
+import "MarkdownBlocks.js" as MarkdownBlocks
 
 // The note pane: the formatting tools pinned across its top the way an IDE
 // pins a toolbar, then an editable title and the note on one sheet — plus
@@ -153,6 +156,18 @@ Item {
   // Conversions are asynchronous, so a note that arrives while an earlier one
   // is still being converted must win: only the newest token may assign.
   property int noteToken: 0
+  property int documentRevision: 0
+  onEdited: root.documentRevision++
+
+  function editContext() {
+    return EditContext.capture(root.noteToken, root.documentRevision,
+        area.selectionStart, area.selectionEnd, area.cursorPosition, root.documentBase)
+  }
+
+  function contextCurrent(context) {
+    return !root.readOnly && EditContext.matches(context, root.editContext())
+  }
+
 
   // Puts a note in the editor.  shown(ok), optional, runs once the document
   // holds it — which for a Markdown note is after an asynchronous conversion,
@@ -187,6 +202,21 @@ Item {
         shown(ok)
       }
     }, root.documentBase)
+  }
+
+  function snapshotDocument() {
+    return { title: root.title, body: root.plain ? plainText() : documentHtml(),
+             base: root.documentBase }
+  }
+
+  function restoreDocument(snapshot) {
+    clearPending()
+    var token = ++root.noteToken
+    root.settingText = true
+    titleField.text = snapshot.title
+    root.settingText = false
+    root.documentBase = snapshot.base
+    showBody(snapshot.body, token)
   }
 
   function showBody(document, token) {
@@ -285,7 +315,11 @@ Item {
     if (!root.canImages) {
       // Say so rather than swallowing the paste: a picture that lands nowhere
       // looks like the app is broken.
-      root.clipboard.hasImage(function(isImage) {
+      var context = root.editContext()
+    root.clipboard.hasImage(function(isImage) {
+      if (!root.contextCurrent(context)) {
+        return
+      }
         if (isImage) {
           root.statusRequestedText = "This notebook cannot store images"
         } else {
@@ -294,7 +328,11 @@ Item {
       })
       return
     }
+    var context = root.editContext()
     root.clipboard.takeImage(function(image) {
+      if (!root.contextCurrent(context)) {
+        return
+      }
       if (image) {
         root.insertImage(image.path)
       } else {
@@ -315,7 +353,11 @@ Item {
   // same block-start reason. A clipboard with no HTML flavour is Qt's own
   // paste after all.
   function pasteRich() {
+    var context = root.editContext()
     root.clipboard.takeHtml(function(html) {
+      if (!root.contextCurrent(context)) {
+        return
+      }
       if (!html) {
         area.paste()
         return
@@ -350,7 +392,11 @@ Item {
       area.paste()
       return
     }
+    var context = root.editContext()
     root.clipboard.takeText(function(text) {
+      if (!root.contextCurrent(context)) {
+        return
+      }
       if (!text) {
         return
       }
@@ -484,16 +530,21 @@ Item {
   // Putting it back is remove()+insert(), never `text = …`: both are ordinary
   // edits, so ctrl+z still walks back through toolbar actions — and the pair
   // is fenced by atomic(), so it walks them one whole action at a time.
-  function withMarkdown(edit) {
+  //
+  // `asText` (optional) is a document block: the code block holding it
+  // arrives already read as the paragraphs its lines would be (Markdown.qml)
+  // — the code block tool toggling off.
+  function withMarkdown(edit, asText) {
     if (root.readOnly || root.plain || !root.markdown) {
       return
     }
+    var context = root.editContext()
     root.markdown.toMarkdown(documentHtml(), function(md, map) {
-      if (!map.ok) {
+      if (!root.contextCurrent(context) || !map.ok) {
         return  // a failed conversion changes nothing
       }
       edit(md.replace(/\n+$/, "").split("\n"), map)
-    }, root.documentBase)
+    }, root.documentBase, asText)
   }
 
   // The document block a position sits in. Qt separates blocks with U+2029
@@ -522,13 +573,28 @@ Item {
   function lineAt(map, pos) { return lineOfBlock(map, blockAt(pos)) }
   function caretLine(map) { return lineAt(map, area.cursorPosition) }
 
+  // The last document block written on or before Markdown line `line`.
+  // Fence lines and blanks own no block (NO_BLOCK), so it is the greatest
+  // index up to there — which is where a block landing after that line
+  // will be counted from.
+  function lastBlockThrough(map, line) {
+    var block = -1
+    for (var i = 0; i <= line && i < (map.blocks || []).length; i++) {
+      if (map.blocks[i] > block) {
+        block = map.blocks[i]
+      }
+    }
+    return block
+  }
+
   // caret < 0 means "the end of the note". Block styles never change the
   // document's text — a heading is a font size, not a `#` — so the caret's
   // position survives the round trip unchanged.
   function replaceDoc(md, caret, then) {
+    var context = root.editContext()
     var pos = caret === undefined ? area.cursorPosition : (caret < 0 ? Number.MAX_VALUE : caret)
     root.markdown.toHtml(md, function(html, ok) {
-      if (!ok) {
+      if (!root.contextCurrent(context) || !ok) {
         return  // a failed conversion changes nothing
       }
       atomic(function() {
@@ -548,7 +614,8 @@ Item {
     withMarkdown(function(lines, map) {
       var first = lineAt(map, Math.min(area.selectionStart, area.selectionEnd))
       var last = lineAt(map, Math.max(area.selectionStart, area.selectionEnd))
-      var caret = area.cursorPosition, changed = false, inFence = false
+      var caret = area.cursorPosition, changed = false
+      var code = MarkdownBlocks.fences(lines)
       var isList = style === "ul" || style === "ol" || style === "todo"
       // Selected paragraphs arrive with Markdown's blank separator lines
       // between them, and a separator restyled is an empty item — the extra
@@ -562,15 +629,8 @@ Item {
       var itemRx = /^\s*([-*+]|\d+[.)])[ \t]/
       var out = [], prevItem = false, prevFreed = false
       for (var i = 0; i < lines.length; i++) {
-        if (/^\s*```/.test(lines[i])) {
-          inFence = !inFence
-          out.push(lines[i])
-          prevItem = false
-          prevFreed = false
-          continue
-        }
         // table rows and fenced code are never restyled: it would corrupt them
-        if (i < first || i > last || inFence || /^\s*\|/.test(lines[i])) {
+        if (i < first || i > last || code[i] || /^\s*\|/.test(lines[i])) {
           out.push(lines[i])
           prevItem = false
           prevFreed = false
@@ -581,7 +641,7 @@ Item {
           while (j <= last && j < lines.length && lines[j] === "") {
             j++
           }
-          if (prevItem && j <= last && j < lines.length && !/^\s*(```|\|)/.test(lines[j])
+          if (prevItem && j <= last && j < lines.length && !code[j] && !/^\s*\|/.test(lines[j])
               && itemRx.test(restyleLine(lines[j], style))) {
             changed = true
             continue
@@ -804,7 +864,7 @@ Item {
     // The code text is inset by the writer's padding margin (CODE_PAD_PX);
     // the slab reaches back over it, and past the lines vertically, so the
     // text sits padded inside it. Indented code carries its indent in `a.x`.
-    var x = a.x - 14
+    var x = a.x - Dialect.CODE_PAD_PX
     return { x: x, y: a.y - 8, width: Math.max(0, area.width - x - Style.spacing.xs),
              height: b.y + b.height - a.y + 16 }
   }
@@ -820,7 +880,7 @@ Item {
   property var imageBoxes: []
   // Mirrors dialect.MAX_IMAGE_DISPLAY in services/markdown/qthtml — the
   // display cap the converter puts on a large image that names no width.
-  readonly property int maxImageDisplay: 640
+  readonly property int maxImageDisplay: Dialect.MAX_IMAGE_DISPLAY
   readonly property int minImageWidth: 48
   onReadOnlyChanged: scheduleDecorations()
 
@@ -911,19 +971,9 @@ Item {
       }
       return i
     }
-    var fences = 0
-    for (var f = 0; f < i; f++) {
-      if (/^\s*```/.test(lines[f])) {
-        fences++
-      }
-    }
-    if (fences % 2 === 1 || /^\s*```/.test(lines[i])) {
-      while (i + 1 < lines.length && !/^\s*```/.test(lines[i + 1])) {
-        i++
-      }
-      if (i + 1 < lines.length) {
-        i++
-      }
+    var code = MarkdownBlocks.fences(lines)[i]
+    if (code) {
+      return code.end
     }
     return i
   }
@@ -939,13 +989,7 @@ Item {
   function insertSnippet(md) {
     withMarkdown(function(lines, map) {
       var i = Math.min(caretLine(map), lines.length - 1)
-      var fences = 0
-      for (var f = 0; f < i; f++) {
-        if (/^\s*```/.test(lines[f])) {
-          fences++
-        }
-      }
-      var onEmpty = fences % 2 === 0 && lines[i] === ""
+      var onEmpty = !MarkdownBlocks.fences(lines)[i] && lines[i] === ""
       var at = onEmpty ? i : blockEndLine(lines, i)
       var rest = lines.slice(at + 1)
       var atEnd = rest.join("").trim() === ""
@@ -958,6 +1002,20 @@ Item {
       }
       replaceDoc(head.concat([""], rest).join("\n"), area.cursorPosition)
     })
+  }
+
+  // The code block tool is a toggle: inside a code block it takes the block
+  // off, anywhere else it puts an empty one in.
+  function toggleCodeBlock() {
+    if (root.readOnly || root.plain) {
+      return
+    }
+    var b = blockInfoAt(area.cursorPosition)
+    if (b && b.kind === "code") {
+      unfenceCodeBlock(b.empty)
+    } else {
+      insertCodeBlock()
+    }
   }
 
   // An empty code block, ready to type into. Its one empty line is held open
@@ -974,16 +1032,27 @@ Item {
       if (!atEnd) {
         out = out.concat(rest)
       }
-      // The new block lands right after the last document block at or before
-      // the insertion line; fence lines and blanks own no block (NO_BLOCK).
-      var block = -1
-      for (var i = 0; i <= at && i < (map.blocks || []).length; i++) {
-        if (map.blocks[i] > block) {
-          block = map.blocks[i]
-        }
-      }
-      replaceDoc(out.join("\n"), area.cursorPosition, function() { selectBlock(block + 1) })
+      var block = lastBlockThrough(map, at) + 1
+      replaceDoc(out.join("\n"), area.cursorPosition, function() { selectBlock(block) })
     })
+  }
+
+  // The caret's code block comes off: the converter reads that one block as
+  // the paragraphs its lines would be (withMarkdown's asText — the escaping
+  // is the reader's, the same it gives every paragraph it writes), and
+  // re-rendering the markdown is the whole edit. Each line keeps its block
+  // with the same characters in it, so the caret's position survives the
+  // trip; a caret that sat on an empty line lands on the blank paragraph it
+  // became, its filler selected so typing starts clean.
+  function unfenceCodeBlock(empty) {
+    var block = blockAt(area.cursorPosition)
+    withMarkdown(function(lines) {
+      replaceDoc(lines.join("\n"), area.cursorPosition, function() {
+        if (empty) {
+          selectBlock(block)
+        }
+      })
+    }, block)
   }
 
   // Where a document block's content starts: blocks begin after each
@@ -1086,7 +1155,11 @@ Item {
     if (b.kind !== "list" && b.kind !== "rule" && !b.last) {
       return false
     }
-    root.leaveBlock(b.kind)
+    if (b.kind === "rule") {
+      root.stepPastBlock()
+    } else {
+      root.leaveBlock(b.kind)
+    }
     return true
   }
 
@@ -1157,7 +1230,6 @@ Item {
   function leaveBlock(kind, seed) {
     withMarkdown(function(lines, map) {
       var i = caretLine(map)
-      var target = map.blocks[i]
       var out = lines.slice()
       if (kind === "code") {
         // the caret's line is the fence's empty last line; it comes out,
@@ -1166,37 +1238,56 @@ Item {
           return
         }
         out.splice(i, 1)
-        if (!/^\s*```/.test(out[i] || "")) {
+        var code = MarkdownBlocks.fences(out)[i]
+        if (!code || code.end !== i) {
           return
         }
         out.splice(i + 1, 0, "", " ", "")
       } else if (kind === "list") {
         out.splice(i, 1, "", " ", "")
-      } else if (kind === "rule") {
-        // the rule stays where it is; the landing paragraph goes in after
-        // it, and the caret takes that instead
-        out.splice(i + 1, 0, "", " ", "")
-        target = target + 1
       }
       // a quote's empty line already reads back as a blank paragraph
       // (kept in the map now, stripped only from an unused landing at save
       // time): re-rendering the markdown is the whole edit
-      replaceDoc(out.join("\n"), area.cursorPosition, function() {
-        selectBlock(target)
-        if (!seed) {
-          return
-        }
-        // the seed replaces the landing's filler, as literal text — the
-        // highlight's insert-then-remove order, for the same block reason
-        var from = Math.min(area.selectionStart, area.selectionEnd)
-        var to = Math.max(area.selectionStart, area.selectionEnd)
-        atomic(function() {
-          area.insert(to, seed.replace(/&/g, "&amp;").replace(/</g, "&lt;"))
-          area.remove(from, to)
-        })
-        area.cursorPosition = Math.min(from + seed.length, area.length)
-        root.edited()
+      landOn(out, map.blocks[i], seed)
+    })
+  }
+
+  // ── stepping past a block ───────────────────────────────────────────
+  // A rule holds no characters, and a code block's last line has nothing
+  // behind it: the caret can stand on either but never after them. This
+  // lands a blank paragraph after the caret's whole block — a rule, or a
+  // fence from its opening to its closing line (blockEndLine) — and the
+  // caret takes it, the way the second Enter leaves a block. The block
+  // itself stays exactly as it was.
+  function stepPastBlock(seed) {
+    withMarkdown(function(lines, map) {
+      var end = blockEndLine(lines, caretLine(map))
+      var out = lines.slice()
+      out.splice(end + 1, 0, "", " ", "")
+      landOn(out, lastBlockThrough(map, end) + 1, seed)
+    })
+  }
+
+  // The landing itself: the rewritten markdown goes in, the caret takes
+  // block `target` with its filler selected so typing starts clean, and a
+  // seed — the keystroke that asked to leave — replaces that filler as
+  // literal text.
+  function landOn(out, target, seed) {
+    replaceDoc(out.join("\n"), area.cursorPosition, function() {
+      selectBlock(target)
+      if (!seed) {
+        return
+      }
+      // the highlight's insert-then-remove order, for the same block reason
+      var from = Math.min(area.selectionStart, area.selectionEnd)
+      var to = Math.max(area.selectionStart, area.selectionEnd)
+      atomic(function() {
+        area.insert(to, seed.replace(/&/g, "&amp;").replace(/</g, "&lt;"))
+        area.remove(from, to)
       })
+      area.cursorPosition = Math.min(from + seed.length, area.length)
+      root.edited()
     })
   }
 
@@ -1331,11 +1422,13 @@ Item {
 
   // ── stepping past a trap: Right at the note's very end ──────────────
   // Some shapes trap the caret at the end of a note, each for its own Qt
-  // reason, and one gesture frees it from all of them: inline code, whose
-  // typing format clings past its last character (escapeCode), and a rule,
-  // an empty block the caret can stand on but never after (escapeRule).
-  // This dispatcher is the one thing the key handler asks; a new trap adds
-  // its escape here, not another branch in the handler.
+  // reason, and one gesture frees it from all of them: a rule and a code
+  // block, which the caret can stand on but never after (stepPastBlock),
+  // and inline code, whose typing format clings past its last character
+  // (escapeInlineCode). Anywhere else Right already escapes — onto the next
+  // character, or onto the next block. This dispatcher is the one thing the
+  // key handler asks; a new trap adds its escape here, not another branch
+  // in the handler.
   function escapeForward() {
     if (root.readOnly || root.plain) {
       return false
@@ -1343,33 +1436,22 @@ Item {
     if (area.selectionStart !== area.selectionEnd) {
       return false
     }
-    if (escapeCode()) {
-      return true
-    }
-    return escapeRule()
-  }
-
-  // A rule holds no characters, so a rule that ends the note leaves the
-  // caret nowhere past it. Right steps out the way the second Enter leaves
-  // a block — through leaveBlock's markdown trip, which lands the caret on
-  // a fresh blank paragraph behind the rule.
-  function escapeRule() {
     var pos = area.cursorPosition
     if (pos < area.length) {
       return false  // something follows; Qt's own Right serves
     }
     var b = blockInfoAt(pos)
-    if (!b || b.kind !== "rule") {
-      return false
+    if (b && (b.kind === "rule" || b.kind === "code")) {
+      stepPastBlock()
+      return true
     }
-    leaveBlock("rule")
-    return true
+    return escapeInlineCode(pos)
   }
 
   // Typing with the caret on a rule would draw the text over the ruler
   // itself — Qt's block takes characters, the eye says it must not. The
   // keystroke becomes the first character of a fresh paragraph after the
-  // rule instead, through the same leaveBlock trip Enter takes. The two
+  // rule instead, through the same trip Enter and Right take. The two
   // one-character reads keep the common case cheap: only a caret sitting
   // in an *empty* block goes on to the full block lookup.
   function typeLeavesRule(text) {
@@ -1397,41 +1479,25 @@ Item {
     if (!b || b.kind !== "rule") {
       return false
     }
-    leaveBlock("rule", text)
+    stepPastBlock(text)
     return true
   }
 
-  // Qt takes the typing format from the character before the caret, so code
-  // that ends the note traps it: there is no character to arrow past, and
-  // everything typed next would come out mono on the chip. Anywhere else
-  // Right already escapes — onto the next character, or onto the next
-  // block, where a non-empty block's own first character wins. So at the
-  // note's very end Right steps out instead: one plain-format space goes
-  // in after the code and the caret lands beyond it, typing in the body
-  // style. The space is the one the next word would want anyway; left
-  // unused at the line's end, the round trips drop it (Qt swallows a
+  // Qt takes the typing format from the character before the caret, so
+  // inline code that ends the note traps it: there is no character to
+  // arrow past, and everything typed next would come out mono on the chip.
+  // So at the note's very end Right steps out instead: one plain-format
+  // space goes in after the code and the caret lands beyond it, typing in
+  // the body style. The space is the one the next word would want anyway;
+  // left unused at the line's end, the round trips drop it (Qt swallows a
   // paragraph's trailing space — which is also why the insert needs
   // white-space:pre to survive at all; measured on 6.11). A second Right
   // is refused by the mono test: the character before the caret is now
-  // the plain space itself.
-  function escapeCode() {
-    if (root.readOnly || root.plain) {
-      return false
-    }
-    if (area.selectionStart !== area.selectionEnd) {
-      return false
-    }
-    var pos = area.cursorPosition
-    if (pos === 0 || pos < area.length) {
-      return false
-    }
-    if (!/font-family:[^;"]*mono/i.test(area.getFormattedText(pos - 1, pos))) {
-      return false
-    }
-    // A code block's lines are mono too, and must stay all-mono or the
-    // block stops being one (reader): the escape is inline code's only.
-    var b = blockInfoAt(pos)
-    if (b && b.kind === "code") {
+  // the plain space itself. A code block's lines are mono too, and must
+  // stay all-mono or the block stops being one (reader) — escapeForward
+  // has stepped past one before it gets here, so the mono here is inline.
+  function escapeInlineCode(pos) {
+    if (pos === 0 || !/font-family:[^;"]*mono/i.test(area.getFormattedText(pos - 1, pos))) {
       return false
     }
     area.insert(pos, '<span style="white-space:pre;"> </span>')
@@ -1483,7 +1549,7 @@ Item {
       case "table": insertSnippet("| Column 1 | Column 2 |\n|---|---|\n|  |  |"); break
       case "addRow": case "addCol": case "delRow": case "delCol": tableOp(id); break
       case "rule": insertSnippet("---"); break
-      case "codeblock": insertCodeBlock(); break
+      case "codeblock": toggleCodeBlock(); break
       case "link": openLinkBar(); break
     }
   }

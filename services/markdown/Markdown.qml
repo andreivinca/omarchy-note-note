@@ -1,4 +1,4 @@
-import Quickshell.Io
+import "../processes"
 import QtQuick
 
 // Markdown <-> the HTML the editor's document holds.
@@ -78,12 +78,21 @@ Item {
   // blocks the document has. `map.ok` is false when the converter failed, and
   // only then — an empty answer is not a failure: a note holding one blank
   // line converts to no Markdown at all, and that is the truth about it.
-  function toMarkdown(html, callback, base) {
+  //
+  // `asText` (optional) is a document block: the code block holding it is
+  // read as the paragraphs its lines would be — the code block tool
+  // toggling off (NoteEditor.toggleCodeBlock). A number, never note
+  // content, so it may ride on argv.
+  function toMarkdown(html, callback, base, asText) {
     if (!html) {
       callback("", { blocks: [], count: 0, ok: true })
       return
     }
-    run(["to-markdown"].concat(base ? ["--base", base] : []), html, function(answer) {
+    var args = ["to-markdown"].concat(base ? ["--base", base] : [])
+    if (asText !== undefined) {
+      args = args.concat(["--as-text", String(asText)])
+    }
+    run(args, html, function(answer) {
       if (!answer || typeof answer.markdown !== "string") {
         console.warn("note-note: could not read the editor's document")
         callback("", { blocks: [], count: 0, ok: false })
@@ -93,68 +102,9 @@ Item {
     })
   }
 
-  // ── running the converter ───────────────────────────────────────────
-  // One process per conversion. They are short, they overlap (a save can run
-  // while the toolbar converts), and sharing one would mean queueing them.
-  //
-  // callback(answer) runs exactly once, whatever happens to the process:
-  // `answer` is the JSON object the converter wrote, or null when it wrote
-  // nothing that parses — because it crashed, exited early, or never started
-  // at all. The frame is what makes a failure distinguishable from an empty
-  // note, since raw text has no failed answer that could not also be a real
-  // one. A caller left without an answer would be a note stuck half-saved,
-  // so every way a process can end resolves it: a finished stream, an exit
-  // without one, and a start that failed (which Qt reports with neither).
-  function run(args, payload, callback) {
-    var proc = converter.createObject(root, { command: ["python3", root.script].concat(args), callback: callback })
-    if (!proc) {
-      console.warn("note-note: could not start the converter")
-      callback(null)
-      return
-    }
-    proc.stdinEnabled = true                 // stdin must be open before it starts
-    proc.running = true
-    proc.write(payload)
-    proc.stdinEnabled = false                // close stdin: the script reads to EOF
-  }
-  function parse(text) {
-    var answer = null
-    try { answer = JSON.parse(text) } catch (error) { answer = null }
-    return (answer && typeof answer === "object") ? answer : null
-  }
+  ProcessRunner { id: runner }
 
-  Component {
-    id: converter
-    Process {
-      id: proc
-      // The note itself goes over stdin, never argv (docs/security.md rule 2).
-      property var callback: null
-      property bool launched: false
-      // The one place a run ends. Whichever event gets here first answers;
-      // the others find no callback left.
-      function finish(text) {
-        var done = proc.callback
-        proc.callback = null
-        if (done) {
-          done(root.parse(text))
-        }
-        Qt.callLater(function() { proc.destroy() })
-      }
-      onStarted: proc.launched = true
-      stdout: StdioCollector { onStreamFinished: proc.finish(this.text) }
-      onExited: function(code) {
-        if (code !== 0) {
-          console.warn("note-note: qthtml exited with", code)
-        }
-        proc.finish("")
-      }
-      // A process that could not be started (no python3 on the shell's PATH)
-      // goes running -> not running without ever having started, and Qt
-      // emits neither an exit nor a stream end for it.
-      onRunningChanged: if (!proc.running && !proc.launched) {
-        console.warn("note-note: could not start the converter")
-        proc.finish("")
-      }
-    }
+  function run(args, payload, callback) {
+    return runner.run({ command: ["python3", root.script].concat(args), payload: payload }, callback)
   }
 }

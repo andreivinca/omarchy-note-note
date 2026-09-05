@@ -7,7 +7,7 @@ loop closes:
 
 Anything Qt rewrites on the way through shows up here as a diff. The Qt leg
 runs the offscreen QML runtime, so this needs no shell and no display; it is
-skipped with a warning when `qml6` is missing.
+requires `qml6`; a missing runtime fails the suite.
 
     python3 services/markdown/qthtml/selftest.py [--verbose]
 """
@@ -132,6 +132,8 @@ def through_qt(documents):
         proc = subprocess.run(["qml6", path], capture_output=True, text=True, timeout=120, env=env)
     finally:
         os.unlink(path)
+    if proc.returncode != 0:
+        raise RuntimeError("qml6 failed (%s):\n%s" % (proc.returncode, proc.stderr[-2000:]))
     blob = proc.stderr.split("<<<RESULT>>>")
     if len(blob) < 2:
         raise RuntimeError("no result from qml6:\n" + proc.stderr[-2000:])
@@ -216,6 +218,37 @@ def check_typed_filler(verbose):
     return failures
 
 
+def check_as_text(verbose):
+    """`as_text` reads one code block as paragraphs — the code block tool
+    toggling off. Each line keeps its block, so the caret map is unchanged
+    in shape; the text comes out escaped the way any paragraph's is, an
+    empty line as the dialect's blank; and a code block elsewhere in the
+    note stays a fence."""
+    failures = 0
+    cases = [
+        ("lines become paragraphs", "```\na = 1\n\nb = 2\n```\n", 1,
+         {"markdown": "a = 1\n\n\u00a0\n\nb = 2\n", "blocks": [0, -1, 1, -1, 2], "count": 3}),
+        ("the text is escaped", "```\n# not a heading\n*x* and `y`\n```\n", 0,
+         {"markdown": "\\# not a heading\n\n\\*x\\* and \\`y\\`\n",
+          "blocks": [0, -1, 1], "count": 2}),
+        ("only the block's own fence opens", "```\nfirst\n```\n\npara\n\n```\nsecond\n```\n", 2,
+         {"markdown": "```\nfirst\n```\n\npara\n\nsecond\n",
+          "blocks": [-1, 0, -1, -1, 1, -1, 2], "count": 3}),
+        ("an empty block becomes a blank", "```\n\n```\n", 0,
+         {"markdown": "\u00a0\n", "blocks": [0], "count": 1}),
+        ("a block outside any code is a plain read", "para\n\n```\ncode\n```\n", 0,
+         convert(to_html("para\n\n```\ncode\n```\n"))),
+    ]
+    for name, markdown, block, expected in cases:
+        actual = convert(to_html(markdown), as_text=block)
+        if actual != expected:
+            failures += 1
+            report(name, "as text", expected, actual, verbose)
+    print("as text (one code block read as paragraphs)")
+    print("  %d/%d cases" % (len(cases) - failures, len(cases)))
+    return failures
+
+
 def check_command_line(verbose):
     """The frame Markdown.qml reads: one JSON object per run, both directions.
 
@@ -237,6 +270,8 @@ def check_command_line(verbose):
         ("to-html frames an empty note", ["to-html"], b"", {"html": ""}),
         ("to-markdown answers with its map", ["to-markdown"], to_html("- a\n").encode("utf-8"),
          convert(to_html("- a\n"))),
+        ("to-markdown reads a block as text", ["to-markdown", "--as-text", "0"],
+         to_html("```\nx\n```\n").encode("utf-8"), convert(to_html("```\nx\n```\n"), as_text=0)),
     ]
     for name, args, payload, expected in cases:
         code, out = run(args, payload)
@@ -247,12 +282,15 @@ def check_command_line(verbose):
         if code != 0 or actual != expected:
             failures += 1
             report(name, "command line", expected, actual, verbose)
-    code, out = run(["to-html", "--no-such-option"], b"x")
-    if code == 0 or out.strip():
-        failures += 1
-        report("a bad invocation writes nothing", "command line", "non-zero exit, empty stdout", (code, out), verbose)
+    bad = [("a bad invocation writes nothing", ["to-html", "--no-such-option"]),
+           ("a bad block index writes nothing", ["to-markdown", "--as-text", "x"])]
+    for name, args in bad:
+        code, out = run(args, b"x")
+        if code == 0 or out.strip():
+            failures += 1
+            report(name, "command line", "non-zero exit, empty stdout", (code, out), verbose)
     print("command line (the JSON frame Markdown.qml reads)")
-    print("  %d/%d cases" % (len(cases) + 1 - failures, len(cases) + 1))
+    print("  %d/%d cases" % (len(cases) + len(bad) - failures, len(cases) + len(bad)))
     return failures
 
 
@@ -283,6 +321,7 @@ def main():
     failures += check_display_cap(args.verbose)
     failures += check_code_chip(args.verbose)
     failures += check_typed_filler(args.verbose)
+    failures += check_as_text(args.verbose)
     failures += check_command_line(args.verbose)
 
     # The chip rides through Qt too: the span must keep both halves — the
@@ -294,8 +333,8 @@ def main():
     try:
         rendered = through_qt(documents)
     except (OSError, RuntimeError, subprocess.SubprocessError) as error:
-        print("  SKIPPED: %s" % error)
-        return 1 if failures else 0
+        print("  FAILED: %s" % error)
+        return 1
 
     qt_failures = 0
     for name, markdown in CASES.items():

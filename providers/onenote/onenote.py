@@ -20,8 +20,8 @@ sys.path.insert(0, os.path.join(HERE, "..", "..", "lib"))
 sys.path.insert(0, HERE)
 import msgraph  # noqa: E402
 import ratelimit  # noqa: E402
-from msgraph import (graph, http, fail, fail_throttled, fail_transient, out, load_json, save_private,  # noqa: E402
-                     read_payload, access_token, THROTTLED_STATUSES, TRANSIENT_STATUSES, CACHE_DIR, GRAPH)
+from msgraph import (graph, http, fail, fail_throttled, out, load_json, save_private,  # noqa: E402
+                     read_payload, access_token, TRANSIENT_STATUSES, CACHE_DIR, GRAPH)
 import onenote_md  # noqa: E402
 
 # OneNote's own Graph budget, shared with no other provider: a throttle here
@@ -72,26 +72,9 @@ def graph_raw(method, path, data=None, content_type=None, extra_headers=None,
         if content_type:
             headers["Content-Type"] = content_type
         headers.update(extra_headers or {})
-        req = urllib.request.Request(url, data=data, method=method, headers=headers)
-
-        def once():
-            try:
-                with urllib.request.urlopen(req, timeout=60) as r:
-                    raw = r.read(max_bytes + 1)
-                    if len(raw) > max_bytes:
-                        fail("response larger than %d bytes" % max_bytes)
-                    return r.status, raw.decode(errors="replace")
-            except urllib.error.HTTPError as e:
-                body = e.read(max_bytes + 1)[:max_bytes].decode(errors="replace")
-                if e.code in THROTTLED_STATUSES:
-                    raise ratelimit.Retry(msgraph.wait_asked_by(e))
-                if transient_5xx and e.code in TRANSIENT_STATUSES:
-                    fail_transient(e.code, body)
-                return e.code, body
-            except urllib.error.URLError as e:
-                fail("network error: %s" % e.reason)
-
-        return ratelimit.attempt_loop(msgraph.rate_key_for(url), msgraph.RATE_WINDOWS, once)
+        status, raw = msgraph.request(method, url, data, headers, max_bytes=max_bytes,
+                                       timeout=60, transient_5xx=transient_5xx)
+        return status, raw.decode(errors="replace")
 
     status, body = send(False)
     if status == 401:

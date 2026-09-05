@@ -157,16 +157,7 @@ def test_happy_path_deletes_what_it_recorded(verbose):
 
 
 def test_conversion_failure_writes_nothing(verbose):
-    """A body the converter cannot turn into blocks must abort before the
-    *body* is touched — which is the reason the conversion moved up front.
-
-    The title is deliberately not part of that claim: `cmd_update` writes it
-    first, in its own small request, and it is the one write that survives a
-    failed conversion. So the title is changed here on purpose, to prove the
-    body is untouched even on the run where a write did happen — an earlier
-    version of this test left the title alone, which meant it never issued a
-    PATCH at all and would have passed against almost anything.
-    """
+    """Conversion and limit failures leave both body and title untouched."""
     fake = Notion()
     real = notion.notion_md.markdown_to_blocks
 
@@ -183,15 +174,15 @@ def test_conversion_failure_writes_nothing(verbose):
     finally:
         notion.notion_md.markdown_to_blocks = real
     failures = 0
-    failures += check("a broken conversion stops the update", raised,
+    failures += check("a broken conversion stops the update", raised or bool(answer.get("error")),
                       "answered %r" % (answer,))
     failures += check("a broken conversion leaves the body alone",
                       not fake.paths("DELETE")
                       and not [p for p in fake.paths("PATCH") if p.endswith("/children")],
                       "wrote %r" % (fake.calls,))
-    failures += check("and it got as far as the title, so the test is not vacuous",
-                      [p for p in fake.paths("PATCH") if p.startswith("/pages/")],
-                      "no title write attempted: %r" % (fake.calls,))
+    failures += check("conversion failure leaves the title unchanged too",
+                      not fake.paths("PATCH"),
+                      "unexpected title write: %r" % (fake.calls,))
     if verbose:
         print("  calls: %r" % (fake.calls,))
     print("a body that will not convert never reaches the page")

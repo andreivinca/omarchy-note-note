@@ -1,6 +1,8 @@
 import Quickshell
 import Quickshell.Io
 import QtQuick
+import "../../services/processes"
+import "../../services/requests"
 
 // Local notebooks: folders under ~/Notes (or $NOTE_NOTE_DIR) holding Markdown
 // files with a tiny title front-matter. Notes directly in the root show up as
@@ -65,7 +67,6 @@ Item {
   // cannot be trusted to be a plain file.
   readonly property string listScript: dir + "/list.py"
   readonly property string searchScript: dir + "/search.py"
-  readonly property string imagesScript: dir + "/images.py"
   readonly property string readScript: dir + "/../../lib/readfile.py"
   // This provider's limits: a note bigger than this is listed but not loaded
   // (it is almost certainly not a note), and the listing itself is capped.
@@ -113,9 +114,6 @@ Item {
       return { title: "", body: raw }
     }
     return { title: (m[1] || "").trim(), body: raw.substring(m[0].length) }
-  }
-  function serializeNote(title, body) {
-    return "---\ntitle: " + title.replace(/[\r\n]+/g, " ").trim() + "\n---\n" + body
   }
   function previewOf(body) {
     var lines = body.split("\n")
@@ -214,56 +212,40 @@ Item {
     root.persistRequested()
   }
 
-  function refresh() { listProc.running = true }
-
-  // ── content search ──────────────────────────────────────────────────
-  // The host matches titles and previews itself; this answers the rest —
-  // the paths of notes whose *body* holds the query (search.py, same walk
-  // and read policy as the listing). One process at a time: a query that
-  // arrives while one runs kills it, and the exit starts the newer one.
-  property var searchCb: null
-  property string searchPending: ""
-  function search(query, cb) {
-    // A newer ask supersedes the one still in flight, but its callback
-    // still gets an answer — empty, which best-effort allows — so "call cb
-    // exactly once" holds no matter what the host does between asks.
-    if (root.searchCb) {
-      root.searchCb({ paths: [] })
-    }
-    root.searchCb = cb
-    root.searchPending = query
-    if (searchProc.running) {
-      searchProc.running = false
+  property bool listing: false
+  property bool relistDue: false
+  function refresh() {
+    root.relistDue = true
+    if (root.listing || mutations.depth > 0) {
       return
     }
-    runSearch()
-  }
-  function runSearch() {
-    if (root.searchPending === "") {
-      return
-    }
-    searchProc.command = ["python3", root.searchScript, root.notesRoot, root.searchPending, String(root.maxNoteBytes)]
-    root.searchPending = ""
-    searchProc.running = true
-  }
-  Process {
-    id: searchProc
-    stdout: StdioCollector {
-      onStreamFinished: {
-        if (root.searchPending !== "") {
-          return  // superseded; the newer query answers
-        }
-        var cb = root.searchCb
-        root.searchCb = null
-        if (!cb) {
-          return
-        }
-        cb({ paths: this.text.split("\n").filter(function(l) { return l.length > 0 }).map(root.pathOf) })
+    root.relistDue = false
+    root.listing = true
+    var revision = root.mutationRevision
+    runner.run({ command: ["python3", root.listScript, root.notesRoot, String(root.maxListBytes)], raw: true }, function(result) {
+      root.listing = false
+      if (result.error) {
+        root.statusRequested(root.name + ": " + result.error)
+      } else if (revision === root.mutationRevision) {
+        root.loadList(result.text)
+      } else {
+        root.relistDue = true
       }
+      if (root.relistDue) {
+        Qt.callLater(root.refresh)
+      }
+    })
+  }
+
+  // A superseded search settles its old caller before starting the new one.
+  property var searchHandle: null
+  function search(query, callback) {
+    if (root.searchHandle) {
+      root.searchHandle.cancel()
     }
-    onExited: if (root.searchPending !== "") {
-      Qt.callLater(root.runSearch)
-    }
+    root.searchHandle = runner.run({ command: ["python3", root.searchScript, root.notesRoot, query, String(root.maxNoteBytes)], raw: true }, function(result) {
+      callback({ paths: (result.text || "").split("\n").filter(function(line) { return !!line }).map(root.pathOf) })
+    })
   }
 
   // Saved order first, then anything unlisted in the given (birth-time) order.
@@ -290,7 +272,7 @@ Item {
       }).map(function(x) { return x.e })
   }
 
-  // Parses the listing script's output (see listProc).
+  // Parses the listing script's output.
   function loadList(raw) {
     var lines = raw.split("\n"), dirs = [], orders = {}, bookOrder = [], entries = []
     for (var i = 0; i < lines.length; i++) {
@@ -319,272 +301,157 @@ Item {
     rebuild()
   }
 
-  // ── notes ───────────────────────────────────────────────────────────
-  // A note is read exactly once, through one descriptor (lib/readfile.py):
-  // no symlink following, regular files only, at most maxNoteBytes+1 bytes,
-  // against a deadline — and those bytes are what is shown. No size check
-  // followed by a reopen, so a file that grows between listing and opening
-  // cannot exceed the cap, and a FIFO cannot hold the queue.
-  property var loadQueue: []
+  // Reads retain errors and the byte limit from the same descriptor as the text.
+  ProcessRunner { id: runner }
+  RequestQueue {
+    id: mutations
+    domain: "local"
+    concurrency: 1
+    onUpdated: {
+      if (mutations.depth === 0 && root.relistDue) {
+        Qt.callLater(root.refresh)
+      }
+    }
+  }
+  readonly property bool busy: mutations.depth > 0 || runner.active > 0
+  property int mutationRevision: 0
+  property var deleting: ({})
+
   function load(path, cb) {
-    var job = { path: path, cb: cb }
-    root.loadQueue.push(job)
-    if (!readProc.running) {
-      nextRead()
-    }
-    return { cancel: function() { root.cancelRead(job) } }
-  }
-  // Only a read that has not started can be withdrawn — the running one is
-  // loadQueue[0], and its own result answers it. The withdrawn caller is
-  // still answered: every load is, exactly once.
-  function cancelRead(job) {
-    var at = root.loadQueue.indexOf(job)
-    if (at < 0) {
-      return
-    }
-    if (at === 0 && readProc.running) {
-      return
-    }
-    root.loadQueue.splice(at, 1)
-    job.cb({ error: "cancelled" })
-  }
-  function nextRead() {
-    if (root.loadQueue.length === 0) {
-      return
-    }
-    var job = root.loadQueue[0]
-    readProc.command = ["python3", root.readScript, fileOf(job.path), String(root.maxNoteBytes + 1)]
-    readProc.running = true
-  }
-  Process {
-    id: readProc
-    stdout: StdioCollector {
-      onStreamFinished: {
-        var job = root.loadQueue.shift()
-        if (!job) {
-          return
-        }
-        var e = root.noteAt(job.path), ver = e ? e.version || "" : ""
-        if (this.text.length > root.maxNoteBytes) {
-          job.cb({ title: e ? e.title : "", body: "This file is larger than " + Math.round(root.maxNoteBytes / 1048576) + " MB — too large to open as a note. Edit it in an editor instead.", editable: false, version: ver })
-        } else {
-          var n = root.parseNote(this.text)
-          // `base` is the note's own folder: how the editor and the
-          // converter resolve the relative image links this provider keeps.
-          var file = root.fileOf(job.path)
-          job.cb({ title: n.title, body: n.body, editable: true, version: ver,
-                   base: file.substring(0, file.lastIndexOf("/")) })
-        }
+    var file = root.fileOf(path)
+    return runner.run({ command: ["python3", root.readScript, "--json", file, String(root.maxNoteBytes)] }, function(result) {
+      if (result.error) {
+        cb(result)
+        return
       }
-    }
-    onExited: Qt.callLater(root.nextRead)
+      var note = root.parseNote(result.text)
+      cb({ title: note.title, body: note.body, editable: true, version: result.version,
+           base: file.substring(0, file.lastIndexOf("/")) })
+    })
   }
 
-  // Our own writes fire inotify too; ignore events that follow one closely.
-  property double lastOwnWrite: 0
-  function save(path, title, body, cb) {
-    // A pasted picture is still a link into the clipboard's staging dir;
-    // images.py copies it into `.assets/` beside the note and hands back the
-    // body with the link made relative. Bodies without file:// links — the
-    // ordinary case — skip the process entirely.
-    if (body.indexOf("](file://") >= 0) {
-      stageImages(path, title, body, cb)
-    } else {
-      writeNote(path, title, body, cb, "")
-    }
-  }
-
-  function writeNote(path, title, body, cb, warning) {
-    root.lastOwnWrite = Date.now()
-    writeFile.path = fileOf(path)
-    writeFile.setText(serializeNote(title, body))
-    var arr = root.notes.slice()
-    for (var i = 0; i < arr.length; i++) {
-      if (arr[i].path === path) {
-        arr[i] = { key: arr[i].key, file: arr[i].file, path: path, title: title.trim(), preview: previewOf(body), size: body.length, version: "" }
+  // Staging, writing, creating and deleting share one ordering policy.
+  // Callers and models see success only after the filesystem has committed.
+  function mutate(key, payload, commit, cb) {
+    return mutations.enqueue({ key: key, mode: "append", owner: root, flush: true }, function(ctx) {
+      root.mutationRevision++
+      var request = typeof payload === "function" ? payload() : payload
+      request.root = root.notesRoot
+      runner.run({ command: ["python3", root.dir + "/operations.py"],
+                   payload: JSON.stringify(request), timeoutMs: 60000 }, ctx.done)
+    }, function(result, info) {
+      root.mutationRevision++
+      var answer = result || { error: info.cancelled ? "operation cancelled" : "operation was not completed" }
+      if (!answer.error) {
+        commit(answer)
       }
-    }
-    root.notes = arr
-    rebuild()
-    if (cb) {
-      cb(warning ? { warning: warning } : {})
-    }
-  }
-
-  // A note with a pasted picture is the one save here that is not immediate:
-  // images.py has to copy the file into `.assets/` before the note can name
-  // it. So two saves of one note can be in flight at once, and the slower one
-  // would land last and undo the newer text. One stage per note, then: a save
-  // arriving while one runs waits for it, replacing whatever was already
-  // waiting — the newest text strictly contains the older, and its caller is
-  // answered rather than dropped. (The remote providers get the same
-  // guarantee from their queue's "replace" mode; this is the local shape of
-  // it, for the one path here that needs it.)
-  property var staging: ({})     // path -> true while a stage runs
-  property var stageNext: ({})   // path -> the newest save waiting behind it
-
-  // The note is written no matter what: a failed copy only leaves the link
-  // pointing at the staged file (still shown, pruned eventually) and says so.
-  function stageImages(path, title, body, cb) {
-    if (root.staging[path]) {
-      var waiting = root.stageNext[path]
-      root.stageNext[path] = { title: title, body: body, cb: cb }
-      if (waiting && waiting.cb) {
-        waiting.cb({})  // superseded, never silent
-      }
-      return
-    }
-    root.staging[path] = true
-    root.lastOwnWrite = Date.now()
-    var proc = imageStager.createObject(root, {
-      command: ["python3", root.imagesScript, root.notesRoot, fileOf(path)],
-      callback: function(result) {
-        var ok = result && result.body !== undefined
-        delete root.staging[path]
-        writeNote(path, title, ok ? result.body : body, cb,
-                  (result && (result.warning || result.error)) || (ok ? "" : "pasted images were not copied into the notebook"))
-        var next = root.stageNext[path]
-        if (next) {
-          delete root.stageNext[path]
-          root.stageImages(path, next.title, next.body, next.cb)
-        }
+      if (cb) {
+        cb(answer)
+      } else if (answer.error) {
+        root.statusRequested(root.name + ": " + answer.error)
       }
     })
-    proc.stdinEnabled = true                 // stdin must be open before it starts
-    proc.running = true
-    proc.write(body)
-    proc.stdinEnabled = false                // close stdin: the script reads to EOF
   }
 
-  Component {
-    id: imageStager
-    Process {
-      id: proc
-      // The note goes over stdin, never argv (docs/security.md rule 2).
-      property var callback: null
-      stdout: StdioCollector {
-        onStreamFinished: {
-          var done = proc.callback
-          proc.callback = null
-          var result = null
-          try { result = JSON.parse(this.text) } catch (error) { result = null }
-          if (done) {
-            done(result)
-          }
-          Qt.callLater(function() { proc.destroy() })
-        }
-      }
-      onExited: function(code) {
-        if (proc.callback) {
-          var done = proc.callback
-          proc.callback = null
-          done(null)
-        }
-      }
+  function save(path, title, body, cb) {
+    if (root.deleting[path]) {
+      cb({ error: "the note is being deleted" })
+      return
     }
+    mutate(path, { action: "save", file: fileOf(path), title: title, body: body }, function(result) {
+      root.notes = root.notes.map(function(note) {
+        if (note.path !== path) {
+          return note
+        }
+        return { key: note.key, file: note.file, path: path, title: title.trim(),
+                 preview: previewOf(result.body), size: result.bytes, version: result.version }
+      })
+      rebuild()
+    }, cb)
   }
 
   function create(target, cb) {
     var key = target.indexOf("section:") === 0 ? target.substring(8) : ""
-    // A note made into a folded notebook must land on a visible row, so the
-    // fold opens — the same courtesy OneNote's create() extends.
-    if (root.folded.indexOf(key) >= 0) {
+    mutate("create:" + key, { action: "create", key: key }, function(result) {
       root.folded = root.folded.filter(function(k) { return k !== key })
       root.persistRequested()
-    }
-    var file = dirOf(key) + "/note-" + Date.now() + ".md"
-    root.lastOwnWrite = Date.now()
-    writeFile.path = file
-    writeFile.setText(serializeNote("", ""))
-    var entry = { key: key, file: file, path: pathOf(file), title: "", preview: "", size: 0 }
-    var arr = root.notes.slice(), at = arr.length
-    for (var i = arr.length - 1; i >= 0; i--) {
-      if (arr[i].key === key) {
-        at = i + 1
-        break
-      }
-    }
-    if (at === arr.length && !arr.some(function(n) { return n.key === key })) {
-      var keys = root.notebooks.map(function(b) { return b.key }), after = keys.indexOf(key)
-      at = 0
-      for (var j = 0; j < arr.length; j++) {
-        if (keys.indexOf(arr[j].key) <= after) {
-          at = j + 1
+      var entry = { key: key, file: result.file, path: pathOf(result.file),
+                    title: "", preview: "", size: result.bytes, version: result.version }
+      var arr = root.notes.slice(), at = arr.length
+      for (var i = arr.length - 1; i >= 0; i--) {
+        if (arr[i].key === key) {
+          at = i + 1
+          break
         }
       }
-    }
-    arr.splice(at, 0, entry)
-    root.notes = arr
-    rebuild()
-    persistOrder(key)
-    if (cb) {
-      cb({ path: entry.path })
-    }
+      arr.splice(at, 0, entry)
+      root.notes = arr
+      result.path = entry.path
+      rebuild()
+      persistOrder(key)
+    }, cb)
   }
 
   function remove(path, cb) {
-    var n = noteAt(path)
-    if (!n) {
-      if (cb) {
-        cb({ error: "unknown note" })
-      }
+    var note = noteAt(path)
+    if (!note) {
+      cb({ error: "unknown note" })
       return
     }
-    root.notes = root.notes.filter(function(x) { return x.path !== path })
-    rebuild()
-    persistOrder(n.key)
-    rmProc.command = ["rm", "-f", "--", n.file]
-    rmProc.running = true
-    if (cb) {
-      cb({})
-    }
+    root.deleting[path] = true
+    mutate(path, { action: "remove", file: note.file }, function(result) {
+      root.notes = root.notes.filter(function(n) { return n.path !== path })
+      rebuild()
+      persistOrder(note.key)
+    }, function(result) {
+      delete root.deleting[path]
+      if (cb) {
+        cb(result)
+      }
+    })
   }
 
-  property string pendingSection: ""
-  property var pendingSectionCb: null
   function createSection(name, cb) {
-    var key = name.replace(/[\/\\]/g, "-").trim()
+    var key = name.replace(/[/\\]/g, "-").trim()
     if (!key || key[0] === ".") {
-      if (cb) {
-        cb({ error: "invalid name" })
-      }
+      cb({ error: "invalid name" })
       return
     }
-    root.pendingSection = key
-    root.pendingSectionCb = cb
-    mkdirProc.command = ["mkdir", "-p", "--", dirOf(key)]
-    mkdirProc.running = true
+    mutate("section:" + key, { action: "section", key: key }, function(result) {
+      if (!root.notebooks.some(function(book) { return book.key === key })) {
+        root.notebooks = root.notebooks.concat([{ key: key, name: key, dir: root.dirOf(key) }])
+        persistNotebookOrder()
+      }
+      result.key = root.notebookTabs ? key : "notes"
+      result.target = "section:" + key
+      rebuild()
+    }, cb)
+  }
+
+  function reorderNotes(sectionKey, paths) {
+    var rank = {}
+    paths.forEach(function(path, index) { rank[path] = index })
+    var mine = root.notes.filter(function(note) { return note.key === sectionKey })
+    mine = mine.map(function(note, index) { return { note: note, index: index } })
+      .sort(function(a, b) {
+        var left = rank[a.note.path], right = rank[b.note.path]
+        return (left === undefined ? paths.length + a.index : left)
+             - (right === undefined ? paths.length + b.index : right)
+      }).map(function(entry) { return entry.note })
+    var next = 0
+    return root.notes.map(function(note) { return note.key === sectionKey ? mine[next++] : note })
   }
 
   function setOrder(sectionKey, paths) {
-    var mine = [], others = []
-    for (var i = 0; i < root.notes.length; i++) {
-      (root.notes[i].key === sectionKey ? mine : others).push(root.notes[i])
-    }
-    var byPath = {}
-    for (var j = 0; j < mine.length; j++) {
-      byPath[mine[j].path] = mine[j]
-    }
-    var reordered = paths.map(function(p) { return byPath[p] }).filter(Boolean)
-    // keep the notebook grouping: splice the reordered block where the first note was
-    var first = -1
-    for (var k = 0; k < root.notes.length; k++) {
-      if (root.notes[k].key === sectionKey) {
-        first = k
-        break
-      }
-    }
-    var arr = others.slice()
-    var idx = 0
-    for (var m = 0; m < first && m < root.notes.length; m++) {
-      if (root.notes[m].key !== sectionKey) {
-        idx++
-      }
-    }
-    Array.prototype.splice.apply(arr, [idx, 0].concat(reordered))
-    root.notes = arr
-    rebuild()
-    persistOrder(sectionKey)
+    var file = dirOf(sectionKey) + "/.order"
+    mutate("order:" + file, function() {
+      var names = reorderNotes(sectionKey, paths).filter(function(note) { return note.key === sectionKey })
+        .map(function(note) { return baseName(note.file) })
+      return { action: "order", file: file, text: names.join("\n") + "\n" }
+    }, function(result) {
+      root.notes = reorderNotes(sectionKey, paths)
+      rebuild()
+    })
   }
 
   // ── watching: inotify while the app is open (event-driven, no polling) ──
@@ -595,16 +462,13 @@ Item {
       watchProc.running = false
     }
   }
-  function poll() {}   // inotify covers it
-  Timer { id: relistDebounce; interval: 400; onTriggered: listProc.running = true }
+  function poll() { root.refresh() }
+  Timer { id: relistDebounce; interval: 400; onTriggered: root.refresh() }
   Process {
     id: watchProc
     command: ["inotifywait", "-m", "-r", "-q", "-e", "create,delete,move,close_write", "--format", "%e %w%f", "--", root.notesRoot]
     stdout: SplitParser {
       onRead: function(line) {
-        if (Date.now() - root.lastOwnWrite < 1500) {
-          return  // our own saves
-        }
         if (/\/\.(order|notebooks)(\s|$)/.test(line)) {
           return  // our bookkeeping files
         }
@@ -614,48 +478,18 @@ Item {
   }
 
   function persistOrder(key) {
-    root.lastOwnWrite = Date.now()
-    var names = root.notes.filter(function(n) { return n.key === key }).map(function(n) { return baseName(n.file) })
-    orderFile.path = dirOf(key) + "/.order"
-    orderFile.setText(names.join("\n") + "\n")
+    var file = dirOf(key) + "/.order"
+    mutate("order:" + file, function() {
+      var names = root.notes.filter(function(note) { return note.key === key }).map(function(note) { return baseName(note.file) })
+      return { action: "order", file: file, text: names.join("\n") + "\n" }
+    }, function(result) {})
   }
+
   function persistNotebookOrder() {
-    root.lastOwnWrite = Date.now()
-    orderFile.path = root.notesRoot + "/.notebooks"
-    orderFile.setText(root.notebooks.filter(function(b) { return b.key }).map(function(b) { return b.key }).join("\n") + "\n")
-  }
-
-  FileView { id: writeFile; atomicWrites: true; printErrors: false }
-  FileView { id: orderFile; atomicWrites: true; printErrors: false }
-  Process { id: rmProc }
-  Process {
-    id: mkdirProc
-    onExited: {
-      var key = root.pendingSection, cb = root.pendingSectionCb
-      root.pendingSection = ""; root.pendingSectionCb = null
-      if (!key) {
-        return
-      }
-      if (!root.notebooks.some(function(b) { return b.key === key })) {
-        root.notebooks = root.notebooks.concat([{ key: key, name: key, dir: root.dirOf(key) }])
-        root.persistNotebookOrder()
-      }
-      root.rebuild()
-      // The tab this opens as: the new folder's own when each notebook is a
-      // tab, the one "Notes" tab that holds it when they fold — the host
-      // opens whichever key is answered (PROVIDERS.md).
-      if (cb) {
-        cb({ key: root.notebookTabs ? key : "notes", target: "section:" + key })
-      }
-    }
-  }
-
-  // Lists notebooks (folders) and their notes, oldest-first by birth time —
-  // see list.py for the D/O/B/N line format and the read policy (every file
-  // through readfile.py; symlinked notes and notebooks are not listed).
-  Process {
-    id: listProc
-    command: ["python3", root.listScript, root.notesRoot, String(root.maxListBytes)]
-    stdout: StdioCollector { onStreamFinished: root.loadList(this.text) }
+    var file = root.notesRoot + "/.notebooks"
+    mutate("order:" + file, function() {
+      var keys = root.notebooks.filter(function(book) { return !!book.key }).map(function(book) { return book.key })
+      return { action: "order", file: file, text: keys.join("\n") + "\n" }
+    }, function(result) {})
   }
 }

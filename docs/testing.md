@@ -1,7 +1,23 @@
 # Testing and development
 
-There is no test runner: the plugin lives inside a running desktop shell.
-What follows is how changes are actually verified.
+The aggregate runner exercises all ten suites without real accounts or note
+contents:
+
+```bash
+python3 tests/selftest.py
+python3 tests/selftest.py --host   # also compile and instantiate the host on Wayland
+```
+
+It requires Python, Qt's `qml6`, Quickshell (`qs`), `inotifywait`, the Omarchy
+shell components and the built native inspector (`sh cpp/build.sh`). Missing
+required dependencies, runtime crashes, QML errors and malformed results fail
+the run. The offscreen suites use the generic Qt platform theme so desktop
+theme integration cannot prevent document tests from starting.
+
+The transition suite starts a separate Quickshell with a temporary home,
+configuration, cache and notebooks. `--host` connects to the current Wayland
+compositor to load the host's window types; the host keeps its windows closed.
+It neither restarts nor alters the desktop shell.
 
 ## Development loop
 
@@ -76,6 +92,26 @@ QT_QPA_PLATFORM=offscreen QT_FORCE_STDERR_LOGGING=1 timeout 10 qml6 /tmp/t.qml
 
 `console.log` is swallowed by this runner; use `console.error`. `qml6` is the
 Qt 6 runner — plain `qml` is Qt 5 and will silently load nothing.
+
+## Testing asynchronous operations and filesystem failures
+
+```bash
+python3 tests/test_regressions.py
+python3 tests/transition_selftest.py [--host]
+```
+
+The Python cases verify complete UTF-8 reads, explicit failures, atomic write
+failure, missing notes, nonblocking image reads, lossless Notion text chunks,
+adaptive Markdown delimiters and agreement between the document adapters.
+
+The QML cases drive the actual editor, note-session controller, provider
+lifecycle, process runner and local provider. They control callback order to
+check A → B → A loads, stale formatting/paste callbacks, save failures after
+selection changes, failed deletes, and settings changes while writes drain.
+Real temporary files cover image-save ordering, confirmed mutations, byte
+limits and external inotify events immediately after the provider's own saves.
+Process cases cover startup failure, stdin delivery, malformed output, nonzero
+exit, cancellation, deadlines and exactly one callback.
 
 ## Testing the editor's document format
 
@@ -153,9 +189,9 @@ Each pins a bug that shipped, and was found by a review of the Python:
   first, so a refused insert — a 400 on a block Notion will not take, or the
   app being killed — left the page permanently empty. The test forces the
   insert to fail and asserts nothing was deleted.
-- **`providers/onenote/selftest.py`** — `graph_raw` is a second copy of the
-  decisions `msgraph.http` makes, so it is tested separately: the same 401
-  pass, and the gate that says whether a failure may be run again. A
+- **`providers/onenote/selftest.py`** — `graph_raw` and `msgraph.http` share
+  the bounded transport. This suite checks the raw wrapper's 401 refresh
+  and its caller's gate for whether a failure may be run again. A
   `kind: "transient"` re-runs the **whole job** three times, which is right
   for a page fetch or a body replace and wrong for anything that creates — a
   502 is the gateway losing the answer to a page Graph may already have made,
