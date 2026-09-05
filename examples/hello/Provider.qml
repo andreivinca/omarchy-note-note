@@ -39,15 +39,23 @@ Item {
   readonly property bool configured: owner.length > 0
   property var sections: []
 
-  function restoreState(obj) { if (obj) { root.owner = obj.owner || ""; root.notes = obj.notes || []; root.nextId = obj.nextId || 1 } }
+  function restoreState(obj) {
+    if (obj) {
+      root.owner = obj.owner || ""
+      root.notes = obj.notes || []
+      root.nextId = obj.nextId || 1
+    }
+  }
   function saveState() { return { owner: root.owner, notes: root.notes, nextId: root.nextId } }
 
   function rebuild() {
     var rows = []
-    if (!root.configured) rows.push({ kind: "action", path: "setup", title: "Set up…", icon: "󰒓" })
-    else {
-      for (var i = 0; i < root.notes.length; i++)
+    if (!root.configured) {
+      rows.push({ kind: "action", path: "setup", title: "Set up…", icon: "󰒓" })
+    } else {
+      for (var i = 0; i < root.notes.length; i++) {
         rows.push({ kind: "note", path: root.id + ":" + root.notes[i].id, title: root.notes[i].title, preview: root.notes[i].body.split("\n")[0] })
+      }
       rows.push({ kind: "new", path: "new" })
       rows.push({ kind: "action", path: "settings", title: "Settings…", icon: "󰒓" })
     }
@@ -60,7 +68,11 @@ Item {
 
   function noteAt(path) {
     var id = Number(path.substring(root.id.length + 1))
-    for (var i = 0; i < root.notes.length; i++) if (root.notes[i].id === id) return root.notes[i]
+    for (var i = 0; i < root.notes.length; i++) {
+      if (root.notes[i].id === id) {
+        return root.notes[i]
+      }
+    }
     return null
   }
   function crumb(path) { return "Hello, " + root.owner }
@@ -71,7 +83,10 @@ Item {
   function load(path, cb) { var n = noteAt(path); cb(n ? { title: n.title, body: n.body, editable: true } : { error: "unknown note" }) }
   function save(path, title, body, cb) {
     var n = noteAt(path)
-    if (n) { n.title = title; n.body = body }
+    if (n) {
+      n.title = title
+      n.body = body
+    }
     rebuild(); root.persistRequested()
     cb({})
   }
@@ -90,7 +105,9 @@ Item {
 
   // ── setup: the provider's own screen ────────────────────────────────
   function action(id) {
-    if (id === "setup" || id === "settings") root.viewRequested(root.configured ? "Hello — settings" : "Set up Hello", setupView, { current: root.owner })
+    if (id === "setup" || id === "settings") {
+      root.viewRequested(root.configured ? "Hello — settings" : "Set up Hello", setupView, { current: root.owner })
+    }
   }
 
   Component {
@@ -137,7 +154,10 @@ Item {
           accent: Color.accent
           onClicked: {
             var v = nameField.text.trim()
-            if (!v) { root.statusRequested("Hello: a name is required"); return }
+            if (!v) {
+              root.statusRequested("Hello: a name is required")
+              return
+            }
             root.owner = v
             root.persistRequested()
             root.viewCleared()

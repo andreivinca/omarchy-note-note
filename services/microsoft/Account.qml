@@ -42,7 +42,9 @@ Item {
   function refresh() { statusProc.running = true }
 
   function login() {
-    if (root.loggingIn) return
+    if (root.loggingIn) {
+      return
+    }
     root.loggingIn = true
     root.updated()
     loginProc.running = true
@@ -52,7 +54,9 @@ Item {
   // the browser to enter it can hide and reopen this app, which clears the
   // notice that showed it) or the user simply changed their mind.
   function cancelLogin() {
-    if (!root.loggingIn) return
+    if (!root.loggingIn) {
+      return
+    }
     root.reloginPending = false
     loginProc.running = false
   }
@@ -89,9 +93,14 @@ Item {
       onRead: function(line) {
         var msg
         try { msg = JSON.parse(line) } catch (e) { return }
-        if (msg.userCode) root.codeReceived(msg.userCode, msg.verificationUri)
-        else if (msg.ok) { root.loginSucceeded(); root.refresh() }
-        else if (msg.error) root.loginFailed(msg.error)
+        if (msg.userCode) {
+          root.codeReceived(msg.userCode, msg.verificationUri)
+        } else if (msg.ok) {
+          root.loginSucceeded()
+          root.refresh()
+        } else if (msg.error) {
+          root.loginFailed(msg.error)
+        }
       }
     }
     onExited: { root.loggingIn = false; root.updated() }
@@ -104,7 +113,10 @@ Item {
     onExited: {
       root.signedIn = false; root.account = ""; root.grantedScope = ""
       root.updated()
-      if (root.reloginPending) { root.reloginPending = false; root.login() }
+      if (root.reloginPending) {
+        root.reloginPending = false
+        root.login()
+      }
     }
   }
 }

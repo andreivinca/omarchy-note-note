@@ -59,9 +59,10 @@ Item {
     var r = Scheduler.enqueue(root.queue, {
       key: o.key, mode: o.mode, priority: o.priority, owner: o.owner,
       flush: o.flush, label: o.label, start: start, settled: settled })
-    if (r.superseded)
+    if (r.superseded) {
       root.answer(r.superseded, null, { superseded: true, cancelled: false,
                                         attempts: r.superseded.attempts })
+    }
     var job = r.job || r.joined
     root.bump()
     // Not dispatched inline: `start` would then run before the caller's own
@@ -75,9 +76,10 @@ Item {
   // its process is running either way and its callbacks travel with it.
   function cancelOwner(owner) {
     var dropped = Scheduler.cancelOwner(root.queue, owner)
-    for (var i = 0; i < dropped.length; i++)
+    for (var i = 0; i < dropped.length; i++) {
       root.answer(dropped[i], null, { superseded: false, cancelled: true,
                                       attempts: dropped[i].attempts })
+    }
     root.bump()
     Qt.callLater(root.pump)
   }
@@ -86,7 +88,9 @@ Item {
   function bump() { root.revision++; root.updated() }
 
   function call(fn, result, info) {
-    if (!fn) return
+    if (!fn) {
+      return
+    }
     // A provider's closure can outlive the provider (destroyed mid-flight), and
     // a throwing callback must not wedge the lane for everybody else.
     try { fn(result, info) }
@@ -98,16 +102,22 @@ Item {
   function answer(job, result, info) {
     var waiting = job.settled
     job.settled = []
-    for (var i = 0; i < waiting.length; i++) root.call(waiting[i], result, info)
+    for (var i = 0; i < waiting.length; i++) {
+      root.call(waiting[i], result, info)
+    }
   }
 
   function cancelHandle(job, settled) {
-    if (!job) return
+    if (!job) {
+      return
+    }
     if (job.settled.length > 1) {
       // This handle had joined an existing job (dedupe): only its own answer
       // goes away, and the job itself carries on for the others.
       var at = job.settled.indexOf(settled)
-      if (at >= 0) job.settled.splice(at, 1)
+      if (at >= 0) {
+        job.settled.splice(at, 1)
+      }
       root.call(settled, null, { superseded: false, cancelled: true, attempts: job.attempts })
       return
     }
@@ -119,7 +129,10 @@ Item {
   }
 
   function pump() {
-    if (root.pumping) { root.pumpAgain = true; return }   // a start() answered inline
+    if (root.pumping) {
+      root.pumpAgain = true
+      return
+    }   // a start() answered inline
     root.pumping = true
     try {
       do {
@@ -139,7 +152,10 @@ Item {
   }
 
   function dispatch(job, token) {
-    if (!job.start) { root.finish(job, token, { error: "nothing to run" }); return }
+    if (!job.start) {
+      root.finish(job, token, { error: "nothing to run" })
+      return
+    }
     var ctx = {
       key: job.key,
       label: job.label,
@@ -155,28 +171,37 @@ Item {
   }
 
   function finish(job, token, result) {
-    if (job.token !== token) return       // a repeated or late done(): already handled
+    if (job.token !== token) {
+      return  // a repeated or late done(): already handled
+    }
     var decided = Scheduler.onResult(root.queue, job, result, Date.now())
-    if (decided.action === "deliver")
+    if (decided.action === "deliver") {
       root.answer(job, result, { superseded: false, cancelled: false, attempts: job.attempts })
+    }
     root.bump()
     root.pump()
   }
 
   function scheduleWake() {
     var at = Scheduler.wakeAt(root.queue, Date.now())
-    if (at <= 0) { waker.stop(); return }
+    if (at <= 0) {
+      waker.stop()
+      return
+    }
     waker.interval = Math.max(50, at - Date.now())
     waker.restart()
   }
 
   onPausedChanged: {
     var dropped = Scheduler.setPaused(root.queue, root.paused)
-    for (var i = 0; i < dropped.length; i++)
+    for (var i = 0; i < dropped.length; i++) {
       root.answer(dropped[i], null, { superseded: false, cancelled: true,
                                       attempts: dropped[i].attempts })
+    }
     root.bump()
-    if (!root.paused) Qt.callLater(root.pump)
+    if (!root.paused) {
+      Qt.callLater(root.pump)
+    }
   }
 
   // Fires when the park (or a transient job's backoff) is over. `cooldownUntil`

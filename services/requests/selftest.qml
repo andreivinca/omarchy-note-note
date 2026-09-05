@@ -26,7 +26,9 @@ Item {
       onTriggered: {
         var run = shot.action
         shot.action = null
-        if (run) run()
+        if (run) {
+          run()
+        }
         Qt.callLater(function() { shot.destroy() })
       }
     }
@@ -190,7 +192,10 @@ Item {
   property int at: -1
   function next() {
     harness.at++
-    if (harness.at >= harness.scenarios.length) { harness.report(); return }
+    if (harness.at >= harness.scenarios.length) {
+      harness.report()
+      return
+    }
     harness.scenarios[harness.at]()
   }
 
@@ -250,10 +255,11 @@ Item {
 
   function dedupeThroughTheQueue() {
     var started = 0, answered = 0
-    for (var i = 0; i < 3; i++)
+    for (var i = 0; i < 3; i++) {
       lane.enqueue({ key: "list", mode: "dedupe", priority: 1 },
         function(ctx) { started++; harness.delay(10, function() { ctx.done({ ok: true }) }) },
         function() { answered++ })
+    }
     harness.delay(150, function() {
       harness.check("dedupe: the work runs once", started === 1, started)
       harness.check("dedupe: every caller is answered", answered === 3, answered)

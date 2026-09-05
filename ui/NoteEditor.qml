@@ -82,9 +82,15 @@ Item {
   // autosave, and an empty answer from a converter that died is not an empty
   // note — sending it would write nothing over everything.
   function requestMarkdown(callback) {
-    if (root.plain || !root.markdown) { callback(plainText(), true); return }
+    if (root.plain || !root.markdown) {
+      callback(plainText(), true)
+      return
+    }
     root.markdown.toMarkdown(documentHtml(), function(md, map) {
-      if (!map.ok) { callback("", false); return }
+      if (!map.ok) {
+        callback("", false)
+        return
+      }
       callback(md.replace(/(^|\n) \n?$/, "$1"), true)
     }, root.documentBase)
   }
@@ -116,7 +122,11 @@ Item {
     customView = component; customViewProps = props || ({})
     // Focus the view once it is in the scene (a forceActiveFocus() from the
     // component's own Component.onCompleted runs too early).
-    Qt.callLater(function() { if (customLoader.item) customLoader.item.forceActiveFocus() })
+    Qt.callLater(function() {
+      if (customLoader.item) {
+        customLoader.item.forceActiveFocus()
+      }
+    })
   }
   function clearView() { customView = null; customViewProps = ({}) }
   readonly property bool viewHasFocus: customLoader.item ? customLoader.item.activeFocus : false
@@ -129,7 +139,11 @@ Item {
   // (KeyEvent) -> bool. Runs before the inputs' own key handling so app
   // shortcuts win over TextEdit's built-in Ctrl+K / Ctrl+D bindings.
   property var shortcutHandler: null
-  function shortcut(event) { if (shortcutHandler && shortcutHandler(event)) event.accepted = true }
+  function shortcut(event) {
+    if (shortcutHandler && shortcutHandler(event)) {
+      event.accepted = true
+    }
+  }
 
   signal edited()
   // A short message for the host's status line.
@@ -157,16 +171,28 @@ Item {
     titleField.text = t
     titleField.cursorPosition = 0
     settingText = false
-    if (root.plain || !root.markdown || !body) { showBody(body || "", token); if (shown) shown(true); return }
+    if (root.plain || !root.markdown || !body) {
+      showBody(body || "", token)
+      if (shown) {
+        shown(true)
+      }
+      return
+    }
     root.markdown.toHtml(body, function(html, ok) {
-      if (token !== root.noteToken) return        // a newer note won the race
+      if (token !== root.noteToken) {
+        return  // a newer note won the race
+      }
       root.showBody(ok ? html : "", token)
-      if (shown) shown(ok)
+      if (shown) {
+        shown(ok)
+      }
     }, root.documentBase)
   }
 
   function showBody(document, token) {
-    if (token !== root.noteToken) return          // a newer note won the race
+    if (token !== root.noteToken) {
+      return  // a newer note won the race
+    }
     settingText = true
     area.text = document
     settingText = false
@@ -180,10 +206,14 @@ Item {
   // note: Markdown has no highlight of its own, and the providers already
   // translate the markers into each backend's own.
   function highlightSelection() {
-    if (root.readOnly || root.plain) return
+    if (root.readOnly || root.plain) {
+      return
+    }
     var from = Math.min(area.selectionStart, area.selectionEnd)
     var to = Math.max(area.selectionStart, area.selectionEnd)
-    if (from === to) return
+    if (from === to) {
+      return
+    }
     var fragment = inlineFragment(area.getFormattedText(from, to))
     var lit = withoutChip(fragment).indexOf("background-color") >= 0
     // The restyled copy goes in after the selection and the original comes
@@ -214,7 +244,9 @@ Item {
     f = f.replace(/^<p[^>]*-qt-paragraph-type:empty[^>]*>\s*<br\s*\/?>\s*<\/p>\s*(?=<[uo]l\b)/, "")
     var wrap = /^<(p|li|ul|ol|h[1-6]|blockquote|pre|table|tbody|tr|td|th)(\s[^>]*)?>([\s\S]*)<\/\1>$/
     for (var m = wrap.exec(f); m; m = wrap.exec(f)) {
-      if (m[3].indexOf("</" + m[1] + ">") >= 0) break
+      if (m[3].indexOf("</" + m[1] + ">") >= 0) {
+        break
+      }
       f = m[3].trim()
     }
     return f
@@ -243,20 +275,31 @@ Item {
   // Ctrl+V is ours only long enough to ask what the clipboard holds: a
   // picture is inserted as an image, anything else is the editor's own paste.
   function paste() {
-    if (root.readOnly) return
-    if (!root.clipboard || root.plain) { area.paste(); return }
+    if (root.readOnly) {
+      return
+    }
+    if (!root.clipboard || root.plain) {
+      area.paste()
+      return
+    }
     if (!root.canImages) {
       // Say so rather than swallowing the paste: a picture that lands nowhere
       // looks like the app is broken.
       root.clipboard.hasImage(function(isImage) {
-        if (isImage) root.statusRequestedText = "This notebook cannot store images"
-        else pasteRich()
+        if (isImage) {
+          root.statusRequestedText = "This notebook cannot store images"
+        } else {
+          pasteRich()
+        }
       })
       return
     }
     root.clipboard.takeImage(function(image) {
-      if (image) root.insertImage(image.path)
-      else pasteRich()
+      if (image) {
+        root.insertImage(image.path)
+      } else {
+        pasteRich()
+      }
     })
   }
 
@@ -273,14 +316,19 @@ Item {
   // paste after all.
   function pasteRich() {
     root.clipboard.takeHtml(function(html) {
-      if (!html) { area.paste(); return }
+      if (!html) {
+        area.paste()
+        return
+      }
       var from = Math.min(area.selectionStart, area.selectionEnd)
       var to = Math.max(area.selectionStart, area.selectionEnd)
       var before = area.length, added = 0
       atomic(function() {
         area.insert(to, html.replace(/<!--(Start|End)Fragment-->/g, ""))
         added = area.length - before
-        if (from !== to) area.remove(from, to)
+        if (from !== to) {
+          area.remove(from, to)
+        }
       })
       area.cursorPosition = from + added
       root.edited()
@@ -295,10 +343,17 @@ Item {
   // the selection removed second, the highlight's order, for the same
   // block-start reason. A clipboard with no text pastes nothing.
   function pastePlain() {
-    if (root.readOnly) return
-    if (!root.clipboard || root.plain) { area.paste(); return }
+    if (root.readOnly) {
+      return
+    }
+    if (!root.clipboard || root.plain) {
+      area.paste()
+      return
+    }
     root.clipboard.takeText(function(text) {
-      if (!text) return
+      if (!text) {
+        return
+      }
       var from = Math.min(area.selectionStart, area.selectionEnd)
       var to = Math.max(area.selectionStart, area.selectionEnd)
       var esc = text.replace(/\r\n?/g, "\n").replace(/&/g, "&amp;").replace(/</g, "&lt;")
@@ -307,7 +362,9 @@ Item {
       atomic(function() {
         area.insert(to, '<span style="white-space:pre;">' + esc + "</span>")
         added = area.length - before
-        if (from !== to) area.remove(from, to)
+        if (from !== to) {
+          area.remove(from, to)
+        }
       })
       area.cursorPosition = from + added
       root.edited()
@@ -315,7 +372,9 @@ Item {
   }
 
   function insertImage(path) {
-    if (root.readOnly || root.plain) return
+    if (root.readOnly || root.plain) {
+      return
+    }
     var at = area.cursorPosition
     // On its own line: a picture is a block of its own in every backend, and
     // the save can only leave it untouched if the text is not wrapped around
@@ -346,22 +405,41 @@ Item {
     // The image the editor just put in may have landed at the start of an
     // item; scan forward for it from the insertion point.
     var text = area.getText(pos, Math.min(pos + 4, area.length)), i = text.indexOf(root.objectChar)
-    if (i < 0) return
+    if (i < 0) {
+      return
+    }
     var at = pos + i
-    if (atBlockStart(at) && inListItem(at)) { area.insert(at, root.imageLead); area.cursorPosition = at + 2 }
+    if (atBlockStart(at) && inListItem(at)) {
+      area.insert(at, root.imageLead)
+      area.cursorPosition = at + 2
+    }
   }
   // Enter with the caret right before an image: the image would open the
   // new item. Put the space in first, with the caret still before it, so
   // Qt's own Enter splits the block ahead of both.
   function beforeReturn() {
     var at = area.cursorPosition
-    if (area.selectionStart !== area.selectionEnd) return
-    if (area.getText(at, at + 1) !== root.objectChar || !inListItem(at)) return
+    if (area.selectionStart !== area.selectionEnd) {
+      return
+    }
+    if (area.getText(at, at + 1) !== root.objectChar || !inListItem(at)) {
+      return
+    }
     area.insert(at, root.imageLead)
     area.cursorPosition = at
   }
-  function undo() { if (area.canUndo) { area.undo(); root.edited() } }
-  function redo() { if (area.canRedo) { area.redo(); root.edited() } }
+  function undo() {
+    if (area.canUndo) {
+      area.undo()
+      root.edited()
+    }
+  }
+  function redo() {
+    if (area.canRedo) {
+      area.redo()
+      root.edited()
+    }
+  }
 
   // One tool, one undo step. A tool edits in strokes — highlight inserts
   // the restyled copy and then removes the original, a block tool removes
@@ -375,8 +453,13 @@ Item {
   // strokes again — the one degradation of the fallback.
   function atomic(edit) {
     var nb = nativeBlocks.item
-    if (!nb) { edit(); return }
-    if (!nb.document) nb.document = area.textDocument
+    if (!nb) {
+      edit()
+      return
+    }
+    if (!nb.document) {
+      nb.document = area.textDocument
+    }
     nb.beginEditBlock()
     try { edit() } finally { nb.endEditBlock() }
   }
@@ -402,9 +485,13 @@ Item {
   // edits, so ctrl+z still walks back through toolbar actions — and the pair
   // is fenced by atomic(), so it walks them one whole action at a time.
   function withMarkdown(edit) {
-    if (root.readOnly || root.plain || !root.markdown) return
+    if (root.readOnly || root.plain || !root.markdown) {
+      return
+    }
     root.markdown.toMarkdown(documentHtml(), function(md, map) {
-      if (!map.ok) return                         // a failed conversion changes nothing
+      if (!map.ok) {
+        return  // a failed conversion changes nothing
+      }
       edit(md.replace(/\n+$/, "").split("\n"), map)
     }, root.documentBase)
   }
@@ -415,7 +502,9 @@ Item {
     var text = area.getText(0, Math.max(0, pos)), count = 0
     for (var i = 0; i < text.length; i++) {
       var code = text.charCodeAt(i)
-      if (code === 0x2029 || code === 0xFDD0) count++
+      if (code === 0x2029 || code === 0xFDD0) {
+        count++
+      }
     }
     return count
   }
@@ -423,7 +512,11 @@ Item {
   // Which Markdown line that block is written on.
   function lineOfBlock(map, block) {
     var blocks = map.blocks || []
-    for (var i = 0; i < blocks.length; i++) if (blocks[i] === block) return i
+    for (var i = 0; i < blocks.length; i++) {
+      if (blocks[i] === block) {
+        return i
+      }
+    }
     return Math.max(0, blocks.length - 1)
   }
   function lineAt(map, pos) { return lineOfBlock(map, blockAt(pos)) }
@@ -435,7 +528,9 @@ Item {
   function replaceDoc(md, caret, then) {
     var pos = caret === undefined ? area.cursorPosition : (caret < 0 ? Number.MAX_VALUE : caret)
     root.markdown.toHtml(md, function(html, ok) {
-      if (!ok) return                             // a failed conversion changes nothing
+      if (!ok) {
+        return  // a failed conversion changes nothing
+      }
       atomic(function() {
         area.remove(0, area.length)
         area.insert(0, html)
@@ -443,7 +538,9 @@ Item {
       area.cursorPosition = Math.max(0, Math.min(pos, area.length))
       root.edited()
       focusEditor()
-      if (then) then()
+      if (then) {
+        then()
+      }
     }, root.documentBase)
   }
 
@@ -465,30 +562,52 @@ Item {
       var itemRx = /^\s*([-*+]|\d+[.)])[ \t]/
       var out = [], prevItem = false, prevFreed = false
       for (var i = 0; i < lines.length; i++) {
-        if (/^\s*```/.test(lines[i])) { inFence = !inFence; out.push(lines[i]); prevItem = false; prevFreed = false; continue }
+        if (/^\s*```/.test(lines[i])) {
+          inFence = !inFence
+          out.push(lines[i])
+          prevItem = false
+          prevFreed = false
+          continue
+        }
         // table rows and fenced code are never restyled: it would corrupt them
-        if (i < first || i > last || inFence || /^\s*\|/.test(lines[i])) { out.push(lines[i]); prevItem = false; prevFreed = false; continue }
+        if (i < first || i > last || inFence || /^\s*\|/.test(lines[i])) {
+          out.push(lines[i])
+          prevItem = false
+          prevFreed = false
+          continue
+        }
         if (isList && lines[i] === "") {
           var j = i + 1
-          while (j <= last && j < lines.length && lines[j] === "") j++
+          while (j <= last && j < lines.length && lines[j] === "") {
+            j++
+          }
           if (prevItem && j <= last && j < lines.length && !/^\s*(```|\|)/.test(lines[j])
-              && itemRx.test(restyleLine(lines[j], style))) { changed = true; continue }
+              && itemRx.test(restyleLine(lines[j], style))) {
+            changed = true
+            continue
+          }
           out.push(lines[i]); prevItem = false; prevFreed = false; continue
         }
         var next = restyleLine(lines[i], style)
-        if (next !== lines[i]) changed = true
+        if (next !== lines[i]) {
+          changed = true
+        }
         // The toggle's other direction: two adjacent items freed of their
         // markers are two paragraphs, and paragraphs need the separator a
         // tight list never had — without it Markdown lazily reads them as
         // one line.
         var freed = isList && itemRx.test(lines[i]) && !itemRx.test(next)
-        if (freed && prevFreed) out.push("")
+        if (freed && prevFreed) {
+          out.push("")
+        }
         out.push(next)
         prevItem = isList && itemRx.test(next)
         prevFreed = freed
       }
       if (!changed) {
-        if (style === "indent") root.statusRequestedText = "A nested list item needs one above it"
+        if (style === "indent") {
+          root.statusRequestedText = "A nested list item needs one above it"
+        }
         return
       }
       replaceDoc(out.join("\n"), caret)
@@ -510,15 +629,24 @@ Item {
   function updateInTable() {
     // getText() ranges are table-granular (a range touching a table returns
     // the whole table), so scan the full text; positions match the caret's.
-    if (area.length > 200000) { root.inTable = false; return }
+    if (area.length > 200000) {
+      root.inTable = false
+      return
+    }
     var t = area.getText(0, area.length), pos = area.cursorPosition
     var seps = [root.sep, root.cellSep, root.tableEnd, "\n"]
     var before = -1, beforeChar = "", after = t.length, afterChar = ""
     for (var i = 0; i < seps.length; i++) {
       var k = t.lastIndexOf(seps[i], pos - 1)
-      if (k > before) { before = k; beforeChar = seps[i] }
+      if (k > before) {
+        before = k
+        beforeChar = seps[i]
+      }
       var j = t.indexOf(seps[i], pos)
-      if (j >= 0 && j < after) { after = j; afterChar = seps[i] }
+      if (j >= 0 && j < after) {
+        after = j
+        afterChar = seps[i]
+      }
     }
     root.inTable = beforeChar === root.cellSep && (afterChar === root.cellSep || afterChar === root.tableEnd)
   }
@@ -566,14 +694,18 @@ Item {
   // the same frame as the edit. The HTML-scan fallback serialises the whole
   // document, so it keeps the debounce (and huge notes take it too).
   function scheduleDecorations() {
-    if (nativeBlocks.item && area.length <= 200000) updateDecorations()
-    else decorTimer.restart()
+    if (nativeBlocks.item && area.length <= 200000) {
+      updateDecorations()
+    } else {
+      decorTimer.restart()
+    }
   }
   Loader {
     id: nativeBlocks
     source: "NativeBlocks.qml"
-    onStatusChanged: if (status === Loader.Error)
+    onStatusChanged: if (status === Loader.Error) {
       console.log("note-note: native text inspector not built (sh cpp/build.sh); scanning HTML instead")
+    }
   }
 
   // The native marker's cell, measured the way Qt Quick lays it out: the
@@ -598,24 +730,38 @@ Item {
   // edits of their own.
   property bool normalizing: false
   function normalizeNow() {
-    if (root.normalizing || root.plain || root.readOnly || !nativeBlocks.item) return
-    if (!nativeBlocks.item.document) nativeBlocks.item.document = area.textDocument
+    if (root.normalizing || root.plain || root.readOnly || !nativeBlocks.item) {
+      return
+    }
+    if (!nativeBlocks.item.document) {
+      nativeBlocks.item.document = area.textDocument
+    }
     root.normalizing = true
     nativeBlocks.item.normalizeListMargins()
     nativeBlocks.item.normalizeLineHeights()
     var filled = nativeBlocks.item.fillEmptyBlocksBeforeTables()
     root.normalizing = false
-    if (filled >= 0 && area.cursorPosition === filled + 1) area.cursorPosition = filled
+    if (filled >= 0 && area.cursorPosition === filled + 1) {
+      area.cursorPosition = filled
+    }
   }
 
   function updateDecorations() {
-    if (root.plain) { root.quoteBars = []; root.codeSlabs = []; root.imageBoxes = []; root.checkBoxes = []; return }
+    if (root.plain) {
+      root.quoteBars = []
+      root.codeSlabs = []
+      root.imageBoxes = []
+      root.checkBoxes = []
+      return
+    }
     var runs, boxes
     // The native path runs even on an empty document: a note can hold no
     // characters and still be one checkbox block (docs/engine-notes.md),
     // and that box deserves its drawn face too.
     if (nativeBlocks.item) {
-      if (!nativeBlocks.item.document) nativeBlocks.item.document = area.textDocument
+      if (!nativeBlocks.item.document) {
+        nativeBlocks.item.document = area.textDocument
+      }
       var bs = nativeBlocks.item.blocks()
       runs = QuoteBars.runsFromBlocks(bs)
       boxes = QuoteBars.boxesFromBlocks(bs)
@@ -624,10 +770,19 @@ Item {
       var html = area.getFormattedText(0, area.length), text = area.getText(0, area.length)
       runs = QuoteBars.runs(html, text)
       boxes = QuoteBars.boxes(html, text)
-    } else { root.quoteBars = []; root.codeSlabs = []; root.checkBoxes = []; return }
+    } else {
+      root.quoteBars = []
+      root.codeSlabs = []
+      root.checkBoxes = []
+      return
+    }
     var bars = [], slabs = [], marks = [], i
-    for (i = 0; i < runs.quote.length; i++) bars.push(root.barGeometry(runs.quote[i].from, runs.quote[i].to))
-    for (i = 0; i < runs.code.length; i++) slabs.push(root.slabGeometry(runs.code[i].from, runs.code[i].to))
+    for (i = 0; i < runs.quote.length; i++) {
+      bars.push(root.barGeometry(runs.quote[i].from, runs.quote[i].to))
+    }
+    for (i = 0; i < runs.code.length; i++) {
+      slabs.push(root.slabGeometry(runs.code[i].from, runs.code[i].to))
+    }
     for (i = 0; i < boxes.length; i++) {
       var r = area.positionToRectangle(boxes[i].position)
       marks.push({ position: boxes[i].position, checked: boxes[i].checked, x: r.x, y: r.y })
@@ -673,7 +828,9 @@ Item {
     var images = nativeBlocks.item.images(), out = []
     for (var i = 0; i < images.length; i++) {
       var img = images[i]
-      if (!(img.width > 0) || !(img.height > 0)) continue   // not loaded yet
+      if (!(img.width > 0) || !(img.height > 0)) {
+        continue  // not loaded yet
+      }
       // The caret rectangle before the image is its left edge and its
       // line's top; the image's bottom sits on its own baseline (ascent).
       var r = area.positionToRectangle(img.position)
@@ -684,9 +841,15 @@ Item {
   }
 
   function resizeImage(position, width) {
-    if (root.readOnly || root.plain || !nativeBlocks.item) return
-    if (!nativeBlocks.item.document) nativeBlocks.item.document = area.textDocument
-    if (!nativeBlocks.item.setImageWidth(position, width)) return
+    if (root.readOnly || root.plain || !nativeBlocks.item) {
+      return
+    }
+    if (!nativeBlocks.item.document) {
+      nativeBlocks.item.document = area.textDocument
+    }
+    if (!nativeBlocks.item.setImageWidth(position, width)) {
+      return
+    }
     root.updateDecorations()
     root.edited()
   }
@@ -696,17 +859,24 @@ Item {
   // the converter recognises it — so an untouched paste keeps the note
   // clean, and the handle is how a width becomes the author's own.
   function fitImageAt(pos) {
-    if (!nativeBlocks.item) return                // pasted large, capped on reload
-    if (!nativeBlocks.item.document) nativeBlocks.item.document = area.textDocument
+    if (!nativeBlocks.item) {
+      return  // pasted large, capped on reload
+    }
+    if (!nativeBlocks.item.document) {
+      nativeBlocks.item.document = area.textDocument
+    }
     var text = area.getText(pos, Math.min(pos + 4, area.length)), i = text.indexOf(root.objectChar)
-    if (i < 0) return
+    if (i < 0) {
+      return
+    }
     var images = nativeBlocks.item.images()
-    for (var k = 0; k < images.length; k++)
+    for (var k = 0; k < images.length; k++) {
       if (images[k].position === pos + i && images[k].naturalWidth > root.maxImageDisplay) {
         // Joined to the paste's own edit, so one Ctrl+Z takes both.
         nativeBlocks.item.setImageWidth(pos + i, root.maxImageDisplay, true)
         return
       }
+    }
   }
 
   function restyleLine(line, style) {
@@ -736,14 +906,24 @@ Item {
   // block or a single line): snippets go after it, never inside.
   function blockEndLine(lines, i) {
     if (/^\s*\|/.test(lines[i])) {
-      while (i + 1 < lines.length && /^\s*\|/.test(lines[i + 1])) i++
+      while (i + 1 < lines.length && /^\s*\|/.test(lines[i + 1])) {
+        i++
+      }
       return i
     }
     var fences = 0
-    for (var f = 0; f < i; f++) if (/^\s*```/.test(lines[f])) fences++
+    for (var f = 0; f < i; f++) {
+      if (/^\s*```/.test(lines[f])) {
+        fences++
+      }
+    }
     if (fences % 2 === 1 || /^\s*```/.test(lines[i])) {
-      while (i + 1 < lines.length && !/^\s*```/.test(lines[i + 1])) i++
-      if (i + 1 < lines.length) i++
+      while (i + 1 < lines.length && !/^\s*```/.test(lines[i + 1])) {
+        i++
+      }
+      if (i + 1 < lines.length) {
+        i++
+      }
     }
     return i
   }
@@ -760,7 +940,11 @@ Item {
     withMarkdown(function(lines, map) {
       var i = Math.min(caretLine(map), lines.length - 1)
       var fences = 0
-      for (var f = 0; f < i; f++) if (/^\s*```/.test(lines[f])) fences++
+      for (var f = 0; f < i; f++) {
+        if (/^\s*```/.test(lines[f])) {
+          fences++
+        }
+      }
       var onEmpty = fences % 2 === 0 && lines[i] === ""
       var at = onEmpty ? i : blockEndLine(lines, i)
       var rest = lines.slice(at + 1)
@@ -787,12 +971,17 @@ Item {
       var rest = lines.slice(at + 1)
       var atEnd = rest.join("").trim() === ""
       var out = lines.slice(0, at + 1).concat(["", "```", "", "```", ""])
-      if (!atEnd) out = out.concat(rest)
+      if (!atEnd) {
+        out = out.concat(rest)
+      }
       // The new block lands right after the last document block at or before
       // the insertion line; fence lines and blanks own no block (NO_BLOCK).
       var block = -1
-      for (var i = 0; i <= at && i < (map.blocks || []).length; i++)
-        if (map.blocks[i] > block) block = map.blocks[i]
+      for (var i = 0; i <= at && i < (map.blocks || []).length; i++) {
+        if (map.blocks[i] > block) {
+          block = map.blocks[i]
+        }
+      }
       replaceDoc(out.join("\n"), area.cursorPosition, function() { selectBlock(block + 1) })
     })
   }
@@ -803,7 +992,10 @@ Item {
     var t = area.getText(0, area.length), n = 0, start = 0
     for (var i = 0; i < t.length && n < block; i++) {
       var c = t.charCodeAt(i)
-      if (c === 0x2029 || c === 0xFDD0) { n++; start = i + 1 }
+      if (c === 0x2029 || c === 0xFDD0) {
+        n++
+        start = i + 1
+      }
     }
     return start
   }
@@ -830,13 +1022,19 @@ Item {
     var t = area.getText(0, area.length)
     var kind = "", next = "", start = -1, end = -1
     if (nativeBlocks.item) {
-      if (!nativeBlocks.item.document) nativeBlocks.item.document = area.textDocument
+      if (!nativeBlocks.item.document) {
+        nativeBlocks.item.document = area.textDocument
+      }
       var bs = nativeBlocks.item.blocks()
       for (var i = 0; i < bs.length; i++) {
-        if (pos < bs[i].position || pos > bs[i].end) continue
+        if (pos < bs[i].position || pos > bs[i].end) {
+          continue
+        }
         start = bs[i].position; end = bs[i].end
         kind = bs[i].list ? "list" : QuoteBars.kindOfBlock(bs[i])
-        if (i + 1 < bs.length) next = bs[i + 1].list ? "list" : QuoteBars.kindOfBlock(bs[i + 1])
+        if (i + 1 < bs.length) {
+          next = bs[i + 1].list ? "list" : QuoteBars.kindOfBlock(bs[i + 1])
+        }
         break
       }
     } else if (area.length <= 200000) {
@@ -844,14 +1042,26 @@ Item {
       start = 0; end = t.length
       for (var j = 0; j < t.length; j++) {
         var c = t.charCodeAt(j)
-        if (c !== 0x2029 && c !== 0xFDD0) continue
-        if (j < pos) { n++; start = j + 1 } else { end = j; break }
+        if (c !== 0x2029 && c !== 0xFDD0) {
+          continue
+        }
+        if (j < pos) {
+          n++
+          start = j + 1
+        } else {
+          end = j
+          break
+        }
       }
       var ks = QuoteBars.kinds(area.getFormattedText(0, area.length))
       kind = inListItem(pos) ? "list" : (ks[n] || "")
-      if (end < t.length) next = inListItem(end + 1) ? "list" : (ks[n + 1] || "")
+      if (end < t.length) {
+        next = inListItem(end + 1) ? "list" : (ks[n + 1] || "")
+      }
     }
-    if (start < 0) return null
+    if (start < 0) {
+      return null
+    }
     var text = t.substring(start, end)
     return { kind: kind, empty: text === "" || text === root.imageLead, last: next !== kind }
   }
@@ -863,11 +1073,19 @@ Item {
   // rule format onto the new line — two rules where the user asked for a
   // paragraph.
   function returnLeavesBlock() {
-    if (root.readOnly || root.plain || area.selectionStart !== area.selectionEnd) return false
-    if (root.tableReturn()) return true
+    if (root.readOnly || root.plain || area.selectionStart !== area.selectionEnd) {
+      return false
+    }
+    if (root.tableReturn()) {
+      return true
+    }
     var b = blockInfoAt(area.cursorPosition)
-    if (!b || !b.empty || !b.kind) return false
-    if (b.kind !== "list" && b.kind !== "rule" && !b.last) return false
+    if (!b || !b.empty || !b.kind) {
+      return false
+    }
+    if (b.kind !== "list" && b.kind !== "rule" && !b.last) {
+      return false
+    }
     root.leaveBlock(b.kind)
     return true
   }
@@ -882,16 +1100,28 @@ Item {
     // down by typing before it). Read the full text and index it: a ranged
     // getText touching a table answers with the whole table (updateInTable).
     var pos = area.cursorPosition
-    if (pos <= 0 || pos >= area.length) return false
+    if (pos <= 0 || pos >= area.length) {
+      return false
+    }
     var t = area.getText(0, area.length)
     var sep = function(c) { return c === 0x2029 || c === 0xFDD0 || c === 0xFDD1 }
     var start = pos, end = pos
-    while (start > 0 && !sep(t.charCodeAt(start - 1))) start--
-    while (end < t.length && !sep(t.charCodeAt(end))) end++
-    if (start === 0 || end === t.length) return false
-    if (t.charCodeAt(start - 1) !== 0x2029 || t.charCodeAt(end) !== 0xFDD1) return false
+    while (start > 0 && !sep(t.charCodeAt(start - 1))) {
+      start--
+    }
+    while (end < t.length && !sep(t.charCodeAt(end))) {
+      end++
+    }
+    if (start === 0 || end === t.length) {
+      return false
+    }
+    if (t.charCodeAt(start - 1) !== 0x2029 || t.charCodeAt(end) !== 0xFDD1) {
+      return false
+    }
     var body = t.substring(start, end)
-    if (body !== "" && body !== root.imageLead) return false
+    if (body !== "" && body !== root.imageLead) {
+      return false
+    }
     root.leaveTableRow()
     return true
   }
@@ -900,12 +1130,18 @@ Item {
     withMarkdown(function(lines, map) {
       var cellBlock = blockAt(area.cursorPosition) - 1   // the extra line adds one
       var last = lineOfBlock(map, cellBlock)
-      if (!/^\s*\|/.test(lines[last] || "")) return
+      if (!/^\s*\|/.test(lines[last] || "")) {
+        return
+      }
       var first = last
-      while (first > 0 && /^\s*\|/.test(lines[first - 1])) first--
+      while (first > 0 && /^\s*\|/.test(lines[first - 1])) {
+        first--
+      }
       var cols = splitRow(lines[first]).length
       var cells = []
-      for (var k = 0; k < cols; k++) cells.push("")
+      for (var k = 0; k < cols; k++) {
+        cells.push("")
+      }
       var out = lines.slice(0, last + 1).concat([joinRow(cells)], lines.slice(last + 1))
       // a row's line carries its first cell's block; the new row's first
       // cell comes one row of cells later
@@ -926,9 +1162,13 @@ Item {
       if (kind === "code") {
         // the caret's line is the fence's empty last line; it comes out,
         // and the blank goes in after the closing fence
-        if (out[i] !== "") return
+        if (out[i] !== "") {
+          return
+        }
         out.splice(i, 1)
-        if (!/^\s*```/.test(out[i] || "")) return
+        if (!/^\s*```/.test(out[i] || "")) {
+          return
+        }
         out.splice(i + 1, 0, "", " ", "")
       } else if (kind === "list") {
         out.splice(i, 1, "", " ", "")
@@ -943,7 +1183,9 @@ Item {
       // time): re-rendering the markdown is the whole edit
       replaceDoc(out.join("\n"), area.cursorPosition, function() {
         selectBlock(target)
-        if (!seed) return
+        if (!seed) {
+          return
+        }
         // the seed replaces the landing's filler, as literal text — the
         // highlight's insert-then-remove order, for the same block reason
         var from = Math.min(area.selectionStart, area.selectionEnd)
@@ -961,8 +1203,12 @@ Item {
   // ── tables ──────────────────────────────────────────────────────────
   function splitRow(line) {
     var t = line.trim()
-    if (t.charAt(0) === "|") t = t.substring(1)
-    if (t.charAt(t.length - 1) === "|") t = t.substring(0, t.length - 1)
+    if (t.charAt(0) === "|") {
+      t = t.substring(1)
+    }
+    if (t.charAt(t.length - 1) === "|") {
+      t = t.substring(0, t.length - 1)
+    }
     // no regex lookbehind in the QML engine: protect escaped pipes by hand
     return t.split("\\|").join("\u0001").split("|").map(function(c) { return c.split("\u0001").join("\\|") })
   }
@@ -973,39 +1219,74 @@ Item {
     var t = area.getText(0, area.length), caret = area.cursorPosition
     var prev = Math.max(t.lastIndexOf(root.sep, caret - 1), t.lastIndexOf(root.tableEnd, caret - 1))
     var start = t.indexOf(root.cellSep, prev + 1)
-    if (start < 0 || start > caret) return -1
+    if (start < 0 || start > caret) {
+      return -1
+    }
     var n = -1                                   // the leading separator is not a cell
-    for (var i = start; i < caret; i++) if (t.charAt(i) === root.cellSep) n++
+    for (var i = start; i < caret; i++) {
+      if (t.charAt(i) === root.cellSep) {
+        n++
+      }
+    }
     return Math.max(0, n)
   }
 
   function tableOp(op) {
-    if (!root.inTable) { root.statusRequestedText = "Put the cursor in a table cell first"; return }
+    if (!root.inTable) {
+      root.statusRequestedText = "Put the cursor in a table cell first"
+      return
+    }
     withMarkdown(function(lines, map) { root.rewriteTable(op, lines, map) })
   }
 
   function rewriteTable(op, lines, map) {
     var at = Math.min(caretLine(map), lines.length - 1)
-    while (at >= 0 && !/^\s*\|/.test(lines[at])) at--
-    if (at < 0) return
+    while (at >= 0 && !/^\s*\|/.test(lines[at])) {
+      at--
+    }
+    if (at < 0) {
+      return
+    }
     var first = at, last = at
-    while (first > 0 && /^\s*\|/.test(lines[first - 1])) first--
-    while (last + 1 < lines.length && /^\s*\|/.test(lines[last + 1])) last++
+    while (first > 0 && /^\s*\|/.test(lines[first - 1])) {
+      first--
+    }
+    while (last + 1 < lines.length && /^\s*\|/.test(lines[last + 1])) {
+      last++
+    }
     var rows = lines.slice(first, last + 1).map(splitRow), cols = rows[0].length
     var cell = caretCell()
     var rowIdx = cell < 0 ? 0 : Math.floor(cell / cols), colIdx = cell < 0 ? 0 : cell % cols
-    if (rowIdx > 0) rowIdx += 1                  // the separator row is not a document row
-    var blank = function(n) { var out = []; for (var k = 0; k < n; k++) out.push(""); return out }
+    if (rowIdx > 0) {
+      rowIdx += 1  // the separator row is not a document row
+    }
+    var blank = function(n) {
+      var out = []
+      for (var k = 0; k < n; k++) {
+        out.push("")
+      }
+      return out
+    }
     if (op === "addRow") {
       rows.splice((rowIdx === 0 ? 1 : rowIdx) + 1, 0, blank(cols))
     } else if (op === "addCol") {
-      for (var r2 = 0; r2 < rows.length; r2++) rows[r2].push(r2 === 1 ? "---" : "")
+      for (var r2 = 0; r2 < rows.length; r2++) {
+        rows[r2].push(r2 === 1 ? "---" : "")
+      }
     } else if (op === "delRow") {
-      if (rowIdx <= 1) { root.statusRequestedText = "The header row stays"; return }
+      if (rowIdx <= 1) {
+        root.statusRequestedText = "The header row stays"
+        return
+      }
       rows.splice(rowIdx, 1)
     } else if (op === "delCol") {
-      if (cols <= 1) { root.statusRequestedText = "A table needs at least one column"; return }
-      for (var r3 = 0; r3 < rows.length; r3++) rows[r3].splice(colIdx, 1)
+      if (cols <= 1) {
+        root.statusRequestedText = "A table needs at least one column"
+        return
+      }
+      for (var r3 = 0; r3 < rows.length; r3++) {
+        rows[r3].splice(colIdx, 1)
+      }
     }
     var rebuilt = rows.map(function(cells, k) {
       return k === 1 ? "|" + cells.map(function() { return "---" }).join("|") + "|" : joinRow(cells)
@@ -1021,10 +1302,14 @@ Item {
   // style is visible the moment the tool is used. Same insert-then-remove
   // order as highlightSelection, for the same list-item reason.
   function toggleCode() {
-    if (root.readOnly || root.plain) return
+    if (root.readOnly || root.plain) {
+      return
+    }
     var from = Math.min(area.selectionStart, area.selectionEnd)
     var to = Math.max(area.selectionStart, area.selectionEnd)
-    if (from === to) return
+    if (from === to) {
+      return
+    }
     var fragment = inlineFragment(area.getFormattedText(from, to))
     var mono = /font-family:[^;"]*mono/i.test(fragment)
     atomic(function() {
@@ -1052,9 +1337,15 @@ Item {
   // This dispatcher is the one thing the key handler asks; a new trap adds
   // its escape here, not another branch in the handler.
   function escapeForward() {
-    if (root.readOnly || root.plain) return false
-    if (area.selectionStart !== area.selectionEnd) return false
-    if (escapeCode()) return true
+    if (root.readOnly || root.plain) {
+      return false
+    }
+    if (area.selectionStart !== area.selectionEnd) {
+      return false
+    }
+    if (escapeCode()) {
+      return true
+    }
     return escapeRule()
   }
 
@@ -1064,9 +1355,13 @@ Item {
   // a fresh blank paragraph behind the rule.
   function escapeRule() {
     var pos = area.cursorPosition
-    if (pos < area.length) return false        // something follows; Qt's own Right serves
+    if (pos < area.length) {
+      return false  // something follows; Qt's own Right serves
+    }
     var b = blockInfoAt(pos)
-    if (!b || b.kind !== "rule") return false
+    if (!b || b.kind !== "rule") {
+      return false
+    }
     leaveBlock("rule")
     return true
   }
@@ -1078,16 +1373,30 @@ Item {
   // one-character reads keep the common case cheap: only a caret sitting
   // in an *empty* block goes on to the full block lookup.
   function typeLeavesRule(text) {
-    if (root.readOnly || root.plain) return false
-    if (area.selectionStart !== area.selectionEnd) return false
-    if (!text) return false
+    if (root.readOnly || root.plain) {
+      return false
+    }
+    if (area.selectionStart !== area.selectionEnd) {
+      return false
+    }
+    if (!text) {
+      return false
+    }
     var c = text.charCodeAt(0)
-    if (c < 0x20 || c === 0x7f) return false   // backspace, delete and friends ride event.text too
+    if (c < 0x20 || c === 0x7f) {
+      return false  // backspace, delete and friends ride event.text too
+    }
     var pos = area.cursorPosition
-    if (!atBlockStart(pos)) return false
-    if (pos < area.length && area.getText(pos, pos + 1) !== root.sep) return false
+    if (!atBlockStart(pos)) {
+      return false
+    }
+    if (pos < area.length && area.getText(pos, pos + 1) !== root.sep) {
+      return false
+    }
     var b = blockInfoAt(pos)
-    if (!b || b.kind !== "rule") return false
+    if (!b || b.kind !== "rule") {
+      return false
+    }
     leaveBlock("rule", text)
     return true
   }
@@ -1106,15 +1415,25 @@ Item {
   // is refused by the mono test: the character before the caret is now
   // the plain space itself.
   function escapeCode() {
-    if (root.readOnly || root.plain) return false
-    if (area.selectionStart !== area.selectionEnd) return false
+    if (root.readOnly || root.plain) {
+      return false
+    }
+    if (area.selectionStart !== area.selectionEnd) {
+      return false
+    }
     var pos = area.cursorPosition
-    if (pos === 0 || pos < area.length) return false
-    if (!/font-family:[^;"]*mono/i.test(area.getFormattedText(pos - 1, pos))) return false
+    if (pos === 0 || pos < area.length) {
+      return false
+    }
+    if (!/font-family:[^;"]*mono/i.test(area.getFormattedText(pos - 1, pos))) {
+      return false
+    }
     // A code block's lines are mono too, and must stay all-mono or the
     // block stops being one (reader): the escape is inline code's only.
     var b = blockInfoAt(pos)
-    if (b && b.kind === "code") return false
+    if (b && b.kind === "code") {
+      return false
+    }
     area.insert(pos, '<span style="white-space:pre;"> </span>')
     area.cursorPosition = area.length
     root.edited()
@@ -1123,7 +1442,9 @@ Item {
 
   property bool linkBarOpen: false
   function openLinkBar() {
-    if (root.readOnly || root.plain) return
+    if (root.readOnly || root.plain) {
+      return
+    }
     root.linkBarOpen = true
     linkText.text = area.selectedText
     linkUrl.text = "https://"
@@ -1132,10 +1453,15 @@ Item {
   function insertLink() {
     var url = linkUrl.text.trim(), text = linkText.text.trim() || url
     root.linkBarOpen = false
-    if (!url) { focusEditor(); return }
+    if (!url) {
+      focusEditor()
+      return
+    }
     var s = area.selectionStart, e = area.selectionEnd
     atomic(function() {
-      if (s !== e) area.remove(Math.min(s, e), Math.max(s, e))
+      if (s !== e) {
+        area.remove(Math.min(s, e), Math.max(s, e))
+      }
       // Same colour the converter gives a link, so one typed here and one
       // that came from the note look alike before any reload.
       area.insert(Math.min(s, e), '<a href="' + url.replace(/"/g, "%22") + '" style="color:'
@@ -1146,7 +1472,9 @@ Item {
   }
 
   function tool(id) {
-    if (!toolEnabled(["addRow", "addCol", "delRow", "delCol"].indexOf(id) >= 0 ? "table" : id)) return
+    if (!toolEnabled(["addRow", "addCol", "delRow", "delCol"].indexOf(id) >= 0 ? "table" : id)) {
+      return
+    }
     switch (id) {
       case "bold": case "italic": case "underline": case "strikeout": toggleFormat(id); break
       case "highlight": highlightSelection(); break
@@ -1181,7 +1509,9 @@ Item {
   function clearPending() { pending = null; pendingCursor = -1 }
 
   function toggleFormat(kind) {
-    if (!(kind === "bold" || kind === "italic" || kind === "underline" || kind === "strikeout")) return
+    if (!(kind === "bold" || kind === "italic" || kind === "underline" || kind === "strikeout")) {
+      return
+    }
     var f = area.cursorSelection.font
     if (area.selectionStart !== area.selectionEnd) {
       f[kind] = !f[kind]
@@ -1189,18 +1519,25 @@ Item {
       root.edited()
       return
     }
-    if (!pending) pending = { bold: f.bold, italic: f.italic, underline: f.underline, strikeout: f.strikeout }
+    if (!pending) {
+      pending = { bold: f.bold, italic: f.italic, underline: f.underline, strikeout: f.strikeout }
+    }
     pending[kind] = !pending[kind]
     pendingLen = area.length
     pendingCursor = area.cursorPosition
   }
 
   function applyPendingToInsertion() {
-    if (!pending || applying) return
+    if (!pending || applying) {
+      return
+    }
     var n = area.length - pendingLen
     var pos = area.cursorPosition
     pendingLen = area.length
-    if (n <= 0 || pos - n < 0) { pendingCursor = pos; return }
+    if (n <= 0 || pos - n < 0) {
+      pendingCursor = pos
+      return
+    }
     applying = true
     area.select(pos - n, pos)
     var f = area.cursorSelection.font
@@ -1305,7 +1642,11 @@ Item {
                                : modelData.id === "table" ? !root.inTable
                                : modelData.id === "style" ? !root.inList
                                : true)
-            onLoaded: if (modelData.id !== "sep") { item.iconText = modelData.icon; item.tooltipText = modelData.tip; item.toolId = modelData.id }
+            onLoaded: if (modelData.id !== "sep") {
+              item.iconText = modelData.icon
+              item.tooltipText = modelData.tip
+              item.toolId = modelData.id
+            }
           }
         }
         Component { id: sepComp; Item { width: Style.spacing.md; height: Style.spacing.controlHeight } }
@@ -1345,7 +1686,9 @@ Item {
             onClicked: styleMenu.opened ? styleMenu.close() : styleMenu.open()
             // The toolbar can vanish under the menu (a provider switch, a
             // notice); the menu must not outlive it.
-            onVisibleChanged: if (!visible) styleMenu.close()
+            onVisibleChanged: if (!visible) {
+              styleMenu.close()
+            }
 
             // The two candidate widest rows, measured at their menu size, so
             // every row takes the same width and the hover fill is not ragged.
@@ -1508,7 +1851,13 @@ Item {
         width: parent.width
         height: visible ? parent.height - y : 0
         sourceComponent: root.customView
-        onLoaded: { for (var k in root.customViewProps) if (item.hasOwnProperty(k)) item[k] = root.customViewProps[k] }
+        onLoaded: {
+          for (var k in root.customViewProps) {
+            if (item.hasOwnProperty(k)) {
+              item[k] = root.customViewProps[k]
+            }
+          }
+        }
       }
 
       Column {
@@ -1553,7 +1902,9 @@ Item {
               foreground: root.foreground
               accent: root.accent
               fontFamily: root.fontFamily
-              onClicked: if (typeof modelData.action === "function") modelData.action()
+              onClicked: if (typeof modelData.action === "function") {
+                modelData.action()
+              }
             }
           }
         }
@@ -1572,8 +1923,11 @@ Item {
         ListWheel { flick: flick }
 
         function ensureVisible(r) {
-          if (contentY >= r.y) contentY = r.y
-          else if (contentY + height <= r.y + r.height) contentY = r.y + r.height - height
+          if (contentY >= r.y) {
+            contentY = r.y
+          } else if (contentY + height <= r.y + r.height) {
+            contentY = r.y + r.height - height
+          }
         }
 
         // The code slabs, painted behind the editor so the text sits on
@@ -1625,26 +1979,43 @@ Item {
           Keys.priority: Keys.BeforeItem
           Keys.onPressed: function(event) {
             root.shortcut(event)
-            if (event.accepted || root.plain) return
+            if (event.accepted || root.plain) {
+              return
+            }
             if (event.key === Qt.Key_Right
                 && !(event.modifiers & (Qt.ControlModifier | Qt.ShiftModifier | Qt.AltModifier))
-                && root.escapeForward()) { event.accepted = true; return }
+                && root.escapeForward()) {
+              event.accepted = true
+              return
+            }
             if (event.text.length > 0
                 && !(event.modifiers & (Qt.ControlModifier | Qt.AltModifier))
-                && root.typeLeavesRule(event.text)) { event.accepted = true; return }
-            if (event.key !== Qt.Key_Return && event.key !== Qt.Key_Enter) return
+                && root.typeLeavesRule(event.text)) {
+              event.accepted = true
+              return
+            }
+            if (event.key !== Qt.Key_Return && event.key !== Qt.Key_Enter) {
+              return
+            }
             if (!(event.modifiers & (Qt.ControlModifier | Qt.ShiftModifier | Qt.AltModifier))
-                && root.returnLeavesBlock()) { event.accepted = true; return }
+                && root.returnLeavesBlock()) {
+              event.accepted = true
+              return
+            }
             root.beforeReturn()
           }
           onCursorRectangleChanged: flick.ensureVisible(cursorRectangle)
           onWidthChanged: root.scheduleDecorations()
           onImplicitHeightChanged: root.scheduleDecorations()
           onTextChanged: {
-            if (root.normalizing) return
+            if (root.normalizing) {
+              return
+            }
             root.normalizeNow()
             root.scheduleDecorations()
-            if (root.settingText) return
+            if (root.settingText) {
+              return
+            }
             root.applyPendingToInsertion()
             root.edited()
           }
@@ -1653,9 +2024,13 @@ Item {
           // textChanged, so a move that matches the grown length is typing.
           onCursorPositionChanged: {
             root.scheduleInTable()
-            if (!root.pending || root.applying) return
+            if (!root.pending || root.applying) {
+              return
+            }
             var byTyping = cursorPosition === root.pendingCursor + (length - root.pendingLen)
-            if (cursorPosition !== root.pendingCursor && !byTyping) root.clearPending()
+            if (cursorPosition !== root.pendingCursor && !byTyping) {
+              root.clearPending()
+            }
           }
 
           Text {
@@ -1809,15 +2184,20 @@ Item {
                 cursorShape: Qt.SizeFDiagCursor
                 preventStealing: true
                 onPositionChanged: function(mouse) {
-                  if (!grip.pressed) return
+                  if (!grip.pressed) {
+                    return
+                  }
                   var to = grip.mapToItem(imageBox, mouse.x, mouse.y).x
                   imageBox.targetWidth = Math.max(root.minImageWidth,
                     Math.min(to, area.width - imageBox.x - area.rightPadding))
                 }
                 onReleased: {
                   var w = Math.round(imageBox.targetWidth)
-                  if (w !== Math.round(imageBox.width)) root.resizeImage(imageBox.modelData.position, w)
-                  else imageBox.targetWidth = imageBox.width
+                  if (w !== Math.round(imageBox.width)) {
+                    root.resizeImage(imageBox.modelData.position, w)
+                  } else {
+                    imageBox.targetWidth = imageBox.width
+                  }
                 }
               }
             }

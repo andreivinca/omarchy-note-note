@@ -114,33 +114,63 @@ Item {
     root.page = ""
     root.pauseQueues(false)
     // A save that failed while nobody was looking is reported now, once.
-    if (root.missedSaveNotice) { root.showStatus(root.missedSaveNotice); root.missedSaveNotice = "" }
+    if (root.missedSaveNotice) {
+      root.showStatus(root.missedSaveNotice)
+      root.missedSaveNotice = ""
+    }
     // A note whose load never landed — the window closed over it, or the
     // backend was busy — would otherwise sit blank and read-only until the
     // user picked something else and came back. Ask again.
-    if (root.currentPath && root.loadFailed) root.reloadCurrent()
+    if (root.currentPath && root.loadFailed) {
+      root.reloadCurrent()
+    }
     // Not while a sign-in is under way: entering its device code means
     // switching to a browser, which can hide and reopen this overlay — that
     // must not wipe the very code the user is about to type in.
-    if (!root.accounts.some(function(a) { return a.loggingIn })) editor.clearNotice()
-    for (var a = 0; a < root.accounts.length; a++) root.accounts[a].refresh()
-    for (var i = 0; i < root.providers.length; i++) { root.providers[i].refresh(); if (typeof root.providers[i].watch === "function") root.providers[i].watch(true) }
+    if (!root.accounts.some(function(a) { return a.loggingIn })) {
+      editor.clearNotice()
+    }
+    for (var a = 0; a < root.accounts.length; a++) {
+      root.accounts[a].refresh()
+    }
+    for (var i = 0; i < root.providers.length; i++) {
+      root.providers[i].refresh()
+      if (typeof root.providers[i].watch === "function") {
+        root.providers[i].watch(true)
+      }
+    }
     Qt.callLater(function() { editor.focusEditor() })
   }
-  function stopWatching() { for (var i = 0; i < root.providers.length; i++) if (typeof root.providers[i].watch === "function") root.providers[i].watch(false) }
+  function stopWatching() {
+    for (var i = 0; i < root.providers.length; i++) {
+      if (typeof root.providers[i].watch === "function") {
+        root.providers[i].watch(false)
+      }
+    }
+  }
   function close() { root.flushSave(); root.opened = false; stopWatching(); root.pauseQueues(true) }
   function dismiss() {
     root.flushSave()
     root.opened = false
     stopWatching()
     root.pauseQueues(true)
-    if (root.shell && typeof root.shell.hide === "function") root.shell.hide(root.pluginId)
+    if (root.shell && typeof root.shell.hide === "function") {
+      root.shell.hide(root.pluginId)
+    }
   }
-  function toggle() { if (root.opened) root.dismiss(); else root.open("{}") }
+  function toggle() {
+    if (root.opened) {
+      root.dismiss()
+    } else {
+      root.open("{}")
+    }
+  }
 
   function setDetached(value) {
     var next = value === true || value === "true"
-    if (next === root.detached) return
+    if (next === root.detached) {
+      return
+    }
     root.detached = next
     saveState()
     root.statusText = next ? "Detached — an ordinary window now, so move, resize and tile it as usual" : "Back to the summoned overlay"
@@ -153,7 +183,9 @@ Item {
   // is up simply swaps them; there is only ever the one.
   function openPage(name) { root.page = name }
   function closePage() {
-    if (!root.pageOpen) return
+    if (!root.pageOpen) {
+      return
+    }
     root.page = ""
     // The editor is only just visible again; let the frame that reveals it
     // finish before handing it the keyboard.
@@ -163,22 +195,37 @@ Item {
   // page is a row in the menu and a line here rather than a flag threaded
   // through the layout.
   function currentPage() {
-    if (root.page === "settings") return settingsPage
-    if (root.page === "keys") return keysPage
+    if (root.page === "settings") {
+      return settingsPage
+    }
+    if (root.page === "keys") {
+      return keysPage
+    }
     return null
   }
 
   function goBack() {
     if (titleBar.searchFocused) {
-      if (root.filterText.length > 0) { root.clearSearch() }
-      else if (!root.detached) root.dismiss()
+      if (root.filterText.length > 0) {
+        root.clearSearch()
+      } else if (!root.detached) {
+        root.dismiss()
+      }
       return
     }
-    if (root.detached) titleBar.focusSearch()
-    else root.dismiss()
+    if (root.detached) {
+      titleBar.focusSearch()
+    } else {
+      root.dismiss()
+    }
   }
 
-  function showStatus(text) { root.statusText = text; if (text) statusTimer.restart() }
+  function showStatus(text) {
+    root.statusText = text
+    if (text) {
+      statusTimer.restart()
+    }
+  }
 
   // While the app is visible, ask each provider every 20 s whether something
   // changed behind our back. Providers decide what is cheap (see poll()).
@@ -187,7 +234,13 @@ Item {
     interval: 20000
     repeat: true
     running: root.opened && root.providersLoaded
-    onTriggered: { for (var i = 0; i < root.providers.length; i++) if (typeof root.providers[i].poll === "function") root.providers[i].poll(root.currentPath) }
+    onTriggered: {
+      for (var i = 0; i < root.providers.length; i++) {
+        if (typeof root.providers[i].poll === "function") {
+          root.providers[i].poll(root.currentPath)
+        }
+      }
+    }
   }
   Timer { id: statusTimer; interval: 3500; onTriggered: root.statusText = "" }
 
@@ -201,7 +254,13 @@ Item {
     // A provider recreated on a settings change asks for its account again;
     // the one its old instance left behind would otherwise stay in the list,
     // costing a status process on every open for nobody.
-    root.accounts = root.accounts.filter(function(a) { if (a.owner !== owner) return true; a.destroy(); return false })
+    root.accounts = root.accounts.filter(function(a) {
+      if (a.owner !== owner) {
+        return true
+      }
+      a.destroy()
+      return false
+    })
     var acc = accountComponent.createObject(root, { owner: owner, clientId: clientId || "",
                                                     scopes: ["offline_access", "User.Read"].concat(scopes || []).join(" ") })
     acc.codeReceived.connect(function(code, uri) {
@@ -215,7 +274,12 @@ Item {
     acc.loginFailed.connect(function(error) {
       editor.showNotice("Sign-in failed", error, "", [{ label: "Try again", icon: "󰑐", action: function() { acc.login() } }])
     })
-    acc.updated.connect(function() { if (acc.signedIn && editor.noticeTitle === "Signed in") editor.clearNotice(); root.rebuildRows() })
+    acc.updated.connect(function() {
+      if (acc.signedIn && editor.noticeTitle === "Signed in") {
+        editor.clearNotice()
+      }
+      root.rebuildRows()
+    })
     root.accounts = root.accounts.concat([acc])
     // An account knows its own status from birth, not from the next open():
     // a provider made while the window is already open (a settings change)
@@ -282,23 +346,34 @@ Item {
   Component { id: queueComponent; Requests.RequestQueue {} }
 
   function queueFor(key, provider) {
-    if (provider && provider.name) root.queueNames[key] = provider.name
-    if (root.queues[key]) return root.queues[key]
+    if (provider && provider.name) {
+      root.queueNames[key] = provider.name
+    }
+    if (root.queues[key]) {
+      return root.queues[key]
+    }
     var q = queueComponent.createObject(root, { domain: key, paused: !root.opened })
-    if (!q) { console.warn("note-note: could not create a request queue for", key); return null }
+    if (!q) {
+      console.warn("note-note: could not create a request queue for", key)
+      return null
+    }
     root.queues[key] = q
     root.queueList = root.queueList.concat([q])
     q.updated.connect(function() { root.queueRevision++ })
     return q
   }
   function cancelQueuedFor(owner) {
-    for (var i = 0; i < root.queueList.length; i++) root.queueList[i].cancelOwner(owner)
+    for (var i = 0; i < root.queueList.length; i++) {
+      root.queueList[i].cancelOwner(owner)
+    }
   }
   // Hidden: reads and polls stop, as they always have. Queued *writes* keep
   // draining — a save this app already accepted is finished, or fails out
   // loud, even if the window closed meanwhile (docs/business-requirements.md).
   function pauseQueues(paused) {
-    for (var i = 0; i < root.queueList.length; i++) root.queueList[i].paused = paused
+    for (var i = 0; i < root.queueList.length; i++) {
+      root.queueList[i].paused = paused
+    }
   }
   // Of the parked lanes, the one with the longest still to wait — or null.
   // Bound through queueRevision because a plain JS object is invisible to a
@@ -307,7 +382,9 @@ Item {
     var worst = null
     for (var i = 0; i < root.queueList.length; i++) {
       var q = root.queueList[i]
-      if (q.cooling && (worst === null || q.cooldownRemaining > worst.cooldownRemaining)) worst = q
+      if (q.cooling && (worst === null || q.cooldownRemaining > worst.cooldownRemaining)) {
+        worst = q
+      }
     }
     return worst
   }
@@ -323,11 +400,15 @@ Item {
     triggeredOnStart: true
     onTriggered: {
       var q = root.coolingQueue()
-      if (!q) return
+      if (!q) {
+        return
+      }
       var lead = (root.queueNames[q.domain] || q.domain) + " is rate-limited"
       // Something else is being said — a save's error, "Section created". Let
       // it have its few seconds; the countdown picks up when it clears.
-      if (root.statusText && root.statusText.indexOf(lead) !== 0) return
+      if (root.statusText && root.statusText.indexOf(lead) !== 0) {
+        return
+      }
       root.showStatus(lead + " — retrying in " + Math.ceil(q.cooldownRemaining) + "s"
                       + (q.depth > 0 ? " (" + q.depth + " queued)" : ""))
     }
@@ -342,9 +423,15 @@ Item {
   property var providerUrls: ({})
 
   function providerOf(path) {
-    if (!path) return null
+    if (!path) {
+      return null
+    }
     var pid = path.substring(0, path.indexOf(":"))
-    for (var i = 0; i < root.providers.length; i++) if (root.providers[i].id === pid) return root.providers[i]
+    for (var i = 0; i < root.providers.length; i++) {
+      if (root.providers[i].id === pid) {
+        return root.providers[i]
+      }
+    }
     return null
   }
   function providerById(id) { return providerOf(id + ":") }
@@ -356,7 +443,9 @@ Item {
   // create, so no path to the first notebook.
   function notebookMaker() {
     var p = activeProvider()
-    if (p && p.canCreateSection === true) return p
+    if (p && p.canCreateSection === true) {
+      return p
+    }
     var local = providerById("local")
     return local && local.canCreateSection === true && local.sections.length === 0 ? local : null
   }
@@ -372,15 +461,23 @@ Item {
   function applyProviderSettings(p) {
     var entry = (root.config.providers || {})[p.id]
     for (var k in entry) {
-      if (k === "enabled" || !(k in p)) continue
+      if (k === "enabled" || !(k in p)) {
+        continue
+      }
       try { p[k] = entry[k] } catch (e) { console.warn("note-note: provider", p.id, "setting", k, "was not taken:", e.message) }
     }
   }
   function addProvider(url) {
     var comp = Qt.createComponent(url)
-    if (comp.status === Component.Error) { console.warn("note-note: provider failed:", url, comp.errorString()); return null }
+    if (comp.status === Component.Error) {
+      console.warn("note-note: provider failed:", url, comp.errorString())
+      return null
+    }
     var p = comp.createObject(root, { host: root, services: root.services })
-    if (!p || !p.id) { console.warn("note-note: provider has no id:", url); return null }
+    if (!p || !p.id) {
+      console.warn("note-note: provider has no id:", url)
+      return null
+    }
     root.applyProviderSettings(p)
     p.updated.connect(function() { root.rebuildRows() })
     p.statusRequested.connect(function(t) { root.showStatus(t) })
@@ -395,13 +492,23 @@ Item {
     // flush it, a delete drops its edits with it, so flushSave finds nothing
     // dirty either way. That is what lets a provider's schedule fire late
     // without the host having to reach back and cancel it.
-    if (p.saveRequested) p.saveRequested.connect(function(path) {
-      if (path === root.currentPath) root.flushSave()
-    })
-    if (p.noteChanged) p.noteChanged.connect(function(path) {
-      if (path === root.currentPath && !root.dirty && !root.saveInFlight(path) && !root.loadingNote) root.reloadCurrent()
-    })
-    if (root.providerState[p.id]) p.restoreState(root.providerState[p.id])
+    if (p.saveRequested) {
+      p.saveRequested.connect(function(path) {
+        if (path === root.currentPath) {
+          root.flushSave()
+        }
+      })
+    }
+    if (p.noteChanged) {
+      p.noteChanged.connect(function(path) {
+        if (path === root.currentPath && !root.dirty && !root.saveInFlight(path) && !root.loadingNote) {
+          root.reloadCurrent()
+        }
+      })
+    }
+    if (root.providerState[p.id]) {
+      p.restoreState(root.providerState[p.id])
+    }
     root.providers = root.providers.concat([p])
     return p
   }
@@ -425,9 +532,13 @@ Item {
   // appended after every id the user did name.
   function orderProviderIds(ids, cfg) {
     var known = (cfg && cfg.providers) || {}, order = Object.keys(known), rank = {}
-    for (var i = 0; i < order.length; i++) rank[order[i]] = i
+    for (var i = 0; i < order.length; i++) {
+      rank[order[i]] = i
+    }
     var ranked = [], rest = []
-    for (var j = 0; j < ids.length; j++) (rank.hasOwnProperty(ids[j]) ? ranked : rest).push(ids[j])
+    for (var j = 0; j < ids.length; j++) {
+      (rank.hasOwnProperty(ids[j]) ? ranked : rest).push(ids[j])
+    }
     ranked.sort(function(a, b) { return rank[a] - rank[b] })
     return ranked.concat(rest)
   }
@@ -439,14 +550,20 @@ Item {
       entries.push({ id: dir.substring(dir.lastIndexOf("/") + 1), url: "file://" + dir + "/Provider.qml" })
     }
     var urls = {}
-    for (var e = 0; e < entries.length; e++) urls[entries[e].id] = entries[e].url
+    for (var e = 0; e < entries.length; e++) {
+      urls[entries[e].id] = entries[e].url
+    }
     root.providerUrls = urls
     var ids = root.orderProviderIds(entries.map(function(x) { return x.id }), root.config)
-    for (var u = 0; u < ids.length; u++)
-      if (root.providerEnabledIn(root.config, ids[u]))
+    for (var u = 0; u < ids.length; u++) {
+      if (root.providerEnabledIn(root.config, ids[u])) {
         root.addProvider(root.providerUrls[ids[u]])
+      }
+    }
     root.providersLoaded = true
-    if (root.opened) root.open("{}")
+    if (root.opened) {
+      root.open("{}")
+    }
   }
 
   Process {
@@ -470,7 +587,9 @@ Item {
   property var pendingExternalDirs: null   // null = scan not finished yet
 
   function maybeLoadProviders() {
-    if (root.pendingExternalDirs === null || !root.configReady) return
+    if (root.pendingExternalDirs === null || !root.configReady) {
+      return
+    }
     root.loadProviders(root.pendingExternalDirs)
   }
 
@@ -496,14 +615,24 @@ Item {
   // per-provider, pass through untouched.
   function mergeConfigDefaults(parsed) {
     var d = root.defaultConfig(), out = {}
-    for (var k in parsed) out[k] = parsed[k]
+    for (var k in parsed) {
+      out[k] = parsed[k]
+    }
     var mergedProviders = {}
     var src = (parsed && typeof parsed.providers === "object" && parsed.providers) || {}
-    for (var id in src) mergedProviders[id] = src[id]
+    for (var id in src) {
+      mergedProviders[id] = src[id]
+    }
     for (var did in d.providers) {
       var entry = mergedProviders[did] || {}, filled = {}
-      for (var ek in entry) filled[ek] = entry[ek]
-      for (var dk in d.providers[did]) if (!(dk in filled)) filled[dk] = d.providers[did][dk]
+      for (var ek in entry) {
+        filled[ek] = entry[ek]
+      }
+      for (var dk in d.providers[did]) {
+        if (!(dk in filled)) {
+          filled[dk] = d.providers[did][dk]
+        }
+      }
       mergedProviders[did] = filled
     }
     out.providers = mergedProviders
@@ -559,7 +688,11 @@ Item {
     command: ["python3", root.readScript, root.configPath, String(root.maxConfigBytes + 1)]
     stdout: StdioCollector {
       onStreamFinished: {
-        if (this.text.length > root.maxConfigBytes) { console.warn("note-note: config file too large, using defaults"); root.loadConfig(""); return }
+        if (this.text.length > root.maxConfigBytes) {
+          console.warn("note-note: config file too large, using defaults")
+          root.loadConfig("")
+          return
+        }
         root.loadConfig(this.text)
       }
     }
@@ -571,8 +704,9 @@ Item {
   function applySettingsJson(text) {
     var parsed
     try { parsed = JSON.parse(text) } catch (e) { return { ok: false, error: "Invalid JSON: " + e.message } }
-    if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed))
+    if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
       return { ok: false, error: "Invalid JSON: the top level must be an object" }
+    }
     var oldConfig = root.config
     var merged = root.mergeConfigDefaults(parsed)
     root.config = merged
@@ -590,21 +724,32 @@ Item {
       // fresh instance is the simplest correct way to make that take.
       var settingsChanged = was && now &&
         JSON.stringify((oldConfig.providers || {})[id]) !== JSON.stringify((newConfig.providers || {})[id])
-      if (was === now && !settingsChanged) continue
-      if (was && root.providerById(id)) root.disableProviderInstance(id)
+      if (was === now && !settingsChanged) {
+        continue
+      }
+      if (was && root.providerById(id)) {
+        root.disableProviderInstance(id)
+      }
       if (now) {
         // addProvider() alone leaves a provider empty: at startup, listing
         // is what open()'s own loop over root.providers triggers, but the
         // overlay is already open by the time Settings can be reached, so
         // that loop has already run and won't run again on its own.
         var p = root.addProvider(root.providerUrls[id])
-        if (p) { p.refresh(); if (typeof p.watch === "function") p.watch(true) }
+        if (p) {
+          p.refresh()
+          if (typeof p.watch === "function") {
+            p.watch(true)
+          }
+        }
       }
     }
     // Reorders the tabs of providers that were already loaded too, not only
     // ones just added/removed — moving a name in the config moves its tab.
     var byId = {}
-    for (var i = 0; i < root.providers.length; i++) byId[root.providers[i].id] = root.providers[i]
+    for (var i = 0; i < root.providers.length; i++) {
+      byId[root.providers[i].id] = root.providers[i]
+    }
     var ids = root.orderProviderIds(root.providers.map(function(x) { return x.id }), newConfig)
     root.providers = ids.map(function(pid) { return byId[pid] })
     root.rebuildRows()
@@ -613,10 +758,15 @@ Item {
   function disableProviderInstance(id) {
     var kept = [], target = null
     for (var i = 0; i < root.providers.length; i++) {
-      if (root.providers[i].id === id) target = root.providers[i]
-      else kept.push(root.providers[i])
+      if (root.providers[i].id === id) {
+        target = root.providers[i]
+      } else {
+        kept.push(root.providers[i])
+      }
     }
-    if (!target) return
+    if (!target) {
+      return
+    }
     var cur = root.providerOf(root.currentPath)
     if (cur && cur.id === id) {
       // Nothing can be written to this provider any more: an edit the editor
@@ -624,7 +774,10 @@ Item {
       // conversion whose answer would find the provider gone; a conversion
       // already running is cancelled the same way. A save the provider's
       // lane already holds is its own to answer as it goes (unsentSave).
-      if (root.dirty) { root.dirty = false; root.reportSave(target.name + ": unsaved changes were dropped — the provider was turned off") }
+      if (root.dirty) {
+        root.dirty = false
+        root.reportSave(target.name + ": unsaved changes were dropped — the provider was turned off")
+      }
       root.cancelPendingSave(root.currentPath)
       root.selectPath("")
     }
@@ -670,14 +823,24 @@ Item {
   // read. Entries for providers no longer loaded go with the next write.
   function rememberOpened(path) {
     var owner = providerOf(path)
-    if (owner && typeof owner.noteOpened === "function") owner.noteOpened(path)
-    if (owner && typeof owner.defaultNote === "function") return
+    if (owner && typeof owner.noteOpened === "function") {
+      owner.noteOpened(path)
+    }
+    if (owner && typeof owner.defaultNote === "function") {
+      return
+    }
     var key = activeKey()
-    if (!key || root.lastNotes[key] === path) return
+    if (!key || root.lastNotes[key] === path) {
+      return
+    }
     // Replaced wholesale, never mutated, like contentHits (below): a binding
     // sees the reassignment and nothing else.
     var next = {}
-    for (var k in root.lastNotes) if (providerOfKey(k)) next[k] = root.lastNotes[k]
+    for (var k in root.lastNotes) {
+      if (providerOfKey(k)) {
+        next[k] = root.lastNotes[k]
+      }
+    }
     next[key] = path
     root.lastNotes = next
     saveState()
@@ -689,7 +852,9 @@ Item {
   // section, as setOrder is.
   function defaultNoteFor(key) {
     var p = providerOfKey(key)
-    if (p && typeof p.defaultNote === "function") return p.defaultNote(ownKey(key)) || ""
+    if (p && typeof p.defaultNote === "function") {
+      return p.defaultNote(ownKey(key)) || ""
+    }
     return root.lastNotes[key] || ""
   }
 
@@ -707,11 +872,15 @@ Item {
     // state file, a user who has never switched — means the first tab is the
     // tab, and it is owed its note like any other.
     var key = activeKey()
-    if (root.activeSection && key !== root.activeSection) return
+    if (root.activeSection && key !== root.activeSection) {
+      return
+    }
     var path = defaultNoteFor(key)
     // Not yet, rather than not at all: a provider still listing has no row to
     // find the note in, and the next rebuild asks again.
-    if (!path || !noteExists(path)) return
+    if (!path || !noteExists(path)) {
+      return
+    }
     choosePath(path)
     // Deferred: revealPath rebuilds the provider's rows, and this is being
     // called from inside a rebuild.
@@ -741,27 +910,35 @@ Item {
   // naming any provider here.
   function activeKey() {
     var keys = sectionKeys()
-    if (keys.indexOf(root.activeSection) >= 0) return root.activeSection
+    if (keys.indexOf(root.activeSection) >= 0) {
+      return root.activeSection
+    }
     return keys.length ? keys[0] : ""
   }
   function eachSection(fn) {
     for (var p = 0; p < root.providers.length; p++) {
       var prov = root.providers[p], secs = prov.sections || []
-      for (var s = 0; s < secs.length; s++) fn(prov, secs[s], sectionKey(prov, secs[s]))
+      for (var s = 0; s < secs.length; s++) {
+        fn(prov, secs[s], sectionKey(prov, secs[s]))
+      }
     }
   }
   // `persist: false` is for switches the user did not ask for (a search
   // hopping to the tab that has hits): they are not worth a state-file write
   // per keystroke, and not the tab to come back to next run.
   function setActiveSection(key, persist) {
-    if (!key || key === root.activeSection) return
+    if (!key || key === root.activeSection) {
+      return
+    }
     // The tab already on screen, standing in for one that is not listed or
     // for no intent at all: naming it makes it the tab, and there is nothing
     // to put away — the note in the editor is this tab's own.
     if (key === activeKey()) {
       root.activeSection = key
       rebuildRows()
-      if (persist !== false) saveState()
+      if (persist !== false) {
+        saveState()
+      }
       return
     }
     // The tab being opened is owed the note it opens with — the one last
@@ -773,7 +950,9 @@ Item {
     // edits are flushed on the way out.
     selectPath("")
     showSection(key)
-    if (persist !== false) saveState()
+    if (persist !== false) {
+      saveState()
+    }
   }
   // Puts a tab on screen, and only that: for a caller that brings its own
   // note (newNote, whose note may have been filed in another provider's tab)
@@ -785,7 +964,9 @@ Item {
   }
   function cycleSection(delta) {
     var keys = sectionKeys()
-    if (keys.length < 2) return
+    if (keys.length < 2) {
+      return
+    }
     setActiveSection(keys[(keys.indexOf(activeKey()) + delta + keys.length) % keys.length])
   }
   // Two notebooks whose names happen to hash to the same pastel are told apart
@@ -794,13 +975,21 @@ Item {
   // own colour keeps it — a brand is not ours to move.
   function decollide(tabs) {
     var taken = {}, i, j, c
-    for (i = 0; i < tabs.length; i++) if (tabs[i].color) taken[TabColors.pastelize(tabs[i].color)] = true
     for (i = 0; i < tabs.length; i++) {
-      if (tabs[i].color) continue
+      if (tabs[i].color) {
+        taken[TabColors.pastelize(tabs[i].color)] = true
+      }
+    }
+    for (i = 0; i < tabs.length; i++) {
+      if (tabs[i].color) {
+        continue
+      }
       var from = TabColors.indexFor(tabs[i].name)
       for (j = 0; j < TabColors.PALETTE.length; j++) {
         c = TabColors.PALETTE[(from + j) % TabColors.PALETTE.length]
-        if (!taken[TabColors.pastelize(c)]) break
+        if (!taken[TabColors.pastelize(c)]) {
+          break
+        }
       }
       taken[TabColors.pastelize(c)] = true
       tabs[i].color = c
@@ -842,28 +1031,47 @@ Item {
     // One character is not a content query: title matching already answers
     // it, and a body holding some letter is every body there is.
     var q = root.filterText
-    if (q.length < 2 || !root.searchContent) return
+    if (q.length < 2 || !root.searchContent) {
+      return
+    }
     root.searchSeq++
     // Everyone about to be asked is owed from before the first ask goes out:
     // a provider that answers within its own call (sticky) then clears its
     // entry mid-loop, which is just an answer arriving early.
     var waiting = {}
-    for (var i = 0; i < root.providers.length; i++)
-      if (typeof root.providers[i].search === "function") waiting[root.providers[i].id] = true
+    for (var i = 0; i < root.providers.length; i++) {
+      if (typeof root.providers[i].search === "function") {
+        waiting[root.providers[i].id] = true
+      }
+    }
     root.searchWaiting = waiting
-    for (var j = 0; j < root.providers.length; j++) askProvider(root.providers[j], q, root.searchSeq)
+    for (var j = 0; j < root.providers.length; j++) {
+      askProvider(root.providers[j], q, root.searchSeq)
+    }
   }
   function askProvider(p, q, seq) {
-    if (typeof p.search !== "function") return
+    if (typeof p.search !== "function") {
+      return
+    }
     p.search(q, function(r) {
-      if (seq !== root.searchSeq || !root.filterText) return
+      if (seq !== root.searchSeq || !root.filterText) {
+        return
+      }
       var waiting = {}
-      for (var w in root.searchWaiting) if (w !== p.id) waiting[w] = root.searchWaiting[w]
+      for (var w in root.searchWaiting) {
+        if (w !== p.id) {
+          waiting[w] = root.searchWaiting[w]
+        }
+      }
       root.searchWaiting = waiting
       var set = {}, paths = (r && r.paths) || []
-      for (var j = 0; j < paths.length; j++) set[paths[j]] = true
+      for (var j = 0; j < paths.length; j++) {
+        set[paths[j]] = true
+      }
       var hits = {}
-      for (var k in root.contentHits) hits[k] = root.contentHits[k]
+      for (var k in root.contentHits) {
+        hits[k] = root.contentHits[k]
+      }
       hits[p.id] = set
       root.contentHits = hits
       rebuildRows()
@@ -871,11 +1079,17 @@ Item {
     })
   }
   function displayTitle(title, preview) {
-    if (title) return title
-    if (!preview) return "Untitled"
+    if (title) {
+      return title
+    }
+    if (!preview) {
+      return "Untitled"
+    }
     // A checkbox line reads as a box, not as its Markdown.
     var text = preview.replace(/^\[[xX]\]\s*/, "☑ ").replace(/^\[\s?\]\s*/, "☐ ").replace(/\u00a0/g, " ").trim()
-    if (!text) return "Untitled"
+    if (!text) {
+      return "Untitled"
+    }
     var words = text.split(/\s+/).slice(0, 5).join(" ")
     return words.length < text.length ? words + "…" : words
   }
@@ -899,7 +1113,12 @@ Item {
     root.switchingTab = false
     // The providers' content answers, flattened once for the whole pass.
     var contentSet = {}
-    for (var ph in root.contentHits) { var pm = root.contentHits[ph]; for (var cp in pm) contentSet[cp] = true }
+    for (var ph in root.contentHits) {
+      var pm = root.contentHits[ph]
+      for (var cp in pm) {
+        contentSet[cp] = true
+      }
+    }
     eachSection(function(prov, s, key) {
       var all = s.rows || []
       // Every tab counts its own hits, the closed ones included — that is what
@@ -912,18 +1131,26 @@ Item {
       tabs.push({ key: key, name: s.name, color: s.color || "", logo: prov.logo || "",
                   count: s.count !== undefined ? s.count : all.filter(function(r) { return r.kind === "note" }).length })
       hits[key] = found.length
-      if (key !== active) return
-      if (q) {
-        for (var i = 0; i < found.length; i++) out.push(row(prov, key, found[i]))
+      if (key !== active) {
         return
       }
-      for (var j = 0; j < all.length; j++) out.push(row(prov, key, all[j]))
+      if (q) {
+        for (var i = 0; i < found.length; i++) {
+          out.push(row(prov, key, found[i]))
+        }
+        return
+      }
+      for (var j = 0; j < all.length; j++) {
+        out.push(row(prov, key, all[j]))
+      }
     })
     // The tabs themselves change rarely (a notebook made, a colour given); the
     // hit counts change per keystroke. Keeping the model still while only the
     // counts move is what keeps the rail from rebuilding its delegates.
     var newTabs = decollide(tabs)
-    if (JSON.stringify(newTabs) !== JSON.stringify(root.tabs)) root.tabs = newTabs
+    if (JSON.stringify(newTabs) !== JSON.stringify(root.tabs)) {
+      root.tabs = newTabs
+    }
     root.tabMatches = hits
     // The same rule as the tabs above, and for a stronger reason: `rows` is a
     // plain JS array handed to the view as a value, so assigning one is not
@@ -936,13 +1163,19 @@ Item {
     // `row()` carrying only what the list shows buys: a field the delegates
     // never read would make equal lists unequal.
     var rowsChanged = JSON.stringify(out) !== JSON.stringify(root.rows)
-    if (rowsChanged) setRows(out)
+    if (rowsChanged) {
+      setRows(out)
+    }
     // The view bar's source chip follows the open tab: its provider's name
     // and logo, and the tab's own colour — read from newTabs, where decollide
     // has just settled the colours the rail will wear.
     var sourceProv = active ? providerOfKey(active) : null, sourceTab = null
-    for (var ti = 0; ti < newTabs.length; ti++)
-      if (newTabs[ti].key === active) { sourceTab = newTabs[ti]; break }
+    for (var ti = 0; ti < newTabs.length; ti++) {
+      if (newTabs[ti].key === active) {
+        sourceTab = newTabs[ti]
+        break
+      }
+    }
     root.sourceName = sourceProv ? sourceProv.name : "Note Note"
     root.sourceLogo = sourceProv ? (sourceProv.logo || "") : ""
     root.sourceBase = sourceTab ? TabColors.baseFor(sourceTab.color || "", sourceTab.name || "") : "transparent"
@@ -950,42 +1183,70 @@ Item {
     // never moved has kept its place already, and putting a remembered offset
     // back over it is one more jump for nothing — which is why this was worst
     // on a list scrolled down to a note in an open tree.
-    if (rowsChanged && keep > 0) Qt.callLater(function() { list.setScrollOffset(keep) })
+    if (rowsChanged && keep > 0) {
+      Qt.callLater(function() { list.setScrollOffset(keep) })
+    }
     // The tab on screen opens with the note it is owed. Asked on every
     // rebuild while it is still owed, because a tab whose notes have not
     // listed yet (OneNote is async) can only be answered by the rebuild that
     // brings them — and never once the user has picked for themselves, so a
     // note you closed is not reopened behind your back.
-    if (root.defaultOwed && !root.filterText) openDefaultNote()
+    if (root.defaultOwed && !root.filterText) {
+      openDefaultNote()
+    }
     // A note that vanished from its provider (deleted elsewhere, signed out)
     // is deselected; one merely sitting in another tab is kept.
-    if (root.currentPath && !root.filterText && !noteExists(root.currentPath)) { selectPath(""); return }
+    if (root.currentPath && !root.filterText && !noteExists(root.currentPath)) {
+      selectPath("")
+      return
+    }
     // The open note changed elsewhere (its version moved): reload it, unless
     // there are unsaved edits here.
     var v = versionOf(root.currentPath)
-    if (root.currentPath && v && root.loadedVersion !== "" && v !== root.loadedVersion && !root.dirty && !root.saveInFlight(root.currentPath) && !root.loadingNote) reloadCurrent()
-    else if (v && root.loadedVersion === "") root.loadedVersion = v
+    if (root.currentPath && v && root.loadedVersion !== "" && v !== root.loadedVersion && !root.dirty && !root.saveInFlight(root.currentPath) && !root.loadingNote) {
+      reloadCurrent()
+    } else if (v && root.loadedVersion === "") {
+      root.loadedVersion = v
+    }
   }
   property string loadedVersion: ""
   function versionOf(path) {
     var v = ""
-    eachSection(function(prov, s, key) { (s.rows || []).forEach(function(r) { if (r.kind === "note" && r.path === path && r.version) v = r.version }) })
+    eachSection(function(prov, s, key) {
+      (s.rows || []).forEach(function(r) {
+        if (r.kind === "note" && r.path === path && r.version) {
+          v = r.version
+        }
+      })
+    })
     return v
   }
   function reloadCurrent() {
     var path = root.currentPath, p = providerOf(path)
-    if (!p) return
+    if (!p) {
+      return
+    }
     root.loadingNote = true
     root.noteLoadSeq++
     root.loadedVersion = versionOf(path)
     root.loadHandle = p.load(path, function(r) {
-      if (root.currentPath !== path) return
-      if (r.error) { root.noteUnavailable(p.name + ": " + r.error); return }
+      if (root.currentPath !== path) {
+        return
+      }
+      if (r.error) {
+        root.noteUnavailable(p.name + ": " + r.error)
+        return
+      }
       var pos = editor.cursorPosition()
       editor.documentBase = r.base || ""
       editor.setNote(r.title || "", r.body || "", function(shown) {
-        if (root.currentPath !== path) return
-        if (!shown) { root.noteUnavailable(root.notDisplayable); return }
+        if (root.currentPath !== path) {
+          return
+        }
+        if (!shown) {
+          root.noteUnavailable(root.notDisplayable)
+          return
+        }
         editor.setCursorPosition(pos)
         root.noteReady(r.editable === false)
         showStatus(p.name + ": reloaded, changed elsewhere")
@@ -1025,15 +1286,28 @@ Item {
   function noteExists(path) {
     var found = false
     eachSection(function(prov, s, key) {
-      if (found) return
-      if ((s.rows || []).some(function(r) { return r.kind === "note" && r.path === path })) { found = true; return }
-      if ((s.notes || []).some(function(n) { return n.path === path })) found = true
+      if (found) {
+        return
+      }
+      if ((s.rows || []).some(function(r) { return r.kind === "note" && r.path === path })) {
+        found = true
+        return
+      }
+      if ((s.notes || []).some(function(n) { return n.path === path })) {
+        found = true
+      }
     })
     return found
   }
   function rowIndexOf(path) {
-    if (!path) return -1
-    for (var i = 0; i < root.rows.length; i++) if (root.rows[i].kind === "note" && root.rows[i].path === path) return i
+    if (!path) {
+      return -1
+    }
+    for (var i = 0; i < root.rows.length; i++) {
+      if (root.rows[i].kind === "note" && root.rows[i].path === path) {
+        return i
+      }
+    }
     return -1
   }
   // Ends a search and puts the field back. The open note is deliberately left
@@ -1053,13 +1327,18 @@ Item {
     root.searchSeq++
     root.contentHits = ({})
     root.searchWaiting = ({})
-    if (text.length > 0) contentSearchTimer.restart()
-    else contentSearchTimer.stop()
+    if (text.length > 0) {
+      contentSearchTimer.restart()
+    } else {
+      contentSearchTimer.stop()
+    }
     rebuildRows()
     searchLanding()
     // However the search ended — esc, the clear button, the text backspaced
     // away — the note it landed on should be in sight on the list that returns.
-    if (searchEnded) revealCurrent()
+    if (searchEnded) {
+      revealCurrent()
+    }
   }
   // Where a search puts you, applied when the matches change — a keystroke,
   // or a provider's content answer arriving. Searching still spans every
@@ -1067,12 +1346,25 @@ Item {
   // keystroke always lands on something — without persisting the hop as the
   // user's chosen tab.
   function searchLanding() {
-    if (!root.filterText) return
-    if (root.rows.length === 0)
-      for (var t = 0; t < root.tabs.length; t++)
-        if ((root.tabMatches[root.tabs[t].key] || 0) > 0) { setActiveSection(root.tabs[t].key, false); break }
-    if (rowIndexOf(root.currentPath) < 0)
-      for (var i = 0; i < root.rows.length; i++) if (root.rows[i].kind === "note") { selectPath(root.rows[i].path); break }
+    if (!root.filterText) {
+      return
+    }
+    if (root.rows.length === 0) {
+      for (var t = 0; t < root.tabs.length; t++) {
+        if ((root.tabMatches[root.tabs[t].key] || 0) > 0) {
+          setActiveSection(root.tabs[t].key, false)
+          break
+        }
+      }
+    }
+    if (rowIndexOf(root.currentPath) < 0) {
+      for (var i = 0; i < root.rows.length; i++) {
+        if (root.rows[i].kind === "note") {
+          selectPath(root.rows[i].path)
+          break
+        }
+      }
+    }
   }
   // Puts the open note's row on screen. A provider whose tree can fold rows
   // away (OneNote) is first asked to unfold whatever hides it — revealPath is
@@ -1081,11 +1373,17 @@ Item {
   // list is laid out with the rows the reveal just added.
   function revealCurrent() {
     var p = providerOf(root.currentPath)
-    if (!p) return
-    if (typeof p.revealPath === "function") p.revealPath(root.currentPath)
+    if (!p) {
+      return
+    }
+    if (typeof p.revealPath === "function") {
+      p.revealPath(root.currentPath)
+    }
     Qt.callLater(function() {
       var i = rowIndexOf(root.currentPath)
-      if (i >= 0) list.positionViewAtIndex(i, ListView.Contain)
+      if (i >= 0) {
+        list.positionViewAtIndex(i, ListView.Contain)
+      }
     })
   }
   function crumbOf(path) { var p = providerOf(path); return p ? p.crumb(path) : "" }
@@ -1099,10 +1397,11 @@ Item {
   function listOffset() { return list.scrollOffset() }
   function debugState() {
     var lanes = []
-    for (var q = 0; q < root.queueList.length; q++)
+    for (var q = 0; q < root.queueList.length; q++) {
       lanes.push({ key: root.queueList[q].domain, depth: root.queueList[q].depth,
                    cooling: root.queueList[q].cooling,
                    cooldown: Math.round(root.queueList[q].cooldownRemaining) })
+    }
     return JSON.stringify({ currentPath: root.currentPath, loadingPath: root.loadingPath, loadingNote: root.loadingNote,
                             status: root.statusText, readOnly: editor.readOnly, words: editor.wordCount, notice: editor.noticeTitle, viewFocused: editor.viewHasFocus,
                             dirty: root.dirty, saving: root.saveInFlight(root.currentPath),
@@ -1120,15 +1419,23 @@ Item {
   function providerWithRow(kind, id) {
     var active = activeKey(), onActive = null, anywhere = null
     eachSection(function(prov, s, key) {
-      if (!(s.rows || []).some(function(r) { return r.kind === kind && r.path === id })) return
-      if (key === active && !onActive) onActive = prov
-      if (!anywhere) anywhere = prov
+      if (!(s.rows || []).some(function(r) { return r.kind === kind && r.path === id })) {
+        return
+      }
+      if (key === active && !onActive) {
+        onActive = prov
+      }
+      if (!anywhere) {
+        anywhere = prov
+      }
     })
     return onActive || anywhere
   }
   function runAction(id) {
     var p = providerWithRow("action", id)
-    if (p) p.action(id)
+    if (p) {
+      p.action(id)
+    }
     return !!p
   }
   function rowsOf(providerId) {
@@ -1137,11 +1444,18 @@ Item {
   function sectionsOf(providerId) { var p = providerById(providerId); return p ? JSON.stringify(p.sections.map(function(s) { return s.key + "(" + s.rows.length + ")" })) : "no provider" }
   function editorTool(id) { editor.tool(id); return true }
   function editorPaste(x) { editor.paste(); return true }
-  function editorUndo(n) { for (var i = 0; i < Number(n || 1); i++) editor.undo(); return editor.wordCount }
+  function editorUndo(n) {
+    for (var i = 0; i < Number(n || 1); i++) {
+      editor.undo()
+    }
+    return editor.wordCount
+  }
   function editorCursor(pos) { editor.setCursorPosition(Number(pos)); editor.updateInTable(); return editor.cursorPosition() + (editor.inTable ? " in-table" : " outside") }
   function treeToggle(id) {
     var p = providerWithRow("tree", id)
-    if (p) p.toggleTree(id)
+    if (p) {
+      p.toggleTree(id)
+    }
     return !!p
   }
 
@@ -1167,7 +1481,10 @@ Item {
   // first hit, the neighbour picked after a delete, a tab switch putting the
   // note away — is selectPath alone: shown, not chosen.
   function choosePath(path) {
-    if (path) { root.defaultOwed = false; root.rememberOpened(path) }
+    if (path) {
+      root.defaultOwed = false
+      root.rememberOpened(path)
+    }
     selectPath(path)
   }
 
@@ -1175,9 +1492,13 @@ Item {
     // Any selection pulls the list's keyboard cursor back to the note —
     // a click, a search landing, a tab switch putting the note away.
     root.treeCursor = ""
-    if (path === root.currentPath) return
+    if (path === root.currentPath) {
+      return
+    }
     var p = providerOf(path)
-    if (path && !p) return
+    if (path && !p) {
+      return
+    }
     root.flushSave()
     editor.clearNotice()
     root.loadingNote = true
@@ -1190,20 +1511,34 @@ Item {
     root.currentCrumb = crumbOf(path)
     editor.readOnly = false
     editor.documentBase = ""
-    if (!path) { editor.setNote("", ""); root.loadingNote = false; return }
+    if (!path) {
+      editor.setNote("", "")
+      root.loadingNote = false
+      return
+    }
     root.loadingPath = path
     editor.setNote("", "")
     editor.readOnly = true
     root.loadedVersion = ""
     root.loadHandle = p.load(path, function(r) {
-      if (root.currentPath !== path) return
+      if (root.currentPath !== path) {
+        return
+      }
       root.loadingPath = ""
-      if (r.error) { root.noteUnavailable(p.name + ": " + r.error); return }
+      if (r.error) {
+        root.noteUnavailable(p.name + ": " + r.error)
+        return
+      }
       root.loadedVersion = r.version || versionOf(path)
       editor.documentBase = r.base || ""
       editor.setNote(r.title || "", r.body || "", function(shown) {
-        if (root.currentPath !== path) return
-        if (!shown) { root.noteUnavailable(root.notDisplayable); return }
+        if (root.currentPath !== path) {
+          return
+        }
+        if (!shown) {
+          root.noteUnavailable(root.notDisplayable)
+          return
+        }
         root.noteReady(r.editable === false)
       })
     }) || null
@@ -1219,26 +1554,43 @@ Item {
     var idx = [], cur = -1
     for (var i = 0; i < root.rows.length; i++) {
       var r = root.rows[i]
-      if (r.kind !== "note" && r.kind !== "tree") { continue }
-      if (atCursor(r)) { cur = idx.length }
+      if (r.kind !== "note" && r.kind !== "tree") {
+        continue
+      }
+      if (atCursor(r)) {
+        cur = idx.length
+      }
       idx.push(i)
     }
-    if (idx.length === 0) { return }
+    if (idx.length === 0) {
+      return
+    }
     var next = (cur + delta + idx.length) % idx.length
-    if (cur < 0) { next = delta < 0 ? idx.length - 1 : 0 }
+    if (cur < 0) {
+      next = delta < 0 ? idx.length - 1 : 0
+    }
     var row = root.rows[idx[next]]
-    if (row.kind === "tree") { root.treeCursor = row.path }
-    else { choosePath(row.path) }
+    if (row.kind === "tree") {
+      root.treeCursor = row.path
+    } else {
+      choosePath(row.path)
+    }
     list.positionViewAtIndex(idx[next], ListView.Contain)
   }
   function atCursor(r) {
-    if (root.treeCursor) { return r.kind === "tree" && r.path === root.treeCursor }
+    if (root.treeCursor) {
+      return r.kind === "tree" && r.path === root.treeCursor
+    }
     return r.kind === "note" && r.path === root.currentPath
   }
   function treeCursorIndex() {
-    if (!root.treeCursor) { return -1 }
+    if (!root.treeCursor) {
+      return -1
+    }
     for (var i = 0; i < root.rows.length; i++) {
-      if (root.rows[i].kind === "tree" && root.rows[i].path === root.treeCursor) { return i }
+      if (root.rows[i].kind === "tree" && root.rows[i].path === root.treeCursor) {
+        return i
+      }
     }
     return -1
   }
@@ -1246,8 +1598,12 @@ Item {
   // cursor on a note the key stays the editor's (jump a word right).
   function openTreeCursor() {
     var i = treeCursorIndex()
-    if (i < 0) { return false }
-    if (!root.rows[i].expanded) { treeToggle(root.rows[i].path) }
+    if (i < 0) {
+      return false
+    }
+    if (!root.rows[i].expanded) {
+      treeToggle(root.rows[i].path)
+    }
     return true
   }
   // Ctrl+Left walks up the tree: an open section closes, a closed one
@@ -1257,8 +1613,11 @@ Item {
   function closeTreeCursor() {
     var i = treeCursorIndex()
     if (i >= 0) {
-      if (root.rows[i].expanded) { treeToggle(root.rows[i].path) }
-      else { cursorToParent(i) }
+      if (root.rows[i].expanded) {
+        treeToggle(root.rows[i].path)
+      } else {
+        cursorToParent(i)
+      }
       return true
     }
     var n = rowIndexOf(root.currentPath)
@@ -1281,31 +1640,59 @@ Item {
   // ── create / delete ─────────────────────────────────────────────────
   function newNote(providerId, target) {
     root.flushSave()
-    if (root.filterText) { titleBar.setSearchText(""); setFilter("") }
+    if (root.filterText) {
+      titleBar.setSearchText("")
+      setFilter("")
+    }
     var p = providerId ? providerById(providerId) : providerOf(root.currentPath)
-    if (p && target === undefined) target = p.createTargetFor(root.currentPath)
-    if (!p || !target) { p = providerById("local"); target = p ? p.createTargetFor("") : "" }
-    if (!p || !target) { root.startNewNotebook(); return }
-    if (!p.canCreate) return
+    if (p && target === undefined) {
+      target = p.createTargetFor(root.currentPath)
+    }
+    if (!p || !target) {
+      p = providerById("local")
+      target = p ? p.createTargetFor("") : ""
+    }
+    if (!p || !target) {
+      root.startNewNotebook()
+      return
+    }
+    if (!p.canCreate) {
+      return
+    }
     p.create(target, function(r) {
-      if (r.error) { showStatus(p.name + ": " + r.error); return }
+      if (r.error) {
+        showStatus(p.name + ": " + r.error)
+        return
+      }
       root.currentPath = ""
       // The fallback above may have filed the note in another provider's tab
       // (ctrl+n on a tab with no create target): open that tab, or the note
       // sits in the editor with no row anywhere on screen.
       var home = sectionKeyOf(r.path)
-      if (home && home !== activeKey()) showSection(home)
+      if (home && home !== activeKey()) {
+        showSection(home)
+      }
       choosePath(r.path)
       var mi = rowIndexOf(r.path)
-      Qt.callLater(function() { if (mi >= 0) list.positionViewAtIndex(mi, ListView.Contain) })
-      if (p.hasTitle) editor.focusTitle(); else editor.focusEditor()
+      Qt.callLater(function() {
+        if (mi >= 0) {
+          list.positionViewAtIndex(mi, ListView.Contain)
+        }
+      })
+      if (p.hasTitle) {
+        editor.focusTitle()
+      } else {
+        editor.focusEditor()
+      }
     })
   }
   // The tab a note's row is on.
   function sectionKeyOf(path) {
     var found = ""
     eachSection(function(prov, s, key) {
-      if (!found && (s.rows || []).some(function(r) { return r.kind === "note" && r.path === path })) found = key
+      if (!found && (s.rows || []).some(function(r) { return r.kind === "note" && r.path === path })) {
+        found = key
+      }
     })
     return found
   }
@@ -1317,27 +1704,41 @@ Item {
   // tab that holds them all when it folds them (createSection's cb).
   function newNotebook(name) {
     var p = notebookMaker()
-    if (!p) return
+    if (!p) {
+      return
+    }
     p.createSection(name, function(r) {
-      if (r.error) { showStatus(p.name + ": " + r.error); return }
+      if (r.error) {
+        showStatus(p.name + ": " + r.error)
+        return
+      }
       setActiveSection(p.id + "/" + r.key)
       // Where a note in the new section goes is the provider's to say.
-      if (r.target) root.newNote(p.id, r.target)
+      if (r.target) {
+        root.newNote(p.id, r.target)
+      }
     })
   }
   function startNewNotebook() {
     // The name field lives on the full list, not the search panel — and a
     // field inside a hidden panel would still steal the keyboard.
-    if (root.filterText) clearSearch()
+    if (root.filterText) {
+      clearSearch()
+    }
     var p = activeProvider()
-    if (canCreateNotebook()) { list.startNewNotebook(); return }
+    if (canCreateNotebook()) {
+      list.startNewNotebook()
+      return
+    }
     showStatus((p ? p.name : "This tab") + ": notebooks are made where they live, not here")
   }
 
   property string deletePath: ""
   function requestDelete(path) {
     var target = path || root.currentPath, p = providerOf(target)
-    if (!target || !p || !p.canDelete) return
+    if (!target || !p || !p.canDelete) {
+      return
+    }
     root.deletePath = target
     deleteConfirm.selectedIndex = 1
     root.deleteConfirmOpen = true
@@ -1347,47 +1748,100 @@ Item {
     root.deleteConfirmOpen = false
     var path = root.deletePath, p = providerOf(path)
     root.deletePath = ""
-    if (!path || !p) return
+    if (!path || !p) {
+      return
+    }
     var wasCurrent = path === root.currentPath, mi = rowIndexOf(path)
     // The deleted note's edits go with it: a conversion still running for it
     // is cancelled, and the editor's text is not flushed. Deleting another
     // note flushes the open one first, as any moment the app might lose it.
     root.cancelPendingSave(path)
-    if (wasCurrent) root.dirty = false; else root.flushSave()
+    if (wasCurrent) {
+      root.dirty = false
+    } else {
+      root.flushSave()
+    }
     var next = ""
     if (wasCurrent) {
-      for (var k = Math.max(mi, 0); k >= 0 && k < root.rows.length; k--)
-        if (root.rows[k].kind === "note" && root.rows[k].path !== path) { next = root.rows[k].path; break }
-      if (!next) for (var j = 0; j < root.rows.length; j++)
-        if (root.rows[j].kind === "note" && root.rows[j].path !== path) { next = root.rows[j].path; break }
+      for (var k = Math.max(mi, 0); k >= 0 && k < root.rows.length; k--) {
+        if (root.rows[k].kind === "note" && root.rows[k].path !== path) {
+          next = root.rows[k].path
+          break
+        }
+      }
+      if (!next) {
+        for (var j = 0; j < root.rows.length; j++) {
+          if (root.rows[j].kind === "note" && root.rows[j].path !== path) {
+            next = root.rows[j].path
+            break
+          }
+        }
+      }
       root.currentPath = ""
     }
-    p.remove(path, function(r) { if (r.error) showStatus(p.name + ": " + r.error) })
-    if (wasCurrent) { selectPath(next); editor.focusEditor() }
+    p.remove(path, function(r) {
+      if (r.error) {
+        showStatus(p.name + ": " + r.error)
+      }
+    })
+    if (wasCurrent) {
+      selectPath(next)
+      editor.focusEditor()
+    }
   }
 
   // ── keys ────────────────────────────────────────────────────────────
   function handleShortcut(event) {
-    if (root.deleteConfirmOpen) return deleteConfirm.handleKey(event)
+    if (root.deleteConfirmOpen) {
+      return deleteConfirm.handleKey(event)
+    }
     // A page owns the keyboard while it is up: its own Escape and action
     // shortcut come first, and nothing below reaches a workspace that is not
     // on screen. KeyBindings.js writes the navigation and note keys below out
     // for the user, and says there which of them it leaves unlisted.
     var openPage = root.currentPage()
-    if (openPage) return openPage.handleKey(event)
+    if (openPage) {
+      return openPage.handleKey(event)
+    }
     var ctrl = event.modifiers & Qt.ControlModifier
-    if (event.key === Qt.Key_Escape) { root.goBack(); return true }
-    if (ctrl && (event.key === Qt.Key_K || event.key === Qt.Key_L)) { titleBar.focusSearch(); return true }
-    if (ctrl && event.key === Qt.Key_N) { if (event.modifiers & Qt.ShiftModifier) root.startNewNotebook(); else root.newNote(); return true }
-    if (ctrl && event.key === Qt.Key_D) { root.requestDelete(root.currentPath); return true }
-    if (ctrl && (event.key === Qt.Key_Down || event.key === Qt.Key_J)) { root.moveSelection(1); return true }
-    if (ctrl && event.key === Qt.Key_Up) { root.moveSelection(-1); return true }
+    if (event.key === Qt.Key_Escape) {
+      root.goBack()
+      return true
+    }
+    if (ctrl && (event.key === Qt.Key_K || event.key === Qt.Key_L)) {
+      titleBar.focusSearch()
+      return true
+    }
+    if (ctrl && event.key === Qt.Key_N) {
+      if (event.modifiers & Qt.ShiftModifier) {
+        root.startNewNotebook()
+      } else {
+        root.newNote()
+      }
+      return true
+    }
+    if (ctrl && event.key === Qt.Key_D) {
+      root.requestDelete(root.currentPath)
+      return true
+    }
+    if (ctrl && (event.key === Qt.Key_Down || event.key === Qt.Key_J)) {
+      root.moveSelection(1)
+      return true
+    }
+    if (ctrl && event.key === Qt.Key_Up) {
+      root.moveSelection(-1)
+      return true
+    }
     // Ctrl+left/right drive the section tree the cursor is on. Shift and Alt
     // stay out so select-word survives, and a press with nothing to do (a
     // note with no parent) falls through to the editor's word jump.
     if (ctrl && !(event.modifiers & (Qt.ShiftModifier | Qt.AltModifier))) {
-      if (event.key === Qt.Key_Right && root.openTreeCursor()) { return true }
-      if (event.key === Qt.Key_Left && root.closeTreeCursor()) { return true }
+      if (event.key === Qt.Key_Right && root.openTreeCursor()) {
+        return true
+      }
+      if (event.key === Qt.Key_Left && root.closeTreeCursor()) {
+        return true
+      }
     }
     // Ctrl+Tab walks the binder, the way Ctrl+up/down walks the notes in it.
     // Shift+Tab arrives as Key_Backtab on some layouts and as Key_Tab on others.
@@ -1396,16 +1850,34 @@ Item {
       return true
     }
     if (ctrl && editor.bodyFocused && !editor.plain && !editor.readOnly) {
-      if (event.key === Qt.Key_B) { editor.toggleFormat("bold"); return true }
-      if (event.key === Qt.Key_I) { editor.toggleFormat("italic"); return true }
-      if (event.key === Qt.Key_U) { editor.toggleFormat("underline"); return true }
-      if (event.key === Qt.Key_S) { editor.toggleFormat("strikeout"); return true }
-      if (event.key === Qt.Key_H && (event.modifiers & Qt.ShiftModifier)) { editor.highlightSelection(); return true }
+      if (event.key === Qt.Key_B) {
+        editor.toggleFormat("bold")
+        return true
+      }
+      if (event.key === Qt.Key_I) {
+        editor.toggleFormat("italic")
+        return true
+      }
+      if (event.key === Qt.Key_U) {
+        editor.toggleFormat("underline")
+        return true
+      }
+      if (event.key === Qt.Key_S) {
+        editor.toggleFormat("strikeout")
+        return true
+      }
+      if (event.key === Qt.Key_H && (event.modifiers & Qt.ShiftModifier)) {
+        editor.highlightSelection()
+        return true
+      }
       // The editor decides whether this paste is a picture or text; with
       // Shift the source's formatting stays behind.
       if (event.key === Qt.Key_V) {
-        if (event.modifiers & Qt.ShiftModifier) editor.pastePlain()
-        else editor.paste()
+        if (event.modifiers & Qt.ShiftModifier) {
+          editor.pastePlain()
+        } else {
+          editor.paste()
+        }
         return true
       }
     }
@@ -1438,10 +1910,15 @@ Item {
   // still the open one — so it needs no cancelling either.
   readonly property int defaultSaveDebounce: 1500
   function onEdited() {
-    if (root.loadingNote || !root.currentPath) return
+    if (root.loadingNote || !root.currentPath) {
+      return
+    }
     root.dirty = true
     var p = providerOf(root.currentPath)
-    if (p && typeof p.noteEdited === "function") { p.noteEdited(root.currentPath); return }
+    if (p && typeof p.noteEdited === "function") {
+      p.noteEdited(root.currentPath)
+      return
+    }
     defaultSchedule.path = root.currentPath
     defaultSchedule.restart()
   }
@@ -1449,7 +1926,9 @@ Item {
     id: defaultSchedule
     property string path: ""
     interval: root.defaultSaveDebounce
-    onTriggered: if (path === root.currentPath) root.flushSave()
+    onTriggered: if (path === root.currentPath) {
+      root.flushSave()
+    }
   }
 
   // Ordering, retrying and coalescing saves is the provider's queue's job now
@@ -1491,8 +1970,11 @@ Item {
   function saveEnded(path) { countSave(path, -1) }
   function countSave(path, delta) {
     var n = (root.savesPending[path] || 0) + delta
-    if (n > 0) root.savesPending[path] = n
-    else delete root.savesPending[path]
+    if (n > 0) {
+      root.savesPending[path] = n
+    } else {
+      delete root.savesPending[path]
+    }
     root.saveRevision++
   }
 
@@ -1503,15 +1985,24 @@ Item {
   // handed to the provider is past recall: it was accepted, and an accepted
   // save finishes or fails out loud (business-requirements.md).
   function cancelPendingSave(path) {
-    if (!path) return
+    if (!path) {
+      return
+    }
     root.saveEpoch[path] = (root.saveEpoch[path] || 0) + 1
   }
 
   function flushSave() {
-    if (!root.dirty || !root.currentPath) return
+    if (!root.dirty || !root.currentPath) {
+      return
+    }
     var path = root.currentPath, p = providerOf(path)
-    if (!p) return
-    if (editor.readOnly) { root.dirty = false; return }
+    if (!p) {
+      return
+    }
+    if (editor.readOnly) {
+      root.dirty = false
+      return
+    }
     var title = editor.title, loadSeq = root.noteLoadSeq
     // Cleared here, where the snapshot is taken: a keystroke after this one
     // marks the note dirty again and earns a save of its own, and a flush
@@ -1532,11 +2023,18 @@ Item {
     editor.requestMarkdown(function(body, ok) {
       // Superseded by a newer snapshot of this note, or cancelled with the
       // note itself: either way this text is not the one to write.
-      if (root.saveEpoch[path] !== seq) { root.saveEnded(path); return }
+      if (root.saveEpoch[path] !== seq) {
+        root.saveEnded(path)
+        return
+      }
       // The converter failed, so `body` is its empty answer and not the note.
       // Sending it would replace the note with nothing, which is the one
       // thing this app promises never to do.
-      if (!ok) { root.saveEnded(path); root.saveFailed(path, seq, loadSeq, "the note could not be read for saving"); return }
+      if (!ok) {
+        root.saveEnded(path)
+        root.saveFailed(path, seq, loadSeq, "the note could not be read for saving")
+        return
+      }
       p.save(path, title, body, function(r) {
         root.saveEnded(path)
         // `{}` for a save that landed, and for one the provider superseded
@@ -1545,8 +2043,13 @@ Item {
         // answers. A save the provider could not send at all — its lane
         // emptied by a sign-out, the provider going — is an error like any
         // other, and the note is marked unsaved again below.
-        if (r && r.error) { root.saveFailed(path, seq, loadSeq, p.name + ": " + r.error); return }
-        if (r && r.warning) root.reportSave(p.name + ": " + r.warning)
+        if (r && r.error) {
+          root.saveFailed(path, seq, loadSeq, p.name + ": " + r.error)
+          return
+        }
+        if (r && r.warning) {
+          root.reportSave(p.name + ": " + r.warning)
+        }
       })
     })
   }
@@ -1562,14 +2065,19 @@ Item {
   // retry loop and not a queue (business-requirements.md).
   function saveFailed(path, seq, loadSeq, message) {
     if (path === root.currentPath && loadSeq === root.noteLoadSeq
-        && root.saveEpoch[path] === seq && !editor.readOnly) root.dirty = true
+        && root.saveEpoch[path] === seq && !editor.readOnly) {
+      root.dirty = true
+    }
     root.reportSave(message)
   }
 
   // Said now if anyone is looking, on the next open() otherwise.
   function reportSave(message) {
-    if (root.opened) showStatus(message)
-    else root.missedSaveNotice = message
+    if (root.opened) {
+      showStatus(message)
+    } else {
+      root.missedSaveNotice = message
+    }
   }
 
   // ── state ───────────────────────────────────────────────────────────
@@ -1580,7 +2088,9 @@ Item {
   property bool stateWriteDue: false
   function saveState() {
     root.providerState = providerSnapshot()
-    if (root.stateWriteDue) return
+    if (root.stateWriteDue) {
+      return
+    }
     root.stateWriteDue = true
     Qt.callLater(root.writeState)
   }
@@ -1589,7 +2099,9 @@ Item {
   // still hold the startup snapshot — and lose the fold state made since.
   function providerSnapshot() {
     var ps = {}
-    for (var i = 0; i < root.providers.length; i++) ps[root.providers[i].id] = root.providers[i].saveState()
+    for (var i = 0; i < root.providers.length; i++) {
+      ps[root.providers[i].id] = root.providers[i].saveState()
+    }
     return ps
   }
   function writeState() {
@@ -1600,25 +2112,39 @@ Item {
     // `lastNotes`, and every tab opens empty until it has been used once.
     var st = { version: 4, detached: root.detached, active: root.activeSection,
                lastNotes: root.lastNotes, providers: root.providerState }
-    if (root.listWidth > 0) st.listWidth = Math.round(root.listWidth)
+    if (root.listWidth > 0) {
+      st.listWidth = Math.round(root.listWidth)
+    }
     stateFile.setText(JSON.stringify(st, null, 2) + "\n")
   }
   function loadState(raw) {
     try {
       var s = JSON.parse(raw || "{}")
-      if (s.detached === true) root.detached = true
-      if (typeof s.active === "string") root.activeSection = s.active
+      if (s.detached === true) {
+        root.detached = true
+      }
+      if (typeof s.active === "string") {
+        root.activeSection = s.active
+      }
       // The stored width is trusted only as a number; the list's own binding
       // clamps it against whatever window it wakes up in.
-      if (typeof s.listWidth === "number" && isFinite(s.listWidth) && s.listWidth > 0) root.listWidth = s.listWidth
+      if (typeof s.listWidth === "number" && isFinite(s.listWidth) && s.listWidth > 0) {
+        root.listWidth = s.listWidth
+      }
       // Trusted entry by entry, as a map of strings and nothing else — the
       // way the two fields above are trusted only as their type.
       if (s.lastNotes && typeof s.lastNotes === "object") {
         var remembered = {}
-        for (var key in s.lastNotes) if (typeof s.lastNotes[key] === "string") remembered[key] = s.lastNotes[key]
+        for (var key in s.lastNotes) {
+          if (typeof s.lastNotes[key] === "string") {
+            remembered[key] = s.lastNotes[key]
+          }
+        }
         root.lastNotes = remembered
       }
-      if (s.providers) root.providerState = s.providers
+      if (s.providers) {
+        root.providerState = s.providers
+      }
     } catch (e) { /* a corrupt state file costs nothing */ }
     scanProviders.running = true
   }
@@ -1634,7 +2160,11 @@ Item {
     command: ["python3", root.readScript, root.statePath, String(root.maxStateBytes + 1)]
     stdout: StdioCollector {
       onStreamFinished: {
-        if (this.text.length > root.maxStateBytes) { console.warn("note-note: state file too large, ignoring"); root.loadState(""); return }
+        if (this.text.length > root.maxStateBytes) {
+          console.warn("note-note: state file too large, ignoring")
+          root.loadState("")
+          return
+        }
         root.loadState(this.text)
       }
     }
@@ -1654,7 +2184,11 @@ Item {
     anchors.fill: parent
 
     Keys.priority: Keys.BeforeItem
-    Keys.onPressed: function(event) { if (root.handleShortcut(event)) event.accepted = true }
+    Keys.onPressed: function(event) {
+      if (root.handleShortcut(event)) {
+        event.accepted = true
+      }
+    }
 
     Column {
       anchors.fill: parent
@@ -1719,8 +2253,12 @@ Item {
           titleFor: root.displayTitle
           onActivated: function(path) { root.choosePath(path); editor.focusEditor() }
           onNewRequested: function(target) {
-            for (var i = 0; i < root.rows.length; i++)
-              if (root.rows[i].kind === "new" && root.rows[i].path === target) { root.newNote(root.rows[i].provider, target); return }
+            for (var i = 0; i < root.rows.length; i++) {
+              if (root.rows[i].kind === "new" && root.rows[i].path === target) {
+                root.newNote(root.rows[i].provider, target)
+                return
+              }
+            }
             root.newNote()
           }
           onNewNotebookRequested: function(name) { root.newNotebook(name) }
@@ -1803,7 +2341,9 @@ Item {
             // The area moves with the list edge it is dragging, so the mouse
             // is mapped into the body each time rather than trusted locally.
             onPositionChanged: function(mouse) {
-              if (!pressed) return
+              if (!pressed) {
+                return
+              }
               root.listWidth = splitterArea.mapToItem(body, mouse.x, 0).x - grabOffset
             }
             onReleased: root.saveState()
@@ -1831,7 +2371,10 @@ Item {
           bodyFontFamily: root.interfaceFont
           shortcutHandler: root.handleShortcut
           onEdited: root.onEdited()
-          onStatusRequestedTextChanged: if (statusRequestedText) { root.showStatus(statusRequestedText); statusRequestedText = "" }
+          onStatusRequestedTextChanged: if (statusRequestedText) {
+            root.showStatus(statusRequestedText)
+            statusRequestedText = ""
+          }
         }
       }
 
@@ -1860,8 +2403,11 @@ Item {
         // the text that holds it is still in front of you.
         onActionRequested: function(text) {
           var result = root.applySettingsJson(text)
-          if (result.ok) settingsPage.showNotice("Saved.", false)
-          else settingsPage.showNotice(result.error, true)
+          if (result.ok) {
+            settingsPage.showNotice("Saved.", false)
+          } else {
+            settingsPage.showNotice(result.error, true)
+          }
         }
       }
 
@@ -1900,9 +2446,15 @@ Item {
         // a local note is its file, a remote one is "synced online", and the
         // two transient states name themselves.
         storage: {
-          if (!root.currentPath) return ""
-          if (root.loadingPath === root.currentPath) return "loading…"
-          if (editor.readOnly) return "read-only here"
+          if (!root.currentPath) {
+            return ""
+          }
+          if (root.loadingPath === root.currentPath) {
+            return "loading…"
+          }
+          if (editor.readOnly) {
+            return "read-only here"
+          }
           var p = root.providerOf(root.currentPath)
           return p && p.id === "local" ? root.currentPath.substring(root.currentPath.lastIndexOf("/") + 1) : "synced online"
         }
@@ -1981,7 +2533,11 @@ Item {
     implicitWidth: Style.space(1120)
     implicitHeight: Style.space(760)
     minimumSize: Qt.size(Style.space(760), Style.space(480))
-    onVisibleChanged: { if (!visible && root.opened && root.detached) root.dismiss() }
+    onVisibleChanged: {
+      if (!visible && root.opened && root.detached) {
+        root.dismiss()
+      }
+    }
 
     FocusScope {
       anchors.fill: parent

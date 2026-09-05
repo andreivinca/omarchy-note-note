@@ -43,8 +43,16 @@ Item {
   // This provider's own request lane, keyed to Notion's own limit — a
   // Microsoft throttle has nothing to do with it (providers/PROVIDERS.md).
   property var rq: null
-  Component.onCompleted: { if (services && services.requests) root.rq = services.requests.queueFor("notion", root) }
-  Component.onDestruction: { if (services && services.requests) services.requests.cancelOwner(root) }
+  Component.onCompleted: {
+    if (services && services.requests) {
+      root.rq = services.requests.queueFor("notion", root)
+    }
+  }
+  Component.onDestruction: {
+    if (services && services.requests) {
+      services.requests.cancelOwner(root)
+    }
+  }
 
   readonly property string dir: Qt.resolvedUrl(".").toString().replace(/^file:\/\//, "").replace(/\/$/, "")
   readonly property string script: dir + "/notion.py"
@@ -67,16 +75,22 @@ Item {
   function pathOf(id) { return root.id + ":" + id }
   function pageAt(path) {
     var id = idOf(path)
-    for (var i = 0; i < root.pages.length; i++) if (root.pages[i].id === id) return root.pages[i]
+    for (var i = 0; i < root.pages.length; i++) {
+      if (root.pages[i].id === id) {
+        return root.pages[i]
+      }
+    }
     return null
   }
 
   function rebuild() {
     var rows = []
-    if (!root.configured) rows.push({ kind: "action", path: "setup", title: "Set up…", icon: "󰒓" })
-    else {
-      for (var i = 0; i < root.pages.length; i++)
+    if (!root.configured) {
+      rows.push({ kind: "action", path: "setup", title: "Set up…", icon: "󰒓" })
+    } else {
+      for (var i = 0; i < root.pages.length; i++) {
         rows.push({ kind: "note", path: pathOf(root.pages[i].id), title: root.pages[i].title, preview: "", fixed: true, version: root.pages[i].edited || "" })
+      }
       rows.push({ kind: "new", path: "new" })
       rows.push({ kind: "action", path: "refresh", title: "Refresh", icon: "󰑐" })
       rows.push({ kind: "action", path: "settings", title: "Settings…" + (root.workspace ? " (" + root.workspace + ")" : ""), icon: "󰒓" })
@@ -97,7 +111,9 @@ Item {
   // (the API cannot create top-level pages).
   function createTargetFor(path) {
     var pg = pageAt(path)
-    if (pg) return "parent:" + pg.id
+    if (pg) {
+      return "parent:" + pg.id
+    }
     return root.pages.length ? "parent:" + root.pages[0].id : ""
   }
   function restoreState(obj) {}
@@ -107,15 +123,22 @@ Item {
   // One search request per minute while open.
   property int pollTick: 0
   function poll() {
-    if (!root.configured) return
+    if (!root.configured) {
+      return
+    }
     root.pollTick++
-    if (root.pollTick % 3 !== 0) return
+    if (root.pollTick % 3 !== 0) {
+      return
+    }
     root.listPages(true)
   }
 
   function action(id) {
-    if (id === "setup" || id === "settings") root.viewRequested(root.configured ? "Notion — settings" : "Set up Notion", setupView, {})
-    else if (id === "refresh") root.listPages(true)
+    if (id === "setup" || id === "settings") {
+      root.viewRequested(root.configured ? "Notion — settings" : "Set up Notion", setupView, {})
+    } else if (id === "refresh") {
+      root.listPages(true)
+    }
   }
 
   function refresh() { statusProc.running = true }
@@ -123,13 +146,20 @@ Item {
   // The listing. Deduped, so the poll and an open() collapse into one; a
   // Refresh replaces a queued one so the user's explicit ask is the one sent.
   function listPages(force) {
-    if (!root.rq || !root.configured) return
+    if (!root.rq || !root.configured) {
+      return
+    }
     root.rq.enqueue({ key: "list", mode: force ? "replace" : "dedupe", priority: 1, owner: root, label: "listing" },
       function(ctx) { root.runScript(["list"].concat(force ? [] : ["--max-age", "300"]), "", ctx) },
       function(r) {
-        if (!r) return
-        if (r.error) root.statusRequested("Notion: " + r.error)
-        else if (Array.isArray(r.pages)) root.pages = r.pages
+        if (!r) {
+          return
+        }
+        if (r.error) {
+          root.statusRequested("Notion: " + r.error)
+        } else if (Array.isArray(r.pages)) {
+          root.pages = r.pages
+        }
         root.rebuild()
       })
   }
@@ -137,21 +167,39 @@ Item {
   // ── notes ───────────────────────────────────────────────────────────
   function load(path, cb) {
     var id = idOf(path), cached = root.bodies[id], pg = pageAt(path)
-    if (cached && (!pg || cached.version === (pg.edited || ""))) { cb({ title: cached.title, body: cached.body, editable: cached.editable, version: cached.version || "" }); return }
-    if (!root.rq) { cb({ error: "not ready" }); return }
+    if (cached && (!pg || cached.version === (pg.edited || ""))) {
+      cb({ title: cached.title, body: cached.body, editable: cached.editable, version: cached.version || "" })
+      return
+    }
+    if (!root.rq) {
+      cb({ error: "not ready" })
+      return
+    }
     // The handle goes back to the caller: the host withdraws the load of a
     // note the user has stepped past, so the one they stopped on is not
     // stuck queueing behind it.
     return root.rq.enqueue({ key: "load:" + path, mode: "dedupe", priority: 0, owner: root, label: "page" },
       function(ctx) { root.runScript(["page", id], "", ctx) },
       function(r) {
-        if (!r) { if (cb) cb({ error: "not loaded — the window closed" }); return }
-        if (r.error) { if (cb) cb({ error: r.error }); return }
+        if (!r) {
+          if (cb) {
+            cb({ error: "not loaded — the window closed" })
+          }
+          return
+        }
+        if (r.error) {
+          if (cb) {
+            cb({ error: r.error })
+          }
+          return
+        }
         var pg2 = root.pageAt(path), ver = pg2 ? pg2.edited || "" : ""
         var b = root.bodies
         b[root.idOf(path)] = { title: r.title || "", body: r.body || "", editable: r.editable === true, version: ver }
         root.bodies = b
-        if (cb) cb({ title: r.title || "", body: r.body || "", editable: r.editable === true, version: ver })
+        if (cb) {
+          cb({ title: r.title || "", body: r.body || "", editable: r.editable === true, version: ver })
+        }
       })
   }
 
@@ -169,34 +217,72 @@ Item {
     b[id] = { title: title, body: body, editable: true, version: "" }
     root.bodies = b
     var pgs = root.pages.slice()
-    for (var i = 0; i < pgs.length; i++) if (pgs[i].id === id) pgs[i] = { id: id, title: title, parent: pgs[i].parent, edited: pgs[i].edited }
+    for (var i = 0; i < pgs.length; i++) {
+      if (pgs[i].id === id) {
+        pgs[i] = { id: id, title: title, parent: pgs[i].parent, edited: pgs[i].edited }
+      }
+    }
     root.pages = pgs
     rebuild()
-    if (!root.rq) { if (cb) cb({ error: "not ready" }); return }
+    if (!root.rq) {
+      if (cb) {
+        cb({ error: "not ready" })
+      }
+      return
+    }
     var payload = JSON.stringify({ title: title, body: body })
     root.rq.enqueue({ key: "page:" + id, mode: "replace", priority: 0, owner: root, flush: true, label: "save" },
       function(ctx) { root.runScript(["update", id, "-"], payload, ctx) },
       function(r, info) {
-        if (!r) { if (cb) cb(root.unsentSave(info)); return }
-        if (cb) cb(r.error ? { error: r.error } : {})
+        if (!r) {
+          if (cb) {
+            cb(root.unsentSave(info))
+          }
+          return
+        }
+        if (cb) {
+          cb(r.error ? { error: r.error } : {})
+        }
       })
   }
 
   function create(target, cb) {
-    if (!root.configured || !root.rq) { if (cb) cb({ error: "not ready" }); return }
+    if (!root.configured || !root.rq) {
+      if (cb) {
+        cb({ error: "not ready" })
+      }
+      return
+    }
     var parent = target === "new" ? (root.pages.length ? root.pages[0].id : "") : (target.indexOf("parent:") === 0 ? target.substring(7) : "")
-    if (!parent) { if (cb) cb({ error: "share at least one page with the integration first — new pages need a parent" }); return }
+    if (!parent) {
+      if (cb) {
+        cb({ error: "share at least one page with the integration first — new pages need a parent" })
+      }
+      return
+    }
     root.statusRequested("Creating a Notion page…")
     root.rq.enqueue({ key: "create:" + parent, mode: "append", priority: 0, owner: root, flush: true, label: "new page" },
       function(ctx) { root.runScript(["create", parent, "-"], JSON.stringify({ title: "", body: "" }), ctx) },
       function(r) {
         root.statusRequested("")
-        if (!r) { if (cb) cb({ error: "the window closed before the page was made" }); return }
-        if (r.error) { if (cb) cb({ error: r.error }); return }
+        if (!r) {
+          if (cb) {
+            cb({ error: "the window closed before the page was made" })
+          }
+          return
+        }
+        if (r.error) {
+          if (cb) {
+            cb({ error: r.error })
+          }
+          return
+        }
         root.pages = [r.page].concat(root.pages)
         var b = root.bodies; b[r.page.id] = { title: "", body: "", editable: true }; root.bodies = b
         root.rebuild()
-        if (cb) cb({ path: root.pathOf(r.page.id) })
+        if (cb) {
+          cb({ path: root.pathOf(r.page.id) })
+        }
       })
   }
 
@@ -204,10 +290,19 @@ Item {
     var id = idOf(path)
     root.pages = root.pages.filter(function(p) { return p.id !== id })
     rebuild()
-    if (!root.rq) { if (cb) cb({ error: "not ready" }); return }
+    if (!root.rq) {
+      if (cb) {
+        cb({ error: "not ready" })
+      }
+      return
+    }
     root.rq.enqueue({ key: "page:" + id, mode: "replace", priority: 0, owner: root, flush: true, label: "delete" },
       function(ctx) { root.runScript(["delete", id], "", ctx) },
-      function(r) { if (cb) cb(r && r.error ? { error: r.error } : {}) })
+      function(r) {
+        if (cb) {
+          cb(r && r.error ? { error: r.error } : {})
+        }
+      })
   }
 
   function parse(text) { try { return JSON.parse(text) } catch (e) { return { error: "unexpected reply" } } }
@@ -223,12 +318,16 @@ Item {
         onStreamFinished: {
           var answer = proc.ctx
           proc.ctx = null
-          if (answer) answer.done(root.parse(this.text))
+          if (answer) {
+            answer.done(root.parse(this.text))
+          }
           Qt.callLater(function() { proc.destroy() })
         }
       }
       onExited: {
-        if (!proc.ctx) return
+        if (!proc.ctx) {
+          return
+        }
         var answer = proc.ctx
         proc.ctx = null
         answer.done({ error: "unexpected reply" })
@@ -239,7 +338,10 @@ Item {
 
   function runScript(args, payload, ctx) {
     var proc = jobProcess.createObject(root, { ctx: ctx })
-    if (!proc) { ctx.done({ error: "could not start notion.py" }); return }
+    if (!proc) {
+      ctx.done({ error: "could not start notion.py" })
+      return
+    }
     proc.command = ["python3", root.script].concat(args)
     if (payload) {
       proc.stdinEnabled = true               // stdin must be open before it starts
@@ -260,7 +362,12 @@ Item {
         var st = root.parse(this.text)
         root.configured = st.configured === true
         root.workspace = st.workspace || ""
-        if (!root.configured) { root.pages = []; root.bodies = ({}); rebuild(); return }
+        if (!root.configured) {
+          root.pages = []
+          root.bodies = ({})
+          rebuild()
+          return
+        }
         cachedProc.running = true
         root.listPages(false)
       }
@@ -274,7 +381,9 @@ Item {
     stdout: StdioCollector {
       onStreamFinished: {
         var res = root.parse(this.text)
-        if (!res.error && Array.isArray(res.pages)) root.pages = res.pages
+        if (!res.error && Array.isArray(res.pages)) {
+          root.pages = res.pages
+        }
         root.rebuild()
       }
     }
@@ -286,8 +395,14 @@ Item {
   property string setupError: ""
   function submitToken(token) {
     var t = token.trim()
-    if (!t) { root.setupError = "Paste the integration secret."; return }
-    if (!root.rq) { root.setupError = "The request queue is not available."; return }
+    if (!t) {
+      root.setupError = "Paste the integration secret."
+      return
+    }
+    if (!root.rq) {
+      root.setupError = "The request queue is not available."
+      return
+    }
     root.setupBusy = true
     root.setupError = ""
     // Verifying the secret is a request to Notion like any other, so it is
@@ -296,8 +411,14 @@ Item {
       function(ctx) { root.runScript(["setup", "-"], JSON.stringify({ token: t }), ctx) },
       function(r, info) {
         root.setupBusy = false
-        if (!r) { root.setupError = info.cancelled ? "The window closed before the secret was checked." : ""; return }
-        if (r.error) { root.setupError = r.error; return }
+        if (!r) {
+          root.setupError = info.cancelled ? "The window closed before the secret was checked." : ""
+          return
+        }
+        if (r.error) {
+          root.setupError = r.error
+          return
+        }
         root.setupError = ""
         root.viewCleared()
         root.refresh()

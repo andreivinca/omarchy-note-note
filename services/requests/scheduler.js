@@ -44,19 +44,28 @@ function makeState() {
 }
 
 function ownerIndex(state, owner) {
-  if (owner === null || owner === undefined) return -1
+  if (owner === null || owner === undefined) {
+    return -1
+  }
   // Owners are QML objects, and an object cannot be a key: `{}` stringifies
   // every one of them to the same thing, which would make the round-robin a
   // single queue. So they are numbered instead.
   var at = state.owners.indexOf(owner)
-  if (at < 0) { at = state.owners.length; state.owners.push(owner) }
+  if (at < 0) {
+    at = state.owners.length
+    state.owners.push(owner)
+  }
   return at
 }
 
 // The *last* queued job of a key: the newest statement of that intent, which
 // is the one a replace should overwrite and a dedupe should join.
 function lastQueuedIndexOf(state, key) {
-  for (var i = state.jobs.length - 1; i >= 0; i--) if (state.jobs[i].key === key) return i
+  for (var i = state.jobs.length - 1; i >= 0; i--) {
+    if (state.jobs[i].key === key) {
+      return i
+    }
+  }
   return -1
 }
 
@@ -91,7 +100,9 @@ function enqueue(state, opts) {
   }
   if (at >= 0 && mode === "dedupe") {
     var existing = state.jobs[at]
-    if (opts.settled) existing.settled.push(opts.settled)
+    if (opts.settled) {
+      existing.settled.push(opts.settled)
+    }
     return { job: null, superseded: null, joined: existing }
   }
   state.jobs.push(job)
@@ -99,33 +110,55 @@ function enqueue(state, opts) {
 }
 
 function beats(state, a, b) {
-  if (a.priority !== b.priority) return a.priority < b.priority
+  if (a.priority !== b.priority) {
+    return a.priority < b.priority
+  }
   var la = state.lastRun[a.ownerId] || 0, lb = state.lastRun[b.ownerId] || 0
-  if (la !== lb) return la < lb      // round-robin: whoever has waited longest
+  if (la !== lb) {
+    return la < lb  // round-robin: whoever has waited longest
+  }
   return a.id < b.id                 // then simply whoever asked first
 }
 
 // The next job to dispatch, or null. opts: { concurrency }.
 function nextRunnable(state, nowMs, opts) {
   var concurrency = Math.max(1, (opts && opts.concurrency) || 1)
-  if (state.running.length >= concurrency) return null
-  if (state.cooldownUntil > nowMs) return null      // parked: nothing at all runs
+  if (state.running.length >= concurrency) {
+    return null
+  }
+  if (state.cooldownUntil > nowMs) {
+    return null  // parked: nothing at all runs
+  }
   var busy = {}, i
-  for (i = 0; i < state.running.length; i++) busy[state.running[i].key] = true
+  for (i = 0; i < state.running.length; i++) {
+    busy[state.running[i].key] = true
+  }
   var seen = {}, best = null
   for (i = 0; i < state.jobs.length; i++) {
     var job = state.jobs[i]
     // Per-key FIFO is absolute, across priorities: only the oldest queued job
     // of a key is a candidate, and none of them while one is in flight.
-    if (seen[job.key]) continue
+    if (seen[job.key]) {
+      continue
+    }
     seen[job.key] = true
-    if (busy[job.key]) continue
-    if (state.paused && !job.flush) continue
-    if (job.notBefore > nowMs) continue
+    if (busy[job.key]) {
+      continue
+    }
+    if (state.paused && !job.flush) {
+      continue
+    }
+    if (job.notBefore > nowMs) {
+      continue
+    }
     // A background job never takes the last slot, so an interactive one never
     // waits behind a lane full of polls.
-    if (job.priority > 0 && state.running.length >= concurrency - 1) continue
-    if (best === null || beats(state, job, best)) best = job
+    if (job.priority > 0 && state.running.length >= concurrency - 1) {
+      continue
+    }
+    if (best === null || beats(state, job, best)) {
+      best = job
+    }
   }
   return best
 }
@@ -135,7 +168,9 @@ function nextRunnable(state, nowMs, opts) {
 // for, and is dropped. This is what makes ctx.done() idempotent.
 function markRunning(state, job, nowMs) {
   var at = state.jobs.indexOf(job)
-  if (at >= 0) state.jobs.splice(at, 1)
+  if (at >= 0) {
+    state.jobs.splice(at, 1)
+  }
   state.running.push(job)
   job.attempts++
   job.token = ++state.seq
@@ -146,7 +181,9 @@ function markRunning(state, job, nowMs) {
 // -> { action: "deliver" | "park" | "retryAt", at }
 function onResult(state, job, result, nowMs) {
   var at = state.running.indexOf(job)
-  if (at >= 0) state.running.splice(at, 1)
+  if (at >= 0) {
+    state.running.splice(at, 1)
+  }
   job.token = 0
   var kind = (result && typeof result === "object") ? result.kind : ""
 
@@ -174,7 +211,9 @@ function onResult(state, job, result, nowMs) {
   // An answer that is not a throttle says the lane is working — but only if
   // it did not arrive from a job that was already in flight when the park
   // began, which would otherwise reset an escalation that is still true.
-  if (state.cooldownUntil <= nowMs) state.throttles = 0
+  if (state.cooldownUntil <= nowMs) {
+    state.throttles = 0
+  }
   return { action: "deliver", at: 0 }
 }
 
@@ -183,11 +222,16 @@ function onResult(state, job, result, nowMs) {
 // callers to be told.
 function setPaused(state, paused) {
   state.paused = paused === true
-  if (!state.paused) return []
+  if (!state.paused) {
+    return []
+  }
   var kept = [], dropped = []
   for (var i = 0; i < state.jobs.length; i++) {
-    if (state.jobs[i].flush) kept.push(state.jobs[i])
-    else dropped.push(state.jobs[i])
+    if (state.jobs[i].flush) {
+      kept.push(state.jobs[i])
+    } else {
+      dropped.push(state.jobs[i])
+    }
   }
   state.jobs = kept
   return dropped
@@ -199,18 +243,25 @@ function setPaused(state, paused) {
 function cancelOwner(state, owner) {
   var kept = [], dropped = [], i
   for (i = 0; i < state.jobs.length; i++) {
-    if (state.jobs[i].owner === owner) dropped.push(state.jobs[i])
-    else kept.push(state.jobs[i])
+    if (state.jobs[i].owner === owner) {
+      dropped.push(state.jobs[i])
+    } else {
+      kept.push(state.jobs[i])
+    }
   }
   state.jobs = kept
   var at = state.owners.indexOf(owner)
-  if (at >= 0) state.owners[at] = null    // stop holding a destroyed object
+  if (at >= 0) {
+    state.owners[at] = null  // stop holding a destroyed object
+  }
   return dropped
 }
 
 function cancelJob(state, job) {
   var at = state.jobs.indexOf(job)
-  if (at < 0) return false                // in flight: not preempted
+  if (at < 0) {
+    return false  // in flight: not preempted
+  }
   state.jobs.splice(at, 1)
   return true
 }
@@ -223,11 +274,15 @@ function remaining(state, nowMs) { return Math.max(0, state.cooldownUntil - nowM
 // waiting on the clock". While the lane is parked that is the only answer
 // there is, since nothing else can run before it.
 function wakeAt(state, nowMs) {
-  if (state.cooldownUntil > nowMs) return state.cooldownUntil
+  if (state.cooldownUntil > nowMs) {
+    return state.cooldownUntil
+  }
   var at = 0
   for (var i = 0; i < state.jobs.length; i++) {
     var nb = state.jobs[i].notBefore
-    if (nb > nowMs && (at === 0 || nb < at)) at = nb
+    if (nb > nowMs && (at === 0 || nb < at)) {
+      at = nb
+    }
   }
   return at
 }

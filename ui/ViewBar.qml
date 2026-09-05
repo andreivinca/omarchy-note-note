@@ -35,8 +35,12 @@ Item {
   // twice. Presentation only, and no provider named: the segment's own text
   // is what gets folded away, whichever provider wrote it.
   readonly property string shownCrumb: {
-    if (crumb === sourceName) return ""
-    if (crumb.indexOf(sourceName + " › ") === 0) return crumb.substring(sourceName.length + 3)
+    if (crumb === sourceName) {
+      return ""
+    }
+    if (crumb.indexOf(sourceName + " › ") === 0) {
+      return crumb.substring(sourceName.length + 3)
+    }
     return crumb
   }
   // The note holds edits not yet confirmed saved: dirty, or a save in flight.

@@ -44,10 +44,18 @@ Item {
   // separate keys, separate cooldowns (providers/PROVIDERS.md).
   property var rq: null
   Component.onCompleted: {
-    if (services && services.microsoft) root.ms = services.microsoft.create(root.id, root.microsoftScopes, root.microsoftClientId)
-    if (services && services.requests) root.rq = services.requests.queueFor("graph-mail", root)
+    if (services && services.microsoft) {
+      root.ms = services.microsoft.create(root.id, root.microsoftScopes, root.microsoftClientId)
+    }
+    if (services && services.requests) {
+      root.rq = services.requests.queueFor("graph-mail", root)
+    }
   }
-  Component.onDestruction: { if (services && services.requests) services.requests.cancelOwner(root) }
+  Component.onDestruction: {
+    if (services && services.requests) {
+      services.requests.cancelOwner(root)
+    }
+  }
 
   readonly property string dir: Qt.resolvedUrl(".").toString().replace(/^file:\/\//, "").replace(/\/$/, "")
   readonly property string script: dir + "/sticky.py"
@@ -68,23 +76,36 @@ Item {
   function pathOf(id) { return root.id + ":" + id }
   function noteAt(path) {
     var id = idOf(path)
-    for (var i = 0; i < root.notes.length; i++) if (root.notes[i].id === id) return root.notes[i]
+    for (var i = 0; i < root.notes.length; i++) {
+      if (root.notes[i].id === id) {
+        return root.notes[i]
+      }
+    }
     return null
   }
   function previewOf(body) {
     var lines = body.split("\n")
-    for (var i = 0; i < lines.length; i++) { var l = lines[i].replace(/^[#>\-\*\s]+/, "").replace(/[*_`]/g, "").trim(); if (l) return l }
+    for (var i = 0; i < lines.length; i++) {
+      var l = lines[i].replace(/^[#>\-\*\s]+/, "").replace(/[*_`]/g, "").trim()
+      if (l) {
+        return l
+      }
+    }
     return ""
   }
 
   function rebuild() {
     var rows = []
-    if (!ms || !ms.configured) rows.push({ kind: "action", path: "unavailable", title: "Not available in this build", icon: "󰒓" })
-    else if (!ms.signedIn) rows.push({ kind: "action", path: "login", title: ms.loggingIn ? "Cancel signing in…" : "Sign in to Microsoft…", icon: ms.loggingIn ? "󰅖" : "󰊻" })
-    else if (!ms.hasScope("Mail.ReadWrite")) rows.push({ kind: "action", path: "relogin", title: ms.loggingIn ? "Cancel signing in…" : "Sign in again to enable Sticky Notes…", icon: ms.loggingIn ? "󰅖" : "󰊻" })
-    else {
-      for (var i = 0; i < root.notes.length; i++)
+    if (!ms || !ms.configured) {
+      rows.push({ kind: "action", path: "unavailable", title: "Not available in this build", icon: "󰒓" })
+    } else if (!ms.signedIn) {
+      rows.push({ kind: "action", path: "login", title: ms.loggingIn ? "Cancel signing in…" : "Sign in to Microsoft…", icon: ms.loggingIn ? "󰅖" : "󰊻" })
+    } else if (!ms.hasScope("Mail.ReadWrite")) {
+      rows.push({ kind: "action", path: "relogin", title: ms.loggingIn ? "Cancel signing in…" : "Sign in again to enable Sticky Notes…", icon: ms.loggingIn ? "󰅖" : "󰊻" })
+    } else {
+      for (var i = 0; i < root.notes.length; i++) {
         rows.push({ kind: "note", path: pathOf(root.notes[i].id), title: "", preview: previewOf(root.notes[i].body), fixed: true, version: root.notes[i].modified || "" })
+      }
       rows.push({ kind: "new", path: "new" })
       rows.push({ kind: "action", path: "logout", title: "Sign out" + (ms.account ? " (" + ms.account + ")" : ""), icon: "󰍃" })
     }
@@ -101,19 +122,42 @@ Item {
   function toggleTree(id) {}
 
   function action(id) {
-    if (!ms) return
-    if (id === "login") { if (ms.loggingIn) { ms.cancelLogin(); root.noticeCleared() } else ms.login() }
-    else if (id === "relogin") { if (ms.loggingIn) { ms.cancelLogin(); root.noticeCleared() } else ms.relogin() }
-    else if (id === "logout") root.noticeRequested("Sign out of Sticky Notes?",
-      "You'll need to sign in again" + (ms.account ? " as " + ms.account : "") + " to keep using Sticky Notes.", "",
-      [{ label: "Sign out", action: function() { root.noticeCleared(); ms.logout() } },
-       { label: "Cancel", action: function() { root.noticeCleared() } }])
-    else if (id === "unavailable") root.noticeRequested("Microsoft sign-in is not configured in this build",
-      "This copy of Note Note has no app registration for Sticky Notes built in (microsoftClientId in providers/sticky/Provider.qml), so nobody can sign in yet.", "", [])
+    if (!ms) {
+      return
+    }
+    if (id === "login") {
+      if (ms.loggingIn) {
+        ms.cancelLogin()
+        root.noticeCleared()
+      } else {
+        ms.login()
+      }
+    }
+    else if (id === "relogin") {
+      if (ms.loggingIn) {
+        ms.cancelLogin()
+        root.noticeCleared()
+      } else {
+        ms.relogin()
+      }
+    }
+    else if (id === "logout") {
+      root.noticeRequested("Sign out of Sticky Notes?",
+        "You'll need to sign in again" + (ms.account ? " as " + ms.account : "") + " to keep using Sticky Notes.", "",
+        [{ label: "Sign out", action: function() { root.noticeCleared(); ms.logout() } },
+         { label: "Cancel", action: function() { root.noticeCleared() } }])
+    } else if (id === "unavailable") {
+      root.noticeRequested("Microsoft sign-in is not configured in this build",
+        "This copy of Note Note has no app registration for Sticky Notes built in (microsoftClientId in providers/sticky/Provider.qml), so nobody can sign in yet.", "", [])
+    }
   }
 
   function refresh() {
-    if (!root.ready) { root.notes = []; rebuild(); return }
+    if (!root.ready) {
+      root.notes = []
+      rebuild()
+      return
+    }
     cachedProc.running = true       // a local file: instant, and never queued
     root.listNotes()
   }
@@ -121,15 +165,23 @@ Item {
   // One listing request, deduped: open() and the account's own updated()
   // both ask, and one request answers both.
   function listNotes() {
-    if (!root.rq || !root.ready) return
+    if (!root.rq || !root.ready) {
+      return
+    }
     root.rq.enqueue({ key: "list", mode: "dedupe", priority: 1, owner: root, label: "listing" },
       function(ctx) { root.runScript(["list"], "", ctx) },
       function(r) {
-        if (!r) return
+        if (!r) {
+          return
+        }
         if (r.error) {
           root.statusRequested("Sticky Notes: " + r.error)
-          if (/not signed in|expired/.test(r.error) && root.ms) root.ms.refresh()
-        } else if (Array.isArray(r.notes)) root.notes = r.notes
+          if (/not signed in|expired/.test(r.error) && root.ms) {
+            root.ms.refresh()
+          }
+        } else if (Array.isArray(r.notes)) {
+          root.notes = r.notes
+        }
         root.rebuild()
       })
   }
@@ -140,8 +192,11 @@ Item {
   // lines below it.
   function search(query, cb) {
     var q = query.toLowerCase(), paths = []
-    for (var i = 0; i < root.notes.length; i++)
-      if ((root.notes[i].body || "").toLowerCase().indexOf(q) >= 0) paths.push(pathOf(root.notes[i].id))
+    for (var i = 0; i < root.notes.length; i++) {
+      if ((root.notes[i].body || "").toLowerCase().indexOf(q) >= 0) {
+        paths.push(pathOf(root.notes[i].id))
+      }
+    }
     cb({ paths: paths })
   }
 
@@ -150,7 +205,9 @@ Item {
     function onUpdated() {
       if (!root.ms.signedIn) {
         root.notes = []; clearProc.running = true
-        if (services && services.requests) services.requests.cancelOwner(root)
+        if (services && services.requests) {
+          services.requests.cancelOwner(root)
+        }
       }
       root.refresh()
     }
@@ -172,9 +229,16 @@ Item {
 
   function save(path, title, body, cb) {
     var n = noteAt(path)
-    if (n) n.body = body
+    if (n) {
+      n.body = body
+    }
     rebuild()
-    if (!root.rq) { if (cb) cb({ error: "not ready" }); return }
+    if (!root.rq) {
+      if (cb) {
+        cb({ error: "not ready" })
+      }
+      return
+    }
     var id = idOf(path), payload = JSON.stringify({ title: title, body: body })
     // A note's save and delete share one key, so they can never overlap; a
     // newer save replaces a queued older one, and flush keeps it draining
@@ -182,23 +246,47 @@ Item {
     root.rq.enqueue({ key: "note:" + id, mode: "replace", priority: 0, owner: root, flush: true, label: "save" },
       function(ctx) { root.runScript(["update", id, "-"], payload, ctx) },
       function(r, info) {
-        if (!r) { if (cb) cb(root.unsentSave(info)); return }
-        if (cb) cb(r.error ? { error: r.error } : {})
+        if (!r) {
+          if (cb) {
+            cb(root.unsentSave(info))
+          }
+          return
+        }
+        if (cb) {
+          cb(r.error ? { error: r.error } : {})
+        }
       })
   }
 
   function create(target, cb) {
-    if (!root.ready || !root.rq) { if (cb) cb({ error: "not ready" }); return }
+    if (!root.ready || !root.rq) {
+      if (cb) {
+        cb({ error: "not ready" })
+      }
+      return
+    }
     root.statusRequested("Creating a sticky note…")
     root.rq.enqueue({ key: "create", mode: "append", priority: 0, owner: root, flush: true, label: "new note" },
       function(ctx) { root.runScript(["create"], "", ctx) },
       function(r) {
         root.statusRequested("")
-        if (!r) { if (cb) cb({ error: "the window closed before the note was made" }); return }
-        if (r.error) { if (cb) cb({ error: r.error }); return }
+        if (!r) {
+          if (cb) {
+            cb({ error: "the window closed before the note was made" })
+          }
+          return
+        }
+        if (r.error) {
+          if (cb) {
+            cb({ error: r.error })
+          }
+          return
+        }
         root.notes = [r.note].concat(root.notes)
         root.rebuild()
-        if (cb) cb({ path: root.pathOf(r.note.id) })
+        if (cb) {
+          cb({ path: root.pathOf(r.note.id) })
+        }
       })
   }
 
@@ -206,10 +294,19 @@ Item {
     var id = idOf(path)
     root.notes = root.notes.filter(function(n) { return n.id !== id })
     rebuild()
-    if (!root.rq) { if (cb) cb({ error: "not ready" }); return }
+    if (!root.rq) {
+      if (cb) {
+        cb({ error: "not ready" })
+      }
+      return
+    }
     root.rq.enqueue({ key: "note:" + id, mode: "replace", priority: 0, owner: root, flush: true, label: "delete" },
       function(ctx) { root.runScript(["delete", id], "", ctx) },
-      function(r) { if (cb) cb(r && r.error ? { error: r.error } : {}) })
+      function(r) {
+        if (cb) {
+          cb(r && r.error ? { error: r.error } : {})
+        }
+      })
   }
 
   function setOrder(sectionKey, paths) {}
@@ -230,12 +327,16 @@ Item {
         onStreamFinished: {
           var answer = proc.ctx
           proc.ctx = null
-          if (answer) answer.done(root.parse(this.text))
+          if (answer) {
+            answer.done(root.parse(this.text))
+          }
           Qt.callLater(function() { proc.destroy() })
         }
       }
       onExited: {
-        if (!proc.ctx) return
+        if (!proc.ctx) {
+          return
+        }
         var answer = proc.ctx
         proc.ctx = null
         answer.done({ error: "unexpected reply" })
@@ -246,7 +347,10 @@ Item {
 
   function runScript(args, payload, ctx) {
     var proc = jobProcess.createObject(root, { ctx: ctx })
-    if (!proc) { ctx.done({ error: "could not start sticky.py" }); return }
+    if (!proc) {
+      ctx.done({ error: "could not start sticky.py" })
+      return
+    }
     proc.command = ["python3", root.script].concat(args)
     if (payload) {
       proc.stdinEnabled = true               // stdin must be open before it starts
@@ -265,7 +369,9 @@ Item {
     stdout: StdioCollector {
       onStreamFinished: {
         var res = root.parse(this.text)
-        if (!res.error && Array.isArray(res.notes)) root.notes = res.notes
+        if (!res.error && Array.isArray(res.notes)) {
+          root.notes = res.notes
+        }
         root.rebuild()
       }
     }

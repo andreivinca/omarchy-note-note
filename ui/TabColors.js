@@ -22,7 +22,9 @@ var PALETTE = ["#d74269",  // rose
 // above it, because the colour comes from its name and not from where it sits.
 function indexFor(name) {
   var h = 0, s = String(name || "")
-  for (var i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) >>> 0
+  for (var i = 0; i < s.length; i++) {
+    h = (h * 31 + s.charCodeAt(i)) >>> 0
+  }
   return h % PALETTE.length
 }
 
@@ -44,11 +46,14 @@ function fromName(name) { return PALETTE[indexFor(name)] }
 var _pastel = {}
 function pastelize(hex) {
   var done = _pastel[hex]
-  if (done !== undefined) return done
+  if (done !== undefined) {
+    return done
+  }
   var c = parseColor(hex)
   var out
-  if (!c) out = PALETTE[0]
-  else {
+  if (!c) {
+    out = PALETTE[0]
+  } else {
     var s = c.hslSaturation < 0.14 ? c.hslSaturation : Math.max(0.5, Math.min(0.8, c.hslSaturation))
     // Qt answers -1 for the hue of a grey; any number works once s is 0.
     out = Qt.hsla(Math.max(0, c.hslHue), s, 0.55, 1).toString()

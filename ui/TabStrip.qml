@@ -34,10 +34,14 @@ Item {
   function revealActive() {
     for (var i = 0; i < tabs.count; i++) {
       var it = tabs.itemAt(i)
-      if (!it || it.modelData.key !== root.activeKey) continue
-      if (strip.contentX > it.x) strip.contentX = it.x
-      else if (strip.contentX + strip.width < it.x + it.width)
+      if (!it || it.modelData.key !== root.activeKey) {
+        continue
+      }
+      if (strip.contentX > it.x) {
+        strip.contentX = it.x
+      } else if (strip.contentX + strip.width < it.x + it.width) {
         strip.contentX = Math.max(0, it.x + it.width - strip.width)
+      }
       return
     }
   }

@@ -57,13 +57,21 @@ Item {
   // a lane of its own, so a OneNote throttle never reaches it.
   property var rq: null
   Component.onCompleted: {
-    if (services && services.microsoft) root.ms = services.microsoft.create(root.id, root.microsoftScopes, root.microsoftClientId)
-    if (services && services.requests) root.rq = services.requests.queueFor("graph-onenote", root)
+    if (services && services.microsoft) {
+      root.ms = services.microsoft.create(root.id, root.microsoftScopes, root.microsoftClientId)
+    }
+    if (services && services.requests) {
+      root.rq = services.requests.queueFor("graph-onenote", root)
+    }
   }
   // A provider is destroyed and rebuilt when its settings change, and on
   // sign-out. What it had not started yet goes with it; what is already
   // running finishes, since its process is running either way.
-  Component.onDestruction: { if (services && services.requests) services.requests.cancelOwner(root) }
+  Component.onDestruction: {
+    if (services && services.requests) {
+      services.requests.cancelOwner(root)
+    }
+  }
 
   readonly property string dir: Qt.resolvedUrl(".").toString().replace(/^file:\/\//, "").replace(/\/$/, "")
   readonly property string script: dir + "/onenote.py"
@@ -90,11 +98,19 @@ Item {
   function pathOf(id) { return root.id + ":" + id }
   function pageAt(path) {
     var id = idOf(path)
-    for (var i = 0; i < root.pages.length; i++) if (root.pages[i].id === id) return root.pages[i]
+    for (var i = 0; i < root.pages.length; i++) {
+      if (root.pages[i].id === id) {
+        return root.pages[i]
+      }
+    }
     return null
   }
   function sectionAt(id) {
-    for (var i = 0; i < root.onSections.length; i++) if (root.onSections[i].id === id) return root.onSections[i]
+    for (var i = 0; i < root.onSections.length; i++) {
+      if (root.onSections[i].id === id) {
+        return root.onSections[i]
+      }
+    }
     return null
   }
   function sectionName(id) {
@@ -105,16 +121,25 @@ Item {
   // The account rows every shape starts from: null when the tree can show,
   // the one action row that says why it cannot otherwise.
   function accountRows() {
-    if (!ms || !ms.configured) return [{ kind: "action", path: "unavailable", title: "Not available in this build", icon: "󰒓" }]
-    if (!ms.signedIn) return [{ kind: "action", path: "login", title: ms.loggingIn ? "Cancel signing in…" : "Sign in to Microsoft…", icon: ms.loggingIn ? "󰅖" : "󰊻" }]
-    if (!ms.hasScope("Notes.ReadWrite")) return [{ kind: "action", path: "relogin", title: ms.loggingIn ? "Cancel signing in…" : "Sign in again to enable OneNote…", icon: ms.loggingIn ? "󰅖" : "󰊻" }]
+    if (!ms || !ms.configured) {
+      return [{ kind: "action", path: "unavailable", title: "Not available in this build", icon: "󰒓" }]
+    }
+    if (!ms.signedIn) {
+      return [{ kind: "action", path: "login", title: ms.loggingIn ? "Cancel signing in…" : "Sign in to Microsoft…", icon: ms.loggingIn ? "󰅖" : "󰊻" }]
+    }
+    if (!ms.hasScope("Notes.ReadWrite")) {
+      return [{ kind: "action", path: "relogin", title: ms.loggingIn ? "Cancel signing in…" : "Sign in again to enable OneNote…", icon: ms.loggingIn ? "󰅖" : "󰊻" }]
+    }
     return null
   }
   function bookList() {
     var books = [], seen = {}
     for (var i = 0; i < root.onSections.length; i++) {
       var s = root.onSections[i]
-      if (!seen[s.notebookId]) { seen[s.notebookId] = true; books.push({ id: s.notebookId, name: s.notebook || "Notebook" }) }
+      if (!seen[s.notebookId]) {
+        seen[s.notebookId] = true
+        books.push({ id: s.notebookId, name: s.notebook || "Notebook" })
+      }
     }
     books.sort(function(a, b) { return a.name.localeCompare(b.name) })
     return books
@@ -126,13 +151,19 @@ Item {
     var rows = [{ kind: "action", path: "newsection:" + bookId, title: "New section…", icon: "+", level: level }]
     for (var k = 0; k < root.onSections.length; k++) {
       var sec = root.onSections[k]
-      if (sec.notebookId !== bookId) continue
+      if (sec.notebookId !== bookId) {
+        continue
+      }
       var secOpen = root.expanded.indexOf(sec.id) >= 0
       rows.push({ kind: "tree", path: sec.id, title: sec.name, level: level, expanded: secOpen })
-      if (!secOpen) continue
+      if (!secOpen) {
+        continue
+      }
       for (var p = 0; p < root.pages.length; p++) {
         var pg = root.pages[p]
-        if (pg.sectionId !== sec.id) continue
+        if (pg.sectionId !== sec.id) {
+          continue
+        }
         rows.push({ kind: "note", path: pathOf(pg.id), title: pg.title, preview: "", level: level + 1, fixed: true, version: pg.modified || "" })
       }
       rows.push({ kind: "new", path: "section:" + sec.id, level: level + 1 })
@@ -164,16 +195,21 @@ Item {
     // empty listing lands here too, whatever the setting says — no notebooks
     // means nothing to spread, and the tab must exist to say so.
     var rows = []
-    if (account) rows = account
-    else {
+    if (account) {
+      rows = account
+    } else {
       for (var b = 0; b < books.length; b++) {
         var open = root.expanded.indexOf(books[b].id) >= 0
         rows.push({ kind: "tree", path: books[b].id, title: books[b].name, level: 0, expanded: open })
-        if (open) rows = rows.concat(bookRows(books[b].id, 1))
+        if (open) {
+          rows = rows.concat(bookRows(books[b].id, 1))
+        }
       }
-      if (books.length === 0) rows.push(root.listing
-        ? { kind: "action", path: "refresh", title: "Loading notebooks…", icon: "󰑐" }
-        : { kind: "action", path: "refresh", title: "No notebooks found — refresh", icon: "󰑐" })
+      if (books.length === 0) {
+        rows.push(root.listing
+          ? { kind: "action", path: "refresh", title: "Loading notebooks…", icon: "󰑐" }
+          : { kind: "action", path: "refresh", title: "No notebooks found — refresh", icon: "󰑐" })
+      }
       rows.push(logoutRow())
     }
     root.sections = [{ key: "onenote", name: "OneNote", color: "#7719AA", count: root.pages.length, notes: noteList(root.pages), rows: rows }]
@@ -183,10 +219,18 @@ Item {
   function crumb(path) { var pg = pageAt(path); return pg ? sectionName(pg.sectionId) : "OneNote" }
   function createTargetFor(path) { var pg = pageAt(path); return pg ? "section:" + pg.sectionId : "" }
   function restoreState(obj) {
-    if (!obj) return
-    if (Array.isArray(obj.expanded)) root.expanded = obj.expanded
-    if (typeof obj.lastNotebook === "string") root.lastNotebook = obj.lastNotebook
-    if (obj.lastPages && typeof obj.lastPages === "object") root.lastPages = obj.lastPages
+    if (!obj) {
+      return
+    }
+    if (Array.isArray(obj.expanded)) {
+      root.expanded = obj.expanded
+    }
+    if (typeof obj.lastNotebook === "string") {
+      root.lastNotebook = obj.lastNotebook
+    }
+    if (obj.lastPages && typeof obj.lastPages === "object") {
+      root.lastPages = obj.lastPages
+    }
   }
   function saveState() { return { expanded: root.expanded, lastNotebook: root.lastNotebook, lastPages: root.lastPages } }
 
@@ -203,14 +247,22 @@ Item {
 
   function noteOpened(path) {
     var pg = pageAt(path)
-    if (!pg) return
+    if (!pg) {
+      return
+    }
     var sec = sectionAt(pg.sectionId)
-    if (!sec) return
+    if (!sec) {
+      return
+    }
     var book = sec.notebookId
-    if (root.lastNotebook === book && root.lastPages[book] === path) return
+    if (root.lastNotebook === book && root.lastPages[book] === path) {
+      return
+    }
     root.lastNotebook = book
     var next = {}
-    for (var k in root.lastPages) next[k] = root.lastPages[k]
+    for (var k in root.lastPages) {
+      next[k] = root.lastPages[k]
+    }
     next[book] = path
     root.lastPages = next
     root.persistRequested()
@@ -226,7 +278,11 @@ Item {
 
   function toggleTree(id) {
     var i = root.expanded.indexOf(id), next = root.expanded.slice()
-    if (i >= 0) next.splice(i, 1); else next.push(id)
+    if (i >= 0) {
+      next.splice(i, 1)
+    } else {
+      next.push(id)
+    }
     root.expanded = next
     rebuild()
     root.persistRequested()
@@ -237,37 +293,67 @@ Item {
   // for when a search ends on a page the tree was hiding.
   function revealPath(path) {
     var pg = pageAt(path)
-    if (!pg) return
+    if (!pg) {
+      return
+    }
     var sec = sectionAt(pg.sectionId), next = root.expanded.slice()
-    if (sec && next.indexOf(sec.notebookId) < 0) next.push(sec.notebookId)
-    if (next.indexOf(pg.sectionId) < 0) next.push(pg.sectionId)
-    if (next.length === root.expanded.length) return
+    if (sec && next.indexOf(sec.notebookId) < 0) {
+      next.push(sec.notebookId)
+    }
+    if (next.indexOf(pg.sectionId) < 0) {
+      next.push(pg.sectionId)
+    }
+    if (next.length === root.expanded.length) {
+      return
+    }
     root.expanded = next
     rebuild()
     root.persistRequested()
   }
 
   function action(id) {
-    if (!ms) return
-    if (id === "login") { if (ms.loggingIn) { ms.cancelLogin(); root.noticeCleared() } else ms.login() }
-    else if (id === "relogin") { if (ms.loggingIn) { ms.cancelLogin(); root.noticeCleared() } else ms.relogin() }
-    else if (id === "logout") root.noticeRequested("Sign out of OneNote?",
-      "You'll need to sign in again" + (ms.account ? " as " + ms.account : "") + " to keep using OneNote.", "",
-      [{ label: "Sign out", action: function() { root.noticeCleared(); ms.logout() } },
-       { label: "Cancel", action: function() { root.noticeCleared() } }])
-    else if (id === "refresh") root.listPages(true)
-    else if (id.indexOf("newsection:") === 0) {
+    if (!ms) {
+      return
+    }
+    if (id === "login") {
+      if (ms.loggingIn) {
+        ms.cancelLogin()
+        root.noticeCleared()
+      } else {
+        ms.login()
+      }
+    }
+    else if (id === "relogin") {
+      if (ms.loggingIn) {
+        ms.cancelLogin()
+        root.noticeCleared()
+      } else {
+        ms.relogin()
+      }
+    }
+    else if (id === "logout") {
+      root.noticeRequested("Sign out of OneNote?",
+        "You'll need to sign in again" + (ms.account ? " as " + ms.account : "") + " to keep using OneNote.", "",
+        [{ label: "Sign out", action: function() { root.noticeCleared(); ms.logout() } },
+         { label: "Cancel", action: function() { root.noticeCleared() } }])
+    } else if (id === "refresh") {
+      root.listPages(true)
+    } else if (id.indexOf("newsection:") === 0) {
       root.newSectionNotebook = id.substring(11)
       root.newSectionError = ""
       root.viewRequested("New section in " + notebookName(root.newSectionNotebook), sectionView, {})
+    } else if (id === "unavailable") {
+      root.noticeRequested("Microsoft sign-in is not configured in this build",
+        "This copy of Note Note has no app registration for OneNote built in (microsoftClientId in providers/onenote/Provider.qml), so nobody can sign in yet.", "", [])
     }
-    else if (id === "unavailable") root.noticeRequested("Microsoft sign-in is not configured in this build",
-      "This copy of Note Note has no app registration for OneNote built in (microsoftClientId in providers/onenote/Provider.qml), so nobody can sign in yet.", "", [])
   }
 
   function notebookName(id) {
-    for (var i = 0; i < root.onSections.length; i++)
-      if (root.onSections[i].notebookId === id) return root.onSections[i].notebook || "OneNote"
+    for (var i = 0; i < root.onSections.length; i++) {
+      if (root.onSections[i].notebookId === id) {
+        return root.onSections[i].notebook || "OneNote"
+      }
+    }
     return "OneNote"
   }
 
@@ -277,8 +363,13 @@ Item {
   property bool newSectionBusy: false
   function createSection(name) {
     var n = name.trim()
-    if (!n) { root.newSectionError = "A section needs a name."; return }
-    if (root.newSectionBusy || !root.rq) return
+    if (!n) {
+      root.newSectionError = "A section needs a name."
+      return
+    }
+    if (root.newSectionBusy || !root.rq) {
+      return
+    }
     var notebook = root.newSectionNotebook
     root.newSectionBusy = true
     root.newSectionError = ""
@@ -287,14 +378,26 @@ Item {
       function(ctx) { root.runScript(["create-section", notebook, "-"], JSON.stringify({ name: n }), ctx) },
       function(r, info) {
         root.newSectionBusy = false
-        if (!r) { root.newSectionError = info.cancelled ? "The window closed before the section was made." : ""; return }
-        if (r.error) { root.newSectionError = r.error; return }
+        if (!r) {
+          root.newSectionError = info.cancelled ? "The window closed before the section was made." : ""
+          return
+        }
+        if (r.error) {
+          root.newSectionError = r.error
+          return
+        }
         var sct = r.section
-        if (!sct.notebook) sct.notebook = root.notebookName(sct.notebookId)
+        if (!sct.notebook) {
+          sct.notebook = root.notebookName(sct.notebookId)
+        }
         root.onSections = root.onSections.concat([sct])
         var exp = root.expanded.slice()
-        if (exp.indexOf(sct.notebookId) < 0) exp.push(sct.notebookId)
-        if (exp.indexOf(sct.id) < 0) exp.push(sct.id)
+        if (exp.indexOf(sct.notebookId) < 0) {
+          exp.push(sct.notebookId)
+        }
+        if (exp.indexOf(sct.id) < 0) {
+          exp.push(sct.id)
+        }
         root.expanded = exp
         root.viewCleared()
         root.rebuild()
@@ -378,7 +481,9 @@ Item {
         onStreamFinished: {
           var answer = proc.ctx
           proc.ctx = null
-          if (answer) answer.done(root.parse(this.text))
+          if (answer) {
+            answer.done(root.parse(this.text))
+          }
           Qt.callLater(function() { proc.destroy() })
         }
       }
@@ -386,7 +491,9 @@ Item {
       // before its own error handler — would otherwise leave its job in
       // flight for ever, and everything behind it in the lane with it.
       onExited: {
-        if (!proc.ctx) return
+        if (!proc.ctx) {
+          return
+        }
         var answer = proc.ctx
         proc.ctx = null
         answer.done({ error: "unexpected reply" })
@@ -397,7 +504,10 @@ Item {
 
   function runScript(args, payload, ctx) {
     var proc = jobProcess.createObject(root, { ctx: ctx })
-    if (!proc) { ctx.done({ error: "could not start onenote.py" }); return }
+    if (!proc) {
+      ctx.done({ error: "could not start onenote.py" })
+      return
+    }
     proc.command = ["python3", root.script].concat(args)
     if (payload) {
       proc.stdinEnabled = true               // stdin must be open before it starts
@@ -410,7 +520,12 @@ Item {
   }
 
   function refresh() {
-    if (!root.ready) { root.onSections = []; root.pages = []; rebuild(); return }
+    if (!root.ready) {
+      root.onSections = []
+      root.pages = []
+      rebuild()
+      return
+    }
     // The cached read is a local file and no request at all, so it does not
     // belong in the lane — it must answer instantly even while OneNote is
     // parked, which is what keeps the sidebar populated during a throttle.
@@ -422,16 +537,25 @@ Item {
   // call reports each section's own timestamp and onenote.py fetches pages
   // only for the ones that moved), and ~40 when everything has.
   function listPages(force) {
-    if (!root.rq || !root.ready) return
+    if (!root.rq || !root.ready) {
+      return
+    }
     root.rq.enqueue({ key: "list", mode: force ? "replace" : "dedupe", priority: 1,
                       owner: root, label: "listing" },
       function(ctx) { root.runScript(["list"].concat(force ? ["--force"] : ["--max-age", "600"]), "", ctx) },
       function(r) {
-        if (!r) return                       // superseded by a Refresh, or cancelled
-        if (r.error) root.statusRequested("OneNote: " + r.error)
-        else {
-          if (Array.isArray(r.sections)) root.onSections = r.sections
-          if (Array.isArray(r.pages)) root.pages = r.pages
+        if (!r) {
+          return  // superseded by a Refresh, or cancelled
+        }
+        if (r.error) {
+          root.statusRequested("OneNote: " + r.error)
+        } else {
+          if (Array.isArray(r.sections)) {
+            root.onSections = r.sections
+          }
+          if (Array.isArray(r.pages)) {
+            root.pages = r.pages
+          }
         }
         root.rebuild()
       })
@@ -455,7 +579,9 @@ Item {
         // cooldown is deliberately *not* cleared: Microsoft throttles per
         // app+user, so signing back in does not lift it, and pretending
         // otherwise would just spend the first request learning that again.
-        if (services && services.requests) services.requests.cancelOwner(root)
+        if (services && services.requests) {
+          services.requests.cancelOwner(root)
+        }
       }
       root.refresh()
     }
@@ -469,8 +595,14 @@ Item {
   function load(path, cb) {
     var id = idOf(path), cached = root.bodies[id], pg = pageAt(path)
     // A cached body is only good while the page's modified time matches.
-    if (cached && (!pg || cached.version === (pg.modified || ""))) { cb({ title: cached.title, body: cached.body, editable: cached.editable, version: cached.version || "" }); return }
-    if (!root.rq) { cb({ error: "not ready" }); return }
+    if (cached && (!pg || cached.version === (pg.modified || ""))) {
+      cb({ title: cached.title, body: cached.body, editable: cached.editable, version: cached.version || "" })
+      return
+    }
+    if (!root.rq) {
+      cb({ error: "not ready" })
+      return
+    }
     // dedupe: asking for the same page twice before it arrives is one read,
     // and both askers are answered from it. The handle goes back to the
     // caller: the host withdraws the load of a note the user has stepped
@@ -478,14 +610,26 @@ Item {
     return root.rq.enqueue({ key: "load:" + path, mode: "dedupe", priority: 0, owner: root, label: "page" },
       function(ctx) { root.runScript(["page", id], "", ctx) },
       function(r) {
-        if (!r) { if (cb) cb({ error: "not loaded — the window closed" }); return }
-        if (r.error) { if (cb) cb({ error: r.error }); return }
+        if (!r) {
+          if (cb) {
+            cb({ error: "not loaded — the window closed" })
+          }
+          return
+        }
+        if (r.error) {
+          if (cb) {
+            cb({ error: r.error })
+          }
+          return
+        }
         var page = root.pageAt(path), title = r.title || (page ? page.title : "")
         var ver = page ? page.modified || "" : ""
         var b = root.bodies
         b[root.idOf(path)] = { title: title, body: r.body || "", editable: r.editable === true, originalTitle: title, version: ver }
         root.bodies = b
-        if (cb) cb({ title: title, body: r.body || "", editable: r.editable === true, version: ver })
+        if (cb) {
+          cb({ title: title, body: r.body || "", editable: r.editable === true, version: ver })
+        }
       })
   }
 
@@ -504,10 +648,19 @@ Item {
     b[id] = { title: title, body: body, editable: true, originalTitle: original, version: "" }
     root.bodies = b
     var pgs = root.pages.slice()
-    for (var i = 0; i < pgs.length; i++) if (pgs[i].id === id) pgs[i] = { id: id, sectionId: pgs[i].sectionId, title: title, modified: pgs[i].modified }
+    for (var i = 0; i < pgs.length; i++) {
+      if (pgs[i].id === id) {
+        pgs[i] = { id: id, sectionId: pgs[i].sectionId, title: title, modified: pgs[i].modified }
+      }
+    }
     root.pages = pgs
     rebuild()
-    if (!root.rq) { if (cb) cb({ error: "not ready" }); return }
+    if (!root.rq) {
+      if (cb) {
+        cb({ error: "not ready" })
+      }
+      return
+    }
     // replace: a newer save of one page strictly contains the older one's
     // intent, so a queued one is dropped rather than sent. flush: a save the
     // app has accepted is finished even if the window closes over it.
@@ -515,16 +668,36 @@ Item {
     root.rq.enqueue({ key: "page:" + id, mode: "replace", priority: 0, owner: root, flush: true, label: "save" },
       function(ctx) { root.runScript(["update", id, "-"], payload, ctx) },
       function(r, info) {
-        if (!r) { if (cb) cb(root.unsentSave(info)); return }
-        if (r.error) { if (cb) cb({ error: r.error }); return }
+        if (!r) {
+          if (cb) {
+            cb(root.unsentSave(info))
+          }
+          return
+        }
+        if (r.error) {
+          if (cb) {
+            cb({ error: r.error })
+          }
+          return
+        }
         var bodiesNow = root.bodies, k = root.idOf(path)
-        if (!r.warning && bodiesNow[k]) { bodiesNow[k].originalTitle = bodiesNow[k].title; root.bodies = bodiesNow }
-        if (cb) cb(r.warning ? { warning: r.warning } : {})
+        if (!r.warning && bodiesNow[k]) {
+          bodiesNow[k].originalTitle = bodiesNow[k].title
+          root.bodies = bodiesNow
+        }
+        if (cb) {
+          cb(r.warning ? { warning: r.warning } : {})
+        }
       })
   }
 
   function create(target, cb) {
-    if (!root.ready || !root.rq || target.indexOf("section:") !== 0) { if (cb) cb({ error: "not ready" }); return }
+    if (!root.ready || !root.rq || target.indexOf("section:") !== 0) {
+      if (cb) {
+        cb({ error: "not ready" })
+      }
+      return
+    }
     root.statusRequested("Creating a OneNote page…")
     var section = target.substring(8)
     // Not deduped: two Ctrl+Ns mean two pages. During a cooldown this fails
@@ -534,17 +707,33 @@ Item {
       function(ctx) { root.runScript(["create", section, "-"], JSON.stringify({ title: "", body: "" }), ctx) },
       function(r) {
         root.statusRequested("")
-        if (!r) { if (cb) cb({ error: "the window closed before the page was made" }); return }
-        if (r.error) { if (cb) cb({ error: r.error }); return }
+        if (!r) {
+          if (cb) {
+            cb({ error: "the window closed before the page was made" })
+          }
+          return
+        }
+        if (r.error) {
+          if (cb) {
+            cb({ error: r.error })
+          }
+          return
+        }
         root.pages = [r.page].concat(root.pages)
         var b = root.bodies; b[r.page.id] = { title: "", body: "", editable: true, originalTitle: "" }; root.bodies = b
         var sec = root.sectionAt(r.page.sectionId), exp = root.expanded.slice()
-        if (sec && exp.indexOf(sec.notebookId) < 0) exp.push(sec.notebookId)
-        if (exp.indexOf(r.page.sectionId) < 0) exp.push(r.page.sectionId)
+        if (sec && exp.indexOf(sec.notebookId) < 0) {
+          exp.push(sec.notebookId)
+        }
+        if (exp.indexOf(r.page.sectionId) < 0) {
+          exp.push(r.page.sectionId)
+        }
         root.expanded = exp
         root.rebuild()
         root.persistRequested()
-        if (cb) cb({ path: root.pathOf(r.page.id) })
+        if (cb) {
+          cb({ path: root.pathOf(r.page.id) })
+        }
       })
   }
 
@@ -552,14 +741,23 @@ Item {
     var id = idOf(path)
     root.pages = root.pages.filter(function(p) { return p.id !== id })
     rebuild()
-    if (!root.rq) { if (cb) cb({ error: "not ready" }); return }
+    if (!root.rq) {
+      if (cb) {
+        cb({ error: "not ready" })
+      }
+      return
+    }
     // The page's own key, and replace: a delete supersedes a save of the same
     // page that has not gone yet (there is nothing left to save it into), and
     // queues behind one that has — per-key order means no resurrection, and
     // no lost answer either way.
     root.rq.enqueue({ key: "page:" + id, mode: "replace", priority: 0, owner: root, flush: true, label: "delete" },
       function(ctx) { root.runScript(["delete", id], "", ctx) },
-      function(r) { if (cb) cb(r && r.error ? { error: r.error } : {}) })
+      function(r) {
+        if (cb) {
+          cb(r && r.error ? { error: r.error } : {})
+        }
+      })
   }
 
   function setOrder(sectionKey, paths) {}
@@ -572,30 +770,47 @@ Item {
   // listing (which now fetches only what changed) or a manual refresh.
   property int pollTick: 0
   function poll(currentPath) {
-    if (!root.ready || !root.rq) return
+    if (!root.ready || !root.rq) {
+      return
+    }
     root.pollTick++
     // Everything the poll no longer looks at comes back here instead: every
     // fifth minute the account is re-listed, which is one request while
     // nothing has changed (onenote.py diffs each section's own timestamp) and
     // usually not even that, since the script serves its cache under
     // --max-age. That is the whole of the budget the old poll was spending.
-    if (root.pollTick % 15 === 0) root.listPages(false)
-    if (root.pollTick % 3 !== 0) return
+    if (root.pollTick % 15 === 0) {
+      root.listPages(false)
+    }
+    if (root.pollTick % 3 !== 0) {
+      return
+    }
     var mine = currentPath && currentPath.indexOf(root.id + ":") === 0
     if (mine) {
       root.rq.enqueue({ key: "check:" + currentPath, mode: "dedupe", priority: 1, owner: root, label: "check" },
         function(ctx) { root.runScript(["page", root.idOf(currentPath)], "", ctx) },
-        function(r) { if (r && !r.error) root.applyCheck(currentPath, r) })
+        function(r) {
+          if (r && !r.error) {
+            root.applyCheck(currentPath, r)
+          }
+        })
     }
     var page = mine ? root.pageAt(currentPath) : null
-    if (!page || !page.sectionId) return
+    if (!page || !page.sectionId) {
+      return
+    }
     root.rq.enqueue({ key: "pages:" + page.sectionId, mode: "dedupe", priority: 1, owner: root, label: "section pages" },
       function(ctx) { root.runScript(["pages", page.sectionId], "", ctx) },
       function(r) {
-        if (!r || r.error || !Array.isArray(r.pages) || !Array.isArray(r.sections)) return
+        if (!r || r.error || !Array.isArray(r.pages) || !Array.isArray(r.sections)) {
+          return
+        }
         var ids = {}; r.sections.forEach(function(id) { ids[id] = true })
         var merged = root.pages.filter(function(p) { return !ids[p.sectionId] }).concat(r.pages)
-        if (JSON.stringify(merged) !== JSON.stringify(root.pages)) { root.pages = merged; root.rebuild() }
+        if (JSON.stringify(merged) !== JSON.stringify(root.pages)) {
+          root.pages = merged
+          root.rebuild()
+        }
       })
   }
 
@@ -603,7 +818,9 @@ Item {
   // page is compared by its text instead.
   function applyCheck(path, r) {
     var id = root.idOf(path), old = root.bodies[id]
-    if (old && old.body === (r.body || "") && old.title === (r.title || old.title)) return
+    if (old && old.body === (r.body || "") && old.title === (r.title || old.title)) {
+      return
+    }
     var pg = root.pageAt(path)
     var b = root.bodies
     b[id] = { title: r.title || (pg ? pg.title : ""), body: r.body || "", editable: r.editable === true,
@@ -626,8 +843,12 @@ Item {
       onStreamFinished: {
         var res = root.parse(this.text)
         if (!res.error) {
-          if (Array.isArray(res.sections)) root.onSections = res.sections
-          if (Array.isArray(res.pages)) root.pages = res.pages
+          if (Array.isArray(res.sections)) {
+            root.onSections = res.sections
+          }
+          if (Array.isArray(res.pages)) {
+            root.pages = res.pages
+          }
         }
         root.rebuild()
       }

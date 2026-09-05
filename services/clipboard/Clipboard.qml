@@ -58,12 +58,18 @@ Item {
           proc.callback = null
           var result = null
           try { result = JSON.parse(this.text) } catch (error) { result = null }
-          if (done) done(result)
+          if (done) {
+            done(result)
+          }
           Qt.callLater(function() { proc.destroy() })
         }
       }
       onExited: function(code) {
-        if (proc.callback) { var done = proc.callback; proc.callback = null; done(null) }
+        if (proc.callback) {
+          var done = proc.callback
+          proc.callback = null
+          done(null)
+        }
       }
     }
   }

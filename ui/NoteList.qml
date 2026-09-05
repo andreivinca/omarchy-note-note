@@ -41,16 +41,21 @@ Item {
   // Only a provider that can make notebooks offers the row that makes them.
   property bool canCreateNotebook: false
   readonly property string activeName: {
-    for (var i = 0; i < root.sections.length; i++)
-      if (root.sections[i].key === root.activeKey) return root.sections[i].name || ""
+    for (var i = 0; i < root.sections.length; i++) {
+      if (root.sections[i].key === root.activeKey) {
+        return root.sections[i].name || ""
+      }
+    }
     return ""
   }
   // The open tab's colour, resolved the way the strip resolves it, so the
   // page wash below and the tab above cannot disagree.
   readonly property color activeBase: {
-    for (var i = 0; i < root.sections.length; i++)
-      if (root.sections[i].key === root.activeKey)
+    for (var i = 0; i < root.sections.length; i++) {
+      if (root.sections[i].key === root.activeKey) {
         return TabColors.baseFor(root.sections[i].color || "", root.sections[i].name || "")
+      }
+    }
     return Color.menu.background
   }
   property color foreground: Color.menu.text
@@ -101,8 +106,11 @@ Item {
   // Whichever list is on screen: the search panel replaces the main list
   // while a filter is on, and a keyboard move must scroll the one visible.
   function positionViewAtIndex(i, mode) {
-    if (root.filtering) searchPanel.positionViewAtIndex(i, mode)
-    else listView.positionViewAtIndex(i, mode)
+    if (root.filtering) {
+      searchPanel.positionViewAtIndex(i, mode)
+    } else {
+      listView.positionViewAtIndex(i, mode)
+    }
   }
 
   // Scroll offset, measured from the top of the content, so a model rebuild
@@ -467,11 +475,15 @@ Item {
               } else if (event.key === Qt.Key_Return || event.key === Qt.Key_Enter) {
                 var name = text.trim()
                 newNotebookRow.editing = false
-                if (name) root.newNotebookRequested(name)
+                if (name) {
+                  root.newNotebookRequested(name)
+                }
                 event.accepted = true
               }
             }
-            onActiveFocusChanged: if (!activeFocus) newNotebookRow.editing = false
+            onActiveFocusChanged: if (!activeFocus) {
+              newNotebookRow.editing = false
+            }
           }
         }
 

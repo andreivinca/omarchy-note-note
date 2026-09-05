@@ -172,11 +172,19 @@ Item {
 
       Keys.priority: Keys.BeforeItem
       Keys.onPressed: function(event) {
-        if (event.key === Qt.Key_Down) { root.moveRequested(1); event.accepted = true }
-        else if (event.key === Qt.Key_Up) { root.moveRequested(-1); event.accepted = true }
-        else if (event.key === Qt.Key_Return || event.key === Qt.Key_Enter
-                 || (event.key === Qt.Key_Tab && !(event.modifiers & Qt.ControlModifier))) { root.acceptRequested(); event.accepted = true }
-        else if (root.shortcutHandler && root.shortcutHandler(event)) event.accepted = true
+        if (event.key === Qt.Key_Down) {
+          root.moveRequested(1)
+          event.accepted = true
+        } else if (event.key === Qt.Key_Up) {
+          root.moveRequested(-1)
+          event.accepted = true
+        } else if (event.key === Qt.Key_Return || event.key === Qt.Key_Enter
+                   || (event.key === Qt.Key_Tab && !(event.modifiers & Qt.ControlModifier))) {
+          root.acceptRequested()
+          event.accepted = true
+        } else if (root.shortcutHandler && root.shortcutHandler(event)) {
+          event.accepted = true
+        }
       }
     }
 
@@ -233,7 +241,9 @@ Item {
       onClicked: menu.opened ? menu.close() : menu.open()
       // Detaching re-parents the whole content under a different window;
       // the menu that asked for it must not outlive the bar it hangs from.
-      onVisibleChanged: if (!visible) { menu.close() }
+      onVisibleChanged: if (!visible) {
+        menu.close()
+      }
 
       // Centered on the glyph's painted ink, both axes. The kit's
       // OpticalGlyph corrects only horizontally — it keeps a shared

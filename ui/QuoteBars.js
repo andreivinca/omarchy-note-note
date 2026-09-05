@@ -22,15 +22,25 @@ function styleMargins(style) {
 
 function kindOfStyle(style) {
   var m = styleMargins(style)
-  if (m.left >= QUOTE_PX && m.right >= QUOTE_PX) return "quote"
-  if (/background-color\s*:/.test(style)) return "code"
+  if (m.left >= QUOTE_PX && m.right >= QUOTE_PX) {
+    return "quote"
+  }
+  if (/background-color\s*:/.test(style)) {
+    return "code"
+  }
   return ""
 }
 
 function kindOfBlock(block) {
-  if (block.rule) return "rule"
-  if (block.marginLeft >= QUOTE_PX && block.marginRight >= QUOTE_PX) return "quote"
-  if (block.background) return "code"
+  if (block.rule) {
+    return "rule"
+  }
+  if (block.marginLeft >= QUOTE_PX && block.marginRight >= QUOTE_PX) {
+    return "quote"
+  }
+  if (block.background) {
+    return "code"
+  }
   return ""
 }
 
@@ -42,8 +52,14 @@ function _openTags(html) {
   var body = (html.split("<body>")[1] || "").split("</body>")[0]
   var re = /<(p|li|td|th|hr|h[1-6])[\s>]/g, out = [], cellEnd = -1, m
   while ((m = re.exec(body)) !== null) {
-    if (m[1] === "td" || m[1] === "th") { cellEnd = body.indexOf("</" + m[1], m.index); out.push({ tag: m[1], open: "" }); continue }
-    if (m.index < cellEnd) continue
+    if (m[1] === "td" || m[1] === "th") {
+      cellEnd = body.indexOf("</" + m[1], m.index)
+      out.push({ tag: m[1], open: "" })
+      continue
+    }
+    if (m.index < cellEnd) {
+      continue
+    }
     out.push({ tag: m[1], open: body.substring(m.index, body.indexOf(">", m.index) + 1) })
   }
   return out
@@ -57,7 +73,10 @@ function _openTags(html) {
 function kinds(html) {
   var tags = _openTags(html), out = []
   for (var i = 0; i < tags.length; i++) {
-    if (tags[i].tag === "hr") { out.push("rule"); continue }
+    if (tags[i].tag === "hr") {
+      out.push("rule")
+      continue
+    }
     var style = /style="([^"]*)"/.exec(tags[i].open)
     out.push(tags[i].tag === "p" && style ? kindOfStyle(style[1]) : "")
   }
@@ -87,14 +106,23 @@ function _collect(kindAt, count, fromOf, toOf) {
     var kind = i < count ? kindAt(i) : ""
     // Only these two kinds draw anything; every other kind ("rule") is a
     // run-breaker here, not a run.
-    if (kind !== "quote" && kind !== "code") kind = ""
+    if (kind !== "quote" && kind !== "code") {
+      kind = ""
+    }
     if (kind === open) {
-      if (open) to = toOf(i)
+      if (open) {
+        to = toOf(i)
+      }
       continue
     }
-    if (open) out[open].push({ from: from, to: to })
+    if (open) {
+      out[open].push({ from: from, to: to })
+    }
     open = kind
-    if (open) { from = fromOf(i); to = toOf(i) }
+    if (open) {
+      from = fromOf(i)
+      to = toOf(i)
+    }
   }
   return out
 }
@@ -105,7 +133,9 @@ function _blockSpans(text) {
   var starts = [], ends = [], start = 0
   for (var i = 0; i <= text.length; i++) {
     var c = i < text.length ? text.charCodeAt(i) : 0x2029  // the text's end closes the last block
-    if (c !== 0x2029 && c !== 0xFDD0) continue
+    if (c !== 0x2029 && c !== 0xFDD0) {
+      continue
+    }
     starts.push(start); ends.push(i)
     start = i + 1
   }
@@ -131,15 +161,21 @@ function runsFromBlocks(blocks) {
 function boxes(html, text) {
   var marker = markers(html), spans = _blockSpans(text), out = []
   var count = Math.min(marker.length, spans.starts.length)
-  for (var i = 0; i < count; i++)
-    if (marker[i]) out.push({ position: spans.starts[i], checked: marker[i] === 2 })
+  for (var i = 0; i < count; i++) {
+    if (marker[i]) {
+      out.push({ position: spans.starts[i], checked: marker[i] === 2 })
+    }
+  }
   return out
 }
 
 // The same boxes, from the native inspector's block list.
 function boxesFromBlocks(blocks) {
   var out = []
-  for (var i = 0; i < blocks.length; i++)
-    if (blocks[i].marker) out.push({ position: blocks[i].position, checked: blocks[i].marker === 2 })
+  for (var i = 0; i < blocks.length; i++) {
+    if (blocks[i].marker) {
+      out.push({ position: blocks[i].position, checked: blocks[i].marker === 2 })
+    }
+  }
   return out
 }

@@ -53,13 +53,20 @@ Item {
   // finds and measures them. A directory path, never note content, so it may
   // ride on argv.
   function toHtml(markdown, callback, base) {
-    if (!markdown) { callback("", true); return }
+    if (!markdown) {
+      callback("", true)
+      return
+    }
     run(["to-html", "--highlight", root.highlight, "--highlight-ink", root.highlightInk,
          "--link", root.link, "--quote-ink", root.quoteInk,
          "--code-background", root.codeBackground,
          "--code-chip", root.codeChip].concat(base ? ["--base", base] : []),
         markdown, function(answer) {
-      if (!answer || typeof answer.html !== "string") { console.warn("note-note: could not render the note"); callback("", false); return }
+      if (!answer || typeof answer.html !== "string") {
+        console.warn("note-note: could not render the note")
+        callback("", false)
+        return
+      }
       callback(answer.html, true)
     })
   }
@@ -72,9 +79,16 @@ Item {
   // only then — an empty answer is not a failure: a note holding one blank
   // line converts to no Markdown at all, and that is the truth about it.
   function toMarkdown(html, callback, base) {
-    if (!html) { callback("", { blocks: [], count: 0, ok: true }); return }
+    if (!html) {
+      callback("", { blocks: [], count: 0, ok: true })
+      return
+    }
     run(["to-markdown"].concat(base ? ["--base", base] : []), html, function(answer) {
-      if (!answer || typeof answer.markdown !== "string") { console.warn("note-note: could not read the editor's document"); callback("", { blocks: [], count: 0, ok: false }); return }
+      if (!answer || typeof answer.markdown !== "string") {
+        console.warn("note-note: could not read the editor's document")
+        callback("", { blocks: [], count: 0, ok: false })
+        return
+      }
       callback(answer.markdown, { blocks: answer.blocks || [], count: answer.count || 0, ok: true })
     })
   }
@@ -93,7 +107,11 @@ Item {
   // without one, and a start that failed (which Qt reports with neither).
   function run(args, payload, callback) {
     var proc = converter.createObject(root, { command: ["python3", root.script].concat(args), callback: callback })
-    if (!proc) { console.warn("note-note: could not start the converter"); callback(null); return }
+    if (!proc) {
+      console.warn("note-note: could not start the converter")
+      callback(null)
+      return
+    }
     proc.stdinEnabled = true                 // stdin must be open before it starts
     proc.running = true
     proc.write(payload)
@@ -117,19 +135,26 @@ Item {
       function finish(text) {
         var done = proc.callback
         proc.callback = null
-        if (done) done(root.parse(text))
+        if (done) {
+          done(root.parse(text))
+        }
         Qt.callLater(function() { proc.destroy() })
       }
       onStarted: proc.launched = true
       stdout: StdioCollector { onStreamFinished: proc.finish(this.text) }
       onExited: function(code) {
-        if (code !== 0) console.warn("note-note: qthtml exited with", code)
+        if (code !== 0) {
+          console.warn("note-note: qthtml exited with", code)
+        }
         proc.finish("")
       }
       // A process that could not be started (no python3 on the shell's PATH)
       // goes running -> not running without ever having started, and Qt
       // emits neither an exit nor a stream end for it.
-      onRunningChanged: if (!proc.running && !proc.launched) { console.warn("note-note: could not start the converter"); proc.finish("") }
+      onRunningChanged: if (!proc.running && !proc.launched) {
+        console.warn("note-note: could not start the converter")
+        proc.finish("")
+      }
     }
   }
 }
