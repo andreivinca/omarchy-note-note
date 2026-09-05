@@ -6,6 +6,8 @@ import "app/services/providers" as Providers
 import "app/services/processes"
 import "app/services/files"
 import "app/providers/local" as Local
+import "app/providers/onenote" as OneNote
+import "app/services/microsoft" as Microsoft
 import "app/services/notes/sidebar.js" as Sidebar
 import "app/services/providers/settings.js" as Settings
 import "app/ui/MarkdownBlocks.js" as Blocks
@@ -341,12 +343,54 @@ ShellRoot {
     console.log("<<<RESULT>>>" + JSON.stringify(test.results) + "<<<END>>>")
     Qt.callLater(Qt.quit)
   }
+  QtObject {
+    id: oneNoteAccount
+    property bool configured: true
+    property bool signedIn: true
+    property bool loggingIn: false
+    property bool filesRead: false
+    property string account: "test"
+    property var env: ({})
+    property int optionalLogins: 0
+    property int destructiveLogins: 0
+    signal updated()
+    function hasScope(scope) { return scope === "Notes.ReadWrite" || (scope === "Files.Read" && filesRead) }
+    function loginOptional() { optionalLogins++ }
+    function relogin() { destructiveLogins++ }
+  }
+  OneNote.Provider { id: oneNote; ms: oneNoteAccount }
+  Microsoft.Account {
+    id: scopeAccount
+    scopes: "offline_access User.Read Notes.ReadWrite"
+    optionalScopes: "Files.Read"
+  }
+  function oneNoteCases() {
+    oneNote.onSections = [{ id: "section", name: "Section", notebookId: "book", notebook: "Book" }]
+    oneNote.pages = [{ id: "page", sectionId: "section", title: "Note" }]
+    oneNote.rebuild()
+    check("OneNote stays ready without Files.Read", oneNote.ready && oneNote.accountRows() === null)
+    check("OneNote notes remain visible without Files.Read", oneNote.sections[0].notes.length === 1)
+    check("optional consent is offered without replacing notebook rows",
+          oneNote.sections[0].rows.some(function(row) { return row.path === "enableorder" }) &&
+          oneNote.sections[0].rows.some(function(row) { return row.path === "book" }))
+    oneNote.action("enableorder")
+    check("optional consent does not sign out first", oneNoteAccount.optionalLogins === 1 && oneNoteAccount.destructiveLogins === 0)
+    oneNoteAccount.filesRead = true
+    oneNote.rebuild()
+    check("consented ordering removes the optional action", !oneNote.sections[0].rows.some(function(row) { return row.path === "enableorder" }))
+    oneNoteAccount.filesRead = false
+    oneNote.rebuild()
+    check("losing Files.Read does not hide notes", oneNote.ready && oneNote.sections[0].notes.length === 1)
+    check("normal sign-in excludes optional scopes", scopeAccount.env.NOTE_NOTE_MS_SCOPES.indexOf("Files.Read") < 0 &&
+          scopeAccount.env.NOTE_NOTE_MS_OPTIONAL_SCOPES === "Files.Read")
+  }
   Component.onCompleted: {
     try {
       editorCases()
       sessionCases()
       lifecycleCases()
       pureCases()
+      oneNoteCases()
       processCases()
       localCases()
     } catch (error) {

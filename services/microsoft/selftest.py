@@ -36,6 +36,7 @@ import tempfile
 import time
 import urllib.error
 import urllib.request
+from unittest.mock import patch
 
 # msgraph reads all of these into module constants at import, so they are set
 # first: a test that ran against the real ones would sign the user out.
@@ -350,6 +351,59 @@ def test_a_blip_during_a_forced_refresh_keeps_the_token(verbose):
     return failures
 
 
+def test_optional_scopes_cannot_break_required_refresh(verbose):
+    failures = 0
+    required = "offline_access User.Read Notes.ReadWrite"
+    base_grant = "User.Read Notes.ReadWrite"
+    for optional_granted, optional_accepted in [(False, False), (True, True), (True, False)]:
+        sign_in()
+        token = msgraph.load_json(msgraph.TOKENS, {})
+        token.update({"expires_at": 0, "scope": base_grant + (" Files.Read" if optional_granted else "")})
+        msgraph.save_private(msgraph.TOKENS, token)
+        requests = []
+
+        def refresh(method, url, data, **kwargs):
+            requests.append(data["scope"].split())
+            if "Files.Read" in requests[-1] and not optional_accepted:
+                return 400, {"error": "invalid_scope"}
+            return 200, {"access_token": "new", "refresh_token": "new-refresh", "expires_in": 3600,
+                         "scope": base_grant + (" Files.Read" if optional_accepted else "")}
+
+        with patch.object(msgraph, "SCOPES", required), patch.object(msgraph, "OPTIONAL_SCOPES", "Files.Read"):
+            with patch.object(msgraph, "http", side_effect=refresh), patch.object(msgraph, "forget_token") as forget:
+                access = msgraph.access_token(force=True)
+                failures += check("optional failure never signs out", not forget.called)
+        saved = msgraph.load_json(msgraph.TOKENS, {})
+        failures += check("required sign-in remains usable", access == "new" and saved.get("access_token") == "new")
+        failures += check("unconsented scopes are never requested", ("Files.Read" in requests[0]) == optional_granted)
+        failures += check("optional failure retries required scopes", len(requests) == (2 if optional_granted and not optional_accepted else 1))
+        failures += check("effective grant drops unavailable optional permission",
+                          ("Files.Read" in saved.get("scope", "").split()) == optional_accepted)
+        if verbose:
+            print("  scopes requested: %r" % requests)
+    print("optional scope renewal falls back without breaking required access")
+    print("  %d checks failed" % failures if failures else "  all green")
+    return failures
+
+
+def test_optional_refresh_with_malformed_reply_or_omitted_scope(verbose):
+    sign_in()
+    token = msgraph.load_json(msgraph.TOKENS, {})
+    token.update({"expires_at": 0, "scope": "User.Read Notes.ReadWrite Files.Read"})
+    msgraph.save_private(msgraph.TOKENS, token)
+    with patch.object(msgraph, "SCOPES", "offline_access User.Read Notes.ReadWrite"):
+        with patch.object(msgraph, "OPTIONAL_SCOPES", "Files.Read"):
+            with patch.object(msgraph, "http", side_effect=[(200, None), (200, {
+                "access_token": "base-only", "refresh_token": "new-refresh", "expires_in": 3600})]) as request:
+                access = msgraph.access_token()
+    saved = msgraph.load_json(msgraph.TOKENS, {})
+    failures = check("malformed optional reply retries required grant", access == "base-only" and request.call_count == 2)
+    failures += check("omitted scope does not retain stale optional grant", "Files.Read" not in saved.get("scope", "").split())
+    print("malformed optional replies and omitted scopes preserve base access")
+    print("  %d checks failed" % failures if failures else "  all green")
+    return failures
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("-v", "--verbose", action="store_true")
@@ -364,6 +418,8 @@ def main():
         total += test_dead_grant_is_forgotten(args.verbose)
         total += test_ordinary_expiry_keeps_its_message(args.verbose)
         total += test_a_blip_during_a_forced_refresh_keeps_the_token(args.verbose)
+        total += test_optional_scopes_cannot_break_required_refresh(args.verbose)
+        total += test_optional_refresh_with_malformed_reply_or_omitted_scope(args.verbose)
     finally:
         shutil.rmtree(WORK, ignore_errors=True)
 

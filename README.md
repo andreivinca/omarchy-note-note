@@ -132,11 +132,13 @@ a minimal provider to start from.
   the filesystem beyond its own state and cache under
   `~/.local/state/omarchy/` and `~/.cache/omarchy/`.
 - **Microsoft account, only after you sign in**: `Mail.ReadWrite` (Sticky
-  Notes are stored in your mailbox), `Notes.ReadWrite` and `Files.Read`
-  (OneNote), and `User.Read`. `Files.Read` allows reading your OneDrive files;
+  Notes are stored in your mailbox), `Notes.ReadWrite` (OneNote), and `User.Read`.
+  OneNote's optional `Files.Read` permission allows reading your OneDrive files;
   the provider uses it only for notebook file listings and `.onetoc2` metadata
   containing OneNote's custom section order. No separate local order is used.
-  Existing OneNote users must consent to the added scope by signing in again.
+  Choose **Enable custom section order…** to consent to this optional scope.
+  Declining, cancelling or losing it leaves normal note access available,
+  with sections sorted alphabetically.
   Each provider's token is separate and owner-only; signing out
   deletes only that one. The plugin talks to `login.microsoftonline.com` and
   `graph.microsoft.com`; OneNote metadata downloads also use Microsoft's
@@ -149,9 +151,10 @@ unguaranteed Graph/OneDrive ID mapping. See the
 [risk assessment](docs/onenote-section-order.md#risk-classification).
 It currently supports personal OneDrive notebook
 packages with a unique readable `.onetoc2` per folder. Section groups are
-flattened in their remote order. Unsupported or ambiguous metadata is reported;
-the last successfully fetched remote order is retained when available, otherwise
-Graph's sequence is kept. Page ordering still comes directly from Graph.
+flattened in their remote order. If metadata is unavailable, malformed,
+ambiguous or no longer matches Graph, the affected notebook's sections are
+sorted alphabetically and a warning is shown. Stale custom ordering is not
+used as a fallback. Page ordering still comes directly from Graph.
 
 Developer-facing documentation (architecture, security rules, testing,
 releases) lives in [`docs/`](docs/README.md).

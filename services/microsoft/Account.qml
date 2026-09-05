@@ -22,9 +22,13 @@ Item {
   property string clientId: ""
   // Space-separated Graph scopes to request at sign-in.
   property string scopes: "offline_access User.Read"
+  // Optional features request incremental consent without signing notes out.
+  property string optionalScopes: ""
+  property string loginScopes: root.scopes
   // Environment for any process that uses msgraph.py on this account's behalf.
   readonly property var env: ({ NOTE_NOTE_MS_ACCOUNT: root.owner, NOTE_NOTE_MS_CLIENT_ID: root.clientId,
-                                NOTE_NOTE_MS_SCOPES: root.scopes, NOTE_NOTE_MS_TOKEN: root.tokenPath })
+                                NOTE_NOTE_MS_SCOPES: root.scopes, NOTE_NOTE_MS_TOKEN: root.tokenPath,
+                                NOTE_NOTE_MS_OPTIONAL_SCOPES: root.optionalScopes })
 
   property bool configured: false
   property bool signedIn: false
@@ -41,10 +45,14 @@ Item {
 
   function refresh() { statusProc.running = true }
 
-  function login() {
+  function login() { startLogin(root.scopes) }
+  function loginOptional() { startLogin(root.scopes + " " + root.optionalScopes) }
+
+  function startLogin(requestedScopes) {
     if (root.loggingIn) {
       return
     }
+    root.loginScopes = requestedScopes
     root.loggingIn = true
     root.updated()
     loginProc.running = true
@@ -88,7 +96,7 @@ Item {
   Process {
     id: loginProc
     command: ["python3", root.script, "login"]
-    environment: root.env
+    environment: Object.assign({}, root.env, { NOTE_NOTE_MS_SCOPES: root.loginScopes })
     stdout: SplitParser {
       onRead: function(line) {
         var msg

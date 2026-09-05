@@ -63,7 +63,7 @@ Page content is attacker-controlled. An `<img src>` inside a OneNote page is
 - Anything not allowed is never requested; it is rendered as text.
 
 OneNote section ordering additionally reads remote `.onetoc2` metadata with
-delegated `Files.Read`. This permission is broader than notebook access, but
+optional delegated `Files.Read`. This permission is broader than notebook access, but
 the implementation probes only the personal notebook's verified OneDrive
 package and its children. It never downloads `.one` section bodies. Graph
 pagination stays under `https://graph.microsoft.com/v1.0/me/drive/items/`;
@@ -74,7 +74,7 @@ URLs nor raw TOCs are written to the provider cache or error messages.
 
 Each metadata response is limited to 512 KiB and 30 seconds (10-second socket
 timeout, wall-clock checks around each `read1`). An ordering pass allows at
-most 160 requests and 64 notebook/group folders, with a 180-second wall-clock
+most 160 requests and 64 notebook/group folders, with a 45-second wall-clock
 budget checked before requests and reads (the shared pacer can delay completion).
 Each folder listing is capped at 1,000 items. The binary
 reader caps stream objects, references and tree visits at 8,192 and nesting at
@@ -82,6 +82,17 @@ reader caps stream objects, references and tree visits at 8,192 and nesting at
 The parsed-order cache is versioned, pruned to live notebooks, bounded to 1 MiB
 and stored with the existing private listing cache. Deleted TOC records are
 joined only to live drive children and live Graph sections, never resurrected.
+Incomplete or mismatched live positions/identities are rejected. Failed ordering
+uses a deterministic alphabetical section sequence, never stale custom ranks.
+
+The optional transport receives an already-issued token and cannot refresh or
+delete the shared sign-in. Its separate `graph-onenote-section-order` rate key
+keeps metadata throttles out of the normal note lane. Optional imports, parser
+errors and unexpected exceptions are contained by the listing's alphabetical
+fallback; error text from unexpected failures is not exposed. `Files.Read`
+does not gate note access, and failed optional-scope renewal retries required
+scopes before declaring the sign-in unusable. Optional consent never signs
+out the working account first.
 
 ### 5. What goes *out* is bounded too
 

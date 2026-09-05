@@ -1,7 +1,10 @@
 """Synthetic TOC/OneDrive tests: no account, network or real notebook data."""
+import builtins
+import contextlib
 import io
 import json
 import struct
+import time
 import unittest
 import urllib.error
 from unittest.mock import patch
@@ -115,6 +118,10 @@ def sections():
             for index, name in [(30, "Food"), (31, "Health"), (32, "Welcome"), (33, "New")]]
 
 
+def alphabetical():
+    return sorted(sections(), key=lambda section: section["name"].casefold())
+
+
 class Remote:
     def __init__(self, etag="v1"):
         self.etag, self.downloads, self.calls = etag, 0, []
@@ -131,7 +138,7 @@ class Remote:
 
     def download(self, item):
         self.downloads += 1
-        return fixture(names=("Food.one", "Welcome.one", "Health.one", "Deleted.one"), orders=(3, 1, 5, 0))
+        return fixture(names=("Food.one", "Welcome.one", "Health.one", "Deleted.one", "New.one"), orders=(3, 1, 5, 0, 8))
 
 
 class TocTests(unittest.TestCase):
@@ -191,16 +198,16 @@ class OrderingTests(unittest.TestCase):
         order.arrange(sections(), cached, remote)
         self.assertEqual(remote.downloads, 1)
 
-    def test_unavailable_keeps_last_remote_order_and_warns(self):
-        result, cached, _ = order.arrange(sections(), remote=Remote())
+    def test_unavailable_discards_last_remote_order_and_warns(self):
+        _, cached, _ = order.arrange(sections(), remote=Remote())
         remote = Remote()
         def offline(path):
             raise order.OrderUnavailable("offline")
         remote.get = offline
         again, saved, warnings = order.arrange(sections(), cached, remote)
-        self.assertEqual(result, again)
+        self.assertEqual(again, alphabetical())
         self.assertTrue(warnings)
-        self.assertEqual(saved, cached)
+        self.assertFalse(saved["files"])
 
     def test_unsupported_ids_never_probe_drive(self):
         entries, remote = sections(), Remote()
@@ -215,7 +222,7 @@ class OrderingTests(unittest.TestCase):
         _, cached, _ = order.arrange(sections(), remote=Remote())
         _, saved, _ = order.arrange([], cached, Remote())
         self.assertFalse(saved["files"])
-        self.assertFalse(saved["notebooks"])
+        self.assertNotIn("notebooks", saved)
 
     def test_paginated_listing_cycle(self):
         remote = Remote()
@@ -227,7 +234,7 @@ class OrderingTests(unittest.TestCase):
         remote = Remote()
         remote.children.append({"id": "extra", "name": ".onetoc2", "file": {}})
         result, _, warnings = order.arrange(sections(), remote=remote)
-        self.assertEqual(result, sections())
+        self.assertEqual(result, alphabetical())
         self.assertTrue(warnings)
         self.assertEqual(remote.downloads, 0)
 
@@ -265,6 +272,147 @@ class OrderingTests(unittest.TestCase):
         self.assertEqual(data["sections"], result)
         self.assertEqual(data["pages"], pages)
 
+    def test_unexpected_failures_and_throttles_are_alphabetical(self):
+        _, cached, _ = order.arrange(sections(), remote=Remote())
+        for error in [RuntimeError("secret-url"), TypeError("secret-url"), SystemExit(1),
+                      order.ratelimit.Throttled(60), toc.InvalidToc("unsupported"), TimeoutError()]:
+            remote = Remote()
+            with patch.object(remote, "get", side_effect=error):
+                result, saved, warnings = order.arrange(list(reversed(sections())), cached, remote)
+            self.assertEqual(result, alphabetical())
+            self.assertFalse(saved["files"])
+            self.assertTrue(warnings)
+            self.assertNotIn("secret-url", str(warnings))
+
+    def test_partial_or_changed_id_mapping_is_rejected(self):
+        for count in (1, 4):
+            remote = Remote()
+            for item in remote.children[:count]:
+                item["id"] = "changed-" + item["id"]
+            result, saved, warnings = order.arrange(sections(), remote=remote)
+            self.assertEqual(result, alphabetical())
+            self.assertFalse(saved["files"])
+            self.assertTrue(warnings)
+
+    def test_missing_or_ambiguous_live_positions_are_rejected(self):
+        for orders in [(3, 1, 5), (3, 1, 5, 5)]:
+            remote = Remote()
+            remote.download = lambda item: fixture(
+                names=("Food.one", "Welcome.one", "Health.one", "New.one"), orders=orders)
+            result, saved, warnings = order.arrange(sections(), remote=remote)
+            self.assertEqual(result, alphabetical())
+            self.assertTrue(warnings)
+            self.assertFalse(saved["files"])
+
+    def test_invalid_children_and_cache_do_not_abort(self):
+        for invalid in [None, {}, {"name": "x.one"}, {"id": "x", "name": []}]:
+            remote = Remote()
+            remote.children.append(invalid)
+            result, _, warnings = order.arrange(sections(), remote=remote)
+            self.assertEqual(result, alphabetical())
+            self.assertTrue(warnings)
+        for files in [None, [], {TOC: None}, {TOC: {"etag": "v1", "entries": [None]}}]:
+            result, _, warnings = order.arrange(sections(), {"version": order.CACHE_VERSION, "files": files}, Remote())
+            self.assertEqual(result, alphabetical())
+            self.assertTrue(warnings)
+
+
+    def test_one_failed_notebook_does_not_change_a_healthy_one(self):
+        broken = [dict(section, id="other-" + section["id"], notebookId="unsupported", notebook="Broken")
+                  for section in reversed(sections())]
+        mixed = [section for pair in zip(broken, sections()) for section in pair]
+        result, saved, warnings = order.arrange(mixed, remote=Remote())
+        self.assertEqual([section["name"] for section in result if section["notebookId"] == BOOK],
+                         ["Welcome", "Food", "Health", "New"])
+        self.assertEqual([section["name"] for section in result if section["notebookId"] == "unsupported"],
+                         ["Food", "Health", "New", "Welcome"])
+        self.assertEqual([section["notebookId"] for section in result], [section["notebookId"] for section in mixed])
+        self.assertEqual(len(warnings), 1)
+        self.assertIn(TOC, saved["files"])
+
+
+class BoundaryTests(unittest.TestCase):
+    def test_missing_scope_never_invokes_workaround(self):
+        with patch.object(onenote, "has_section_order_scope", return_value=False), patch.object(order, "Remote") as remote:
+            result, saved, warnings = onenote.ordered_sections(list(reversed(sections())), {}, "token")
+        remote.assert_not_called()
+        self.assertEqual(result, alphabetical())
+        self.assertFalse(saved)
+        self.assertTrue(warnings)
+
+    def test_broken_optional_import_and_constructor_are_contained(self):
+        original_import = builtins.__import__
+        def missing(name, *args, **kwargs):
+            if name == "section_order":
+                raise ImportError("secret-url")
+            return original_import(name, *args, **kwargs)
+        with patch.object(onenote, "has_section_order_scope", return_value=True):
+            with patch.object(builtins, "__import__", side_effect=missing):
+                result, _, warnings = onenote.ordered_sections(sections(), {}, "token")
+            self.assertEqual(result, alphabetical())
+            self.assertNotIn("secret-url", str(warnings))
+            with patch.object(order, "Remote", side_effect=RuntimeError("secret-url")):
+                result, _, warnings = onenote.ordered_sections(sections(), {}, "token")
+            self.assertEqual(result, alphabetical())
+            self.assertTrue(warnings)
+
+    def test_invalid_optional_result_cannot_change_graph_membership(self):
+        for result in [sections()[:-1], sections() + sections()[:1],
+                       [dict(section, name="changed") for section in sections()]]:
+            with patch.object(onenote, "has_section_order_scope", return_value=True), patch.object(order, "Remote"):
+                with patch.object(order, "arrange", return_value=(result, {}, [])):
+                    arranged, _, warnings = onenote.ordered_sections(sections(), {}, "token")
+            self.assertEqual(arranged, alphabetical())
+            self.assertTrue(warnings)
+
+    def test_workaround_failure_does_not_abort_page_listing_or_checkpoint(self):
+        source = sections()
+        graph_sections = [{"id": section["id"], "displayName": section["name"],
+                           "lastModifiedDateTime": "stamp", "parentNotebook": {"id": BOOK, "displayName": "Test"}}
+                          for section in source]
+        printed = io.StringIO()
+        with contextlib.ExitStack() as stack:
+            stack.enter_context(patch.object(onenote, "has_section_order_scope", return_value=True))
+            stack.enter_context(patch.object(onenote, "load_json", return_value={}))
+            stack.enter_context(patch.object(onenote, "access_token", return_value="token"))
+            stack.enter_context(patch.object(onenote, "graph", return_value=(200, {"value": graph_sections})))
+            http = stack.enter_context(patch.object(onenote, "http", return_value=(200, {"value": [
+                {"id": "z", "title": "Z first"}, {"id": "a", "title": "A second"}]})))
+            save = stack.enter_context(patch.object(onenote, "save_private"))
+            stack.enter_context(patch.object(onenote.os, "makedirs"))
+            stack.enter_context(patch.object(order, "arrange", side_effect=RuntimeError("secret-url")))
+            stack.enter_context(contextlib.redirect_stdout(printed))
+            onenote.cmd_onenote_list(False)
+        reply = json.loads(printed.getvalue())
+        self.assertEqual(reply["sections"], alphabetical())
+        self.assertEqual(http.call_count, len(source))
+        self.assertTrue(all("$orderby=order" in call.args[1] for call in http.call_args_list))
+        self.assertEqual([page["id"] for page in reply["pages"]], ["z", "a"] * len(source))
+        self.assertEqual(save.call_args.args[1]["sections"], alphabetical())
+        self.assertTrue(reply["sectionOrderWarnings"])
+        self.assertNotIn("secret-url", printed.getvalue())
+
+    def test_cached_order_loses_permission_or_old_policy(self):
+        for scope, version in [(False, onenote.SECTION_ORDER_VERSION), (True, 1)]:
+            cache = {"sections": list(reversed(sections())), "pages": [], "fetched": time.time(),
+                     "sectionOrderVersion": version, "sectionOrderScope": True}
+            printed = io.StringIO()
+            with patch.object(onenote, "load_json", return_value=cache), patch.object(onenote, "has_section_order_scope", return_value=scope):
+                with contextlib.redirect_stdout(printed):
+                    onenote.cmd_onenote_list(True)
+            self.assertEqual(json.loads(printed.getvalue())["sections"], alphabetical())
+
+    def test_print_then_exit_cannot_corrupt_provider_protocol(self):
+        def broken(*args):
+            onenote.fail("secret-url")
+        printed = io.StringIO()
+        with patch.object(onenote, "has_section_order_scope", return_value=True), patch.object(order, "Remote"):
+            with patch.object(order, "arrange", side_effect=broken), contextlib.redirect_stdout(printed):
+                result, _, warnings = onenote.ordered_sections(sections(), {}, "token")
+        self.assertEqual(result, alphabetical())
+        self.assertTrue(warnings)
+        self.assertEqual(printed.getvalue(), "")
+
 
 class TransportTests(unittest.TestCase):
     def test_download_origin_allowlist(self):
@@ -279,7 +427,7 @@ class TransportTests(unittest.TestCase):
                 order.download_url(url)
 
     def test_untrusted_pagination_has_no_authorization(self):
-        remote = order.Remote()
+        remote = order.Remote("snapshot")
         with patch.object(remote, "request") as request:
             for path in ["https://evil.test/v1.0/me/drive/items/x", "https://graph.microsoft.com.evil.test/v1.0/me/drive/items/x"]:
                 with self.assertRaises(order.OrderUnavailable):
@@ -287,7 +435,7 @@ class TransportTests(unittest.TestCase):
             request.assert_not_called()
 
     def test_signed_download_omits_bearer_and_refuses_redirect(self):
-        remote = order.Remote()
+        remote = order.Remote("snapshot")
         class Response(io.BytesIO):
             status = 200
         with patch.object(remote.opener, "open", return_value=Response(b"toc")) as opened:
@@ -306,21 +454,31 @@ class TransportTests(unittest.TestCase):
             with self.assertRaises(order.OrderUnavailable):
                 order.read_response(io.BytesIO(b"x"), 1)
 
-    def test_graph_401_refreshes_once(self):
-        remote = order.Remote()
-        with patch.object(order.msgraph, "access_token", side_effect=["old", "new"]) as token:
-            with patch.object(remote, "request", side_effect=[(401, b""), (200, b"{\"id\":\"x\"}")]) as request:
-                self.assertEqual(remote.get(order.item_path("x")), {"id": "x"})
-                self.assertEqual([call.args[1] for call in request.call_args_list], ["old", "new"])
-            self.assertEqual(token.call_args_list[-1].args, (True,))
+    def test_graph_401_never_refreshes_or_forgets_shared_auth(self):
+        remote = order.Remote("snapshot")
+        with patch.object(order.msgraph, "access_token") as token, patch.object(order.msgraph, "forget_token") as forget:
+            with patch.object(remote, "request", return_value=(401, b"")) as request:
+                with self.assertRaises(order.OrderUnavailable):
+                    remote.get(order.item_path("x"))
+                self.assertEqual(request.call_args.args[1], "snapshot")
+                self.assertEqual(request.call_count, 1)
+            token.assert_not_called()
+            forget.assert_not_called()
 
     def test_request_count_limit_before_sending(self):
-        remote = order.Remote()
+        remote = order.Remote("snapshot")
         remote.requests = order.MAX_REQUESTS
         with patch.object(remote.opener, "open") as opened:
             with self.assertRaises(order.OrderUnavailable):
                 remote.request("https://test.files.1drv.com/x")
             opened.assert_not_called()
+
+    def test_metadata_throttle_has_its_own_budget(self):
+        remote = order.Remote("snapshot")
+        with patch.object(order.ratelimit, "attempt_loop", return_value=(429, b"")) as attempt:
+            remote.request(order.msgraph.GRAPH + order.item_path("x"), "snapshot")
+        self.assertEqual(attempt.call_args.args[0], "graph-onenote-section-order")
+        self.assertNotEqual(attempt.call_args.args[0], onenote.msgraph.RATE_KEY)
 
 
 def run():

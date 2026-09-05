@@ -318,6 +318,7 @@ the built-ins'.
 | key | used by | windows |
 |---|---|---|
 | `graph-onenote` | `onenote.py`, images included | (60s, 100) and (3600s, 350) — Microsoft allows 120/min and 400/hr per app+user |
+| `graph-onenote-section-order` | optional OneDrive metadata | (60s, 30) and (3600s, 180); throttles fall back to alphabetical sections without parking the normal note lane |
 | `graph-mail` | `sticky.py` | (60s, 240) — politeness; mailbox limits are far higher |
 | `notion` | `notion.py` | (1s, 3) — Notion's published average |
 | *(none)* | `login.microsoftonline.com` | unpaced: signing in must never wait behind a Graph cooldown |
@@ -363,6 +364,14 @@ created. What providers share is only the code. A user who prefers a
 registration of their own gives it to your provider alone, in
 `~/.config/omarchy/note-note.json` as
 `{"microsoft": {"<providerId>": {"clientId": "…", "tenant": "…"}}}`.
+
+An account may declare `optionalScopes` (space-separated). `login()` requests
+required scopes only; `loginOptional()` requests incremental consent without
+signing out the existing account. Only already-granted optional scopes are
+renewed, and a rejected optional refresh is retried with required scopes.
+The account's `env` includes `NOTE_NOTE_MS_OPTIONAL_SCOPES`; providers must not
+gate ordinary functionality on optional consent. OneNote uses this for its
+high-risk section-order workaround and falls back to alphabetical sections.
 
 
 ### Retirement and process ownership

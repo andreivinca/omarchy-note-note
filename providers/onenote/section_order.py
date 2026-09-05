@@ -23,14 +23,19 @@ import urllib.request
 
 import msgraph
 import ratelimit
-import toc
 
-CACHE_VERSION = 1
+CACHE_VERSION = 2
+MAX_BODY = 512 * 1024
+MAX_ITEMS = 8192
+MAX_DEPTH = 32
 MAX_FOLDERS = 64
 MAX_CHILDREN = 1000
 MAX_REQUESTS = 160
-MAX_SECONDS = 180
+MAX_SECONDS = 45
 MAX_CACHE_BYTES = 1024 * 1024
+# OneDrive metadata failures must not park the normal OneNote request lane.
+RATE_KEY = "graph-onenote-section-order"
+RATE_WINDOWS = [(60, 30), (3600, 180)]
 # HIGH-RISK WORKAROUND: observed personal-ID shape, not a documented mapping.
 # Keep this restriction; do not infer support for other notebook ID formats.
 ITEM_ID = re.compile(r"0-([0-9A-Fa-f]{16}![0-9]+)\Z")
@@ -67,20 +72,25 @@ def read_response(response, deadline):
     while True:
         if time.monotonic() >= deadline:
             raise OrderUnavailable("section metadata download timed out")
-        chunk = response.read1(min(65536, toc.MAX_BYTES + 1 - size))
+        chunk = response.read1(min(65536, MAX_BODY + 1 - size))
         if time.monotonic() >= deadline:
             raise OrderUnavailable("section metadata download timed out")
         if not chunk:
             return b"".join(chunks)
         size += len(chunk)
-        if size > toc.MAX_BYTES:
+        if size > MAX_BODY:
             raise OrderUnavailable("section metadata exceeds its size limit")
         chunks.append(chunk)
 
 
 class Remote:
-    """Read-only, origin-checked transport with the provider's pacing/auth."""
-    def __init__(self):
+    """Optional transport: owns no sign-in and has a separate rate budget.
+
+    The caller supplies a token already used for normal notes. A metadata
+    401 must never refresh, forget or otherwise change that working sign-in.
+    """
+    def __init__(self, token):
+        self.token = token
         self.opener = urllib.request.build_opener(NoRedirect)
         self.deadline = time.monotonic() + MAX_SECONDS
         self.requests = 0
@@ -109,7 +119,8 @@ class Remote:
                 # A signed URL is a credential: exceptions must not expose it.
                 raise OrderUnavailable("could not read OneDrive section metadata") from error
 
-        return ratelimit.attempt_loop(msgraph.rate_key_for(url), msgraph.RATE_WINDOWS, once)
+        key = RATE_KEY if url.startswith(msgraph.GRAPH_ORIGIN) else None
+        return ratelimit.attempt_loop(key, RATE_WINDOWS, once, attempts=1)
 
     def get(self, path):
         url = path if path.startswith("https://") else msgraph.GRAPH + path
@@ -117,9 +128,7 @@ class Remote:
         if (parsed.scheme != "https" or parsed.netloc != "graph.microsoft.com"
                 or not parsed.path.startswith("/v1.0/me/drive/items/") or parsed.fragment):
             raise OrderUnavailable("untrusted OneDrive metadata endpoint")
-        status, raw = self.request(url, msgraph.access_token())
-        if status == 401:
-            status, raw = self.request(url, msgraph.access_token(True))
+        status, raw = self.request(url, self.token)
         if status != 200:
             raise OrderUnavailable("OneDrive metadata returned HTTP %d" % status)
         try:
@@ -131,7 +140,7 @@ class Remote:
         return value
 
     def download(self, item):
-        if not isinstance(item.get("size"), int) or not 0 <= item["size"] <= toc.MAX_BYTES:
+        if type(item.get("size")) is not int or not 0 <= item["size"] <= MAX_BODY:
             raise OrderUnavailable("invalid section metadata size")
         url = download_url(item.get("@microsoft.graph.downloadUrl", ""))
         status, raw = self.request(url)  # Signed URL; never send the Graph token.
@@ -149,9 +158,9 @@ class Ordering:
         self.remote = remote
         self.cached = cached if isinstance(cached, dict) and cached.get("version") == CACHE_VERSION else {}
         self.saved = {}
-        self.notebooks = {}
         self.current_files = []
         self.visited = set()
+        self.section_names = {}
 
     def children(self, item_id):
         url = item_path(item_id) + "/children?$select=id,name,size,file,folder,eTag&$top=200"
@@ -164,8 +173,14 @@ class Ordering:
             values = result.get("value")
             if not isinstance(values, list) or len(found) + len(values) > MAX_CHILDREN:
                 raise OrderUnavailable("too many notebook files")
+            for item in values:
+                if (not isinstance(item, dict) or not isinstance(item.get("id"), str) or not item["id"]
+                        or not isinstance(item.get("name"), str) or not item["name"]):
+                    raise OrderUnavailable("invalid notebook file metadata")
             found.extend(values)
             url = result.get("@odata.nextLink")
+            if url is not None and (not isinstance(url, str) or not url):
+                raise OrderUnavailable("invalid notebook pagination")
         return found
 
     def entries(self, item):
@@ -176,17 +191,29 @@ class Ordering:
             entries = old["entries"]
         else:
             metadata = self.remote.get(item_path(key))
+            # Import only inside the optional failure boundary. A broken or
+            # missing parser must not prevent ordinary notes from loading.
+            import toc
             entries = toc.section_entries(self.remote.download(metadata))
             # The file may have changed since the children listing.
             etag = metadata.get("eTag")
+        if not isinstance(entries, list) or len(entries) > MAX_ITEMS:
+            raise OrderUnavailable("invalid cached TOC entries")
+        names = set()
+        for entry in entries:
+            if (not isinstance(entry, dict) or not isinstance(entry.get("name"), str) or not entry["name"]
+                    or type(entry.get("order")) is not int or not 0 <= entry["order"] <= 0xFFFFFFFF
+                    or entry["name"].casefold() in names):
+                raise OrderUnavailable("invalid or ambiguous TOC entries")
+            names.add(entry["name"].casefold())
         self.saved[key] = {"etag": etag, "entries": entries}
-        if sum(len(value["entries"]) for value in self.saved.values()) > toc.MAX_ITEMS:
+        if sum(len(value["entries"]) for value in self.saved.values()) > MAX_ITEMS:
             del self.saved[key]
             raise OrderUnavailable("too many cached section-order entries")
         return entries
 
     def folder(self, item_id, depth=0):
-        if item_id in self.visited or len(self.visited) >= MAX_FOLDERS or depth >= toc.MAX_DEPTH:
+        if item_id in self.visited or len(self.visited) >= MAX_FOLDERS or depth >= MAX_DEPTH:
             raise OrderUnavailable("cyclic or excessive notebook hierarchy")
         self.visited.add(item_id)
         children = self.children(item_id)
@@ -197,16 +224,23 @@ class Ordering:
         relevant = [item for item in children
                     if item.get("name", "").casefold() != "onenote_recyclebin"
                     and ("folder" in item or item.get("name", "").lower().endswith(".one"))]
-        # Unknown/new files keep their API sequence after the known entries.
-        # Deleted TOC records never introduce items: only live children join.
-        relevant.sort(key=lambda item: positions.get(item.get("name", "").casefold(), float("inf")))
+        # Incomplete or ambiguous live metadata is not a trustworthy order.
+        # Deleted TOC records still never introduce sections into the listing.
+        live_positions = [positions.get(item["name"].casefold()) for item in relevant]
+        if None in live_positions or len(set(live_positions)) != len(live_positions):
+            raise OrderUnavailable("incomplete or ambiguous live section order")
+        relevant.sort(key=lambda item: positions[item["name"].casefold()])
         ordered = []
         for item in relevant:
             if "folder" in item:
                 ordered.extend(self.folder(item["id"], depth + 1))
             else:
                 # The inverse of the same unguaranteed personal-ID mapping.
-                ordered.append("0-" + item["id"])
+                section_id = "0-" + item["id"]
+                if section_id in self.section_names:
+                    raise OrderUnavailable("duplicate OneDrive section ID")
+                self.section_names[section_id] = item["name"][:-4]
+                ordered.append(section_id)
         return ordered
 
     def notebook(self, notebook_id, name):
@@ -214,44 +248,49 @@ class Ordering:
         if not match:
             raise OrderUnavailable("custom section order currently supports personal OneDrive notebooks")
         item = self.remote.get(item_path(match[1]) + "?$select=id,name,package")
-        if item.get("name") != name or (item.get("package") or {}).get("type") != "oneNote":
+        if (item.get("id") != match[1] or item.get("name") != name
+                or (item.get("package") or {}).get("type") != "oneNote"):
             raise OrderUnavailable("notebook does not match its OneDrive package")
         return self.folder(match[1])
 
 
 def arrange(sections, cached=None, remote=None):
-    """Keep Graph IDs authoritative; change only section sequence, per book."""
-    ordering = Ordering(remote or Remote(), cached)
+    """Use verified remote order per book; any failure sorts that book A–Z.
+
+    The broad catch is intentional at this optional feature boundary. No
+    exception text from an unexpected failure is exposed: it might contain
+    a signed URL. Process cancellation (KeyboardInterrupt) still propagates.
+    """
+    ordering = Ordering(remote, cached)
     books = {}
     for section in sections:
         books.setdefault(section["notebookId"], []).append(section)
-    ranks, warnings = {}, []
+    warnings, live_files = [], set()
     for notebook_id, members in books.items():
         if len(members) == 1:
             continue  # A single section has no relative position to discover.
         ordering.current_files = []
         try:
             ids = ordering.notebook(notebook_id, members[0]["notebook"])
-            ordering.notebooks[notebook_id] = {"ids": ids, "files": ordering.current_files}
-        except (OrderUnavailable, toc.InvalidToc) as error:
-            warnings.append("%s: %s" % (members[0]["notebook"] or "Notebook", error))
-            previous = ordering.cached.get("notebooks", {}).get(notebook_id, {})
-            ids = previous.get("ids", [])
-            if previous:
-                ordering.notebooks[notebook_id] = previous
-                for key in previous.get("files", []):
-                    if key in ordering.cached.get("files", {}):
-                        ordering.saved[key] = ordering.cached["files"][key]
-        ranks[notebook_id] = {key: index for index, key in enumerate(ids)}
-        positions = ranks.get(notebook_id, {})
-        members.sort(key=lambda section: positions.get(section["id"], float("inf")))
+            positions = {key: index for index, key in enumerate(ids)}
+            for section in members:
+                if (section["id"] not in positions
+                        or ordering.section_names[section["id"]].casefold() != section["name"].casefold()):
+                    raise OrderUnavailable("Graph and OneDrive section identities no longer match")
+            members.sort(key=lambda section: positions[section["id"]])
+            live_files.update(ordering.current_files)
+        except (Exception, SystemExit):
+            warnings.append("%s: custom order unavailable; sections sorted alphabetically" %
+                            (members[0]["notebook"] or "Notebook"))
+            members.sort(key=lambda section: (section["name"].casefold(), section["name"], section["id"]))
+            for key in ordering.current_files:
+                ordering.saved.pop(key, None)
     # Preserve the original placement of notebooks within the account list.
     iterators = {key: iter(members) for key, members in books.items()}
     result = [next(iterators[section["notebookId"]]) for section in sections]
-    live_files = {key for book in ordering.notebooks.values() for key in book["files"]}
     files = {key: value for key, value in ordering.saved.items() if key in live_files}
-    saved = {"version": CACHE_VERSION, "files": files, "notebooks": ordering.notebooks}
+    saved = {"version": CACHE_VERSION, "files": files}
     if len(json.dumps(saved).encode()) > MAX_CACHE_BYTES:
         # Ordering is still valid; decline to persist an oversized optimization.
-        saved = {"version": CACHE_VERSION, "files": {}, "notebooks": {}}
+        saved = {"version": CACHE_VERSION, "files": {}}
     return result, saved, warnings

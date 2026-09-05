@@ -54,6 +54,7 @@ LEGACY_CLIENT_ID = "e5652641-e704-4d1a-a62f-df67d7053a30"
 
 # Providers declare the scopes they need; each passes only its own in.
 SCOPES = os.environ.get("NOTE_NOTE_MS_SCOPES", "offline_access User.Read")
+OPTIONAL_SCOPES = os.environ.get("NOTE_NOTE_MS_OPTIONAL_SCOPES", "")
 GRAPH = "https://graph.microsoft.com/v1.0"
 
 
@@ -238,10 +239,33 @@ def access_token(force=False):
     if not force and tok.get("expires_at", 0) - 60 > time.time():
         return tok["access_token"]
     used = tok.get("refresh_token", "")
-    status, res = http("POST", token_url(tenant), {
-        "client_id": client_id, "grant_type": "refresh_token",
-        "refresh_token": used, "scope": SCOPES,
-    }, form=True)
+    required = SCOPES.split()
+    grant = tok.get("scope", "")
+    granted = grant.split() if isinstance(grant, str) else []
+    optional = [scope for scope in OPTIONAL_SCOPES.split() if scope in granted and scope not in required]
+
+    def refresh(scopes, transient_5xx=True):
+        status, result = http("POST", token_url(tenant), {
+            "client_id": client_id, "grant_type": "refresh_token",
+            "refresh_token": used, "scope": " ".join(scopes),
+        }, form=True, transient_5xx=transient_5xx)
+        if not isinstance(result, dict):
+            result = {}
+        if status == 200 and "access_token" in result:
+            # OAuth may omit scope when it equals the request. Do not retain
+            # stale optional permissions from the token being replaced.
+            result.setdefault("scope", " ".join(scopes))
+        return status, result
+
+    if optional:
+        # Renew optional scopes only after consent. If they become unavailable,
+        # retry the required grant before declaring the account unusable. An
+        # optional-scope failure must never delete an otherwise valid sign-in.
+        status, res = refresh(required + optional, transient_5xx=False)
+        if status != 200 or "access_token" not in res:
+            status, res = refresh(required)
+    else:
+        status, res = refresh(required)
     if status != 200 or "access_token" not in res:
         if force:
             # `invalid_grant` has two meanings here and they want opposite

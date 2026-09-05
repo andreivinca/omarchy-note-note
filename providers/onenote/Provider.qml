@@ -24,7 +24,7 @@ Item {
   // Pages carry their images through an edit, and a pasted one is uploaded
   // with the save (onenote.py).
   readonly property bool canImages: true
-  readonly property var microsoftScopes: ["Notes.ReadWrite", "Files.Read"]
+  readonly property var microsoftScopes: ["Notes.ReadWrite"]
   // This provider's own app registration: an Entra public client for
   // personal and work accounts, registered by the author, that every user
   // of OneNote here signs in through. Sticky Notes has one of its own.
@@ -60,6 +60,7 @@ Item {
   Component.onCompleted: {
     if (services && services.microsoft) {
       root.ms = services.microsoft.create(root.id, root.microsoftScopes, root.microsoftClientId)
+      root.ms.optionalScopes = "Files.Read"
     }
     if (services && services.requests) {
       root.rq = services.requests.queueFor("graph-onenote", root)
@@ -93,7 +94,7 @@ Item {
   property var bodies: ({})      // id -> { title, body, editable, originalTitle }
   property var expanded: []      // notebook/section ids the user opened
   property var sections: []
-  readonly property bool ready: ms && ms.signedIn && ms.hasScope("Notes.ReadWrite") && ms.hasScope("Files.Read")
+  readonly property bool ready: ms && ms.signedIn && ms.hasScope("Notes.ReadWrite")
 
   function idOf(path) { return path.substring(root.id.length + 1) }
   function pathOf(id) { return root.id + ":" + id }
@@ -130,9 +131,6 @@ Item {
     }
     if (!ms.hasScope("Notes.ReadWrite")) {
       return [{ kind: "action", path: "relogin", title: ms.loggingIn ? "Cancel signing in…" : "Sign in again to enable OneNote…", icon: ms.loggingIn ? "󰅖" : "󰊻" }]
-    }
-    if (!ms.hasScope("Files.Read")) {
-      return [{ kind: "action", path: "relogin", title: ms.loggingIn ? "Cancel signing in…" : "Sign in again to read OneNote section order…", icon: ms.loggingIn ? "󰅖" : "󰊻" }]
     }
     return null
   }
@@ -176,6 +174,14 @@ Item {
   }
   function noteList(pgs) { return pgs.map(function(p) { return { path: pathOf(p.id), title: p.title, preview: "" } }) }
   function logoutRow() { return { kind: "action", path: "logout", title: "Sign out" + (ms.account ? " (" + ms.account + ")" : ""), icon: "󰍃" } }
+  function accountActions() {
+    var rows = []
+    if (!ms.hasScope("Files.Read")) {
+      rows.push({ kind: "action", path: "enableorder", title: ms.loggingIn ? "Cancel signing in…" : "Enable custom section order…", icon: "󰒓" })
+    }
+    rows.push(logoutRow())
+    return rows
+  }
 
   // `notes` on a section is its searchable whole, fold state ignored: rows
   // only carry the pages of expanded sections, and a search (and the hit
@@ -190,7 +196,7 @@ Item {
       root.sections = books.map(function(b) {
         var pgs = root.pages.filter(function(p) { var sec = root.sectionAt(p.sectionId); return sec && sec.notebookId === b.id })
         return { key: b.id, name: b.name, count: pgs.length, notes: noteList(pgs),
-                 rows: bookRows(b.id, 0).concat([logoutRow()]) }
+                 rows: bookRows(b.id, 0).concat(accountActions()) }
       })
       root.updated()
       return
@@ -214,7 +220,7 @@ Item {
           ? { kind: "action", path: "refresh", title: "Loading notebooks…", icon: "󰑐" }
           : { kind: "action", path: "refresh", title: "No notebooks found — refresh", icon: "󰑐" })
       }
-      rows.push(logoutRow())
+      rows = rows.concat(accountActions())
     }
     root.sections = [{ key: "onenote", name: "OneNote", color: "#7719AA", count: root.pages.length, notes: noteList(root.pages), rows: rows }]
     root.updated()
@@ -325,6 +331,15 @@ Item {
         root.noticeCleared()
       } else {
         ms.login()
+      }
+    }
+    else if (id === "enableorder") {
+      if (ms.loggingIn) {
+        ms.cancelLogin()
+        root.noticeCleared()
+      } else {
+        // Failed/cancelled optional consent leaves the working sign-in intact.
+        ms.loginOptional()
       }
     }
     else if (id === "relogin") {

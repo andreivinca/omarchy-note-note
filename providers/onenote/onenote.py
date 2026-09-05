@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""OneNote provider script (Notes.ReadWrite and Files.Read scopes).
+"""OneNote provider (Notes.ReadWrite; Files.Read is optional for section order).
 
   onenote.py list [--cached|--max-age S|--force] -> {"sections":[{id,name,notebook,notebookId,modified}],
                                            "pages":[{id,sectionId,title,modified}]}
@@ -12,6 +12,7 @@
   onenote.py create-section <notebookId> <file|->  -> {"ok":true,"section":{...}}
 """
 import html as _html
+import contextlib
 import json, os, re, sys, time, urllib.parse, urllib.request, urllib.error, uuid
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -23,7 +24,6 @@ import ratelimit  # noqa: E402
 from msgraph import (graph, http, fail, fail_throttled, out, load_json, save_private,  # noqa: E402
                      read_payload, access_token, TRANSIENT_STATUSES, CACHE_DIR, GRAPH)
 import onenote_md  # noqa: E402
-import section_order  # noqa: E402
 
 # OneNote's own Graph budget, shared with no other provider: a throttle here
 # parks OneNote and leaves Sticky Notes listing. Microsoft's delegated OneNote
@@ -32,6 +32,10 @@ import section_order  # noqa: E402
 # for the other things the account may be doing.
 msgraph.RATE_KEY = "graph-onenote"
 msgraph.RATE_WINDOWS = [(60, 100), (3600, 350)]
+# Keep optional consent out of the required refresh scopes, including when
+# an older, still-loaded UI supplies the previous combined scope list.
+msgraph.SCOPES = " ".join(scope for scope in msgraph.SCOPES.split() if scope != "Files.Read")
+msgraph.OPTIONAL_SCOPES = "Files.Read"
 
 ONENOTE_CACHE = os.path.join(CACHE_DIR, "note-note-onenote.json")
 ONENOTE_IMG_DIR = os.path.join(CACHE_DIR, "note-note-onenote-img")
@@ -39,6 +43,8 @@ ONENOTE_IMG_DIR = os.path.join(CACHE_DIR, "note-note-onenote-img")
 MAX_SECTIONS = 500
 MAX_PAGES = 3000
 MAX_LIST_BODY = 4 * 1024 * 1024   # one page of a listing
+SECTION_ORDER_VERSION = 2       # invalidates pre-alphabetical-fallback listings
+MAX_ORDER_CACHE = 1024 * 1024
 MAX_PAGE_HTML = 4 * 1024 * 1024   # a page's content
 MAX_IMAGE = 20 * 1024 * 1024      # one cached image
 # What may go *up*. Graph rejects a request over 4 MB, and counts every part
@@ -118,6 +124,58 @@ def section_pages_url(section_id):
             % urllib.parse.quote(section_id, safe=""))
 
 
+def has_section_order_scope():
+    """Inspect existing consent without refreshing or changing the sign-in."""
+    try:
+        token = msgraph.signed_in(msgraph.config()[0]) or {}
+        return "Files.Read" in token.get("scope", "").split()
+    except Exception:
+        return False
+
+
+def alphabetical_sections(sections):
+    """Sort within each notebook, preserving notebook slots and all Graph data."""
+    books = {}
+    for section in sections:
+        books.setdefault(section["notebookId"], []).append(section)
+    ordered = {key: iter(sorted(members, key=lambda section:
+                               (section["name"].casefold(), section["name"], section["id"])))
+               for key, members in books.items()}
+    return [next(ordered[section["notebookId"]]) for section in sections]
+
+
+def ordered_sections(sections, cache, token):
+    """Optional-workaround boundary; normal note access never depends on it."""
+    fallback = alphabetical_sections(sections)
+    warning = ["Custom section order unavailable; sections sorted alphabetically"]
+    if not sections:
+        return fallback, {}, []
+    if not has_section_order_scope():
+        return fallback, {}, warning
+    try:
+        # HIGH-RISK WORKAROUND: keep even imports inside the failure boundary.
+        # A parser/module failure must not affect page reads, edits or listing.
+        # Optional code cannot emit a second JSON reply or leak an exception
+        # payload through a helper that prints before raising SystemExit.
+        with open(os.devnull, "w") as sink, contextlib.redirect_stdout(sink):
+            import section_order
+            result, saved, warnings = section_order.arrange(
+                [dict(section) for section in sections], cache, section_order.Remote(token))
+        # Only a permutation is accepted. Never let optional code supply new
+        # sections or modify the fields returned by the authoritative Graph API.
+        originals = {section["id"]: section for section in sections}
+        if (len(result) != len(sections) or {section["id"] for section in result} != set(originals)
+                or any(section != originals[section["id"]] for section in result)
+                or not isinstance(saved, dict) or len(json.dumps(saved).encode()) > MAX_ORDER_CACHE
+                or not isinstance(warnings, list) or not all(isinstance(value, str) for value in warnings)):
+            return fallback, {}, warning
+        return [originals[section["id"]] for section in result], saved, warnings
+    except (Exception, SystemExit):
+        # Never include exception text here: it could contain a signed URL.
+        # KeyboardInterrupt still cancels the command rather than continuing.
+        return fallback, {}, warning
+
+
 class Listing:
     """The listing cache, and what a re-listing may skip.
 
@@ -140,6 +198,7 @@ class Listing:
         self.sections = sections
         self.section_orders = cache.get("sectionOrders", {})
         self.order_warnings = cache.get("sectionOrderWarnings", [])
+        self.order_scope = has_section_order_scope()
         self.by_section = {}
         for pg in (cache.get("pages") or []):
             self.by_section.setdefault(pg.get("sectionId", ""), []).append(pg)
@@ -177,6 +236,8 @@ class Listing:
         save_private(ONENOTE_CACHE, {"sections": self.sections, "pages": self.pages(),
                                      "sectionPages": self.seen, "fetched": self.fetched,
                                      "sectionOrders": self.section_orders,
+                                     "sectionOrderVersion": SECTION_ORDER_VERSION,
+                                     "sectionOrderScope": self.order_scope,
                                      "sectionOrderWarnings": self.order_warnings})
         self.last_write = time.monotonic()
 
@@ -187,11 +248,19 @@ class Listing:
 
 def cmd_onenote_list(cached, max_age=0, force=False):
     c = load_json(ONENOTE_CACHE, None)
-    if cached or (max_age and c and c.get("sectionOrders", {}).get("version") == section_order.CACHE_VERSION
+    order_scope = has_section_order_scope()
+    current_order = (isinstance(c, dict) and c.get("sectionOrderVersion") == SECTION_ORDER_VERSION
+                     and c.get("sectionOrderScope") == order_scope)
+    if cached or (max_age and c and current_order
                   and time.time() - c.get("fetched", 0) < max_age):
         c = c or {"sections": [], "pages": []}
-        out({"sections": c.get("sections", []), "pages": c.get("pages", []), "cached": True,
-             "sectionOrderWarnings": c.get("sectionOrderWarnings", [])})
+        sections = c.get("sections", [])
+        warnings = c.get("sectionOrderWarnings", [])
+        if not current_order or not order_scope:
+            sections = alphabetical_sections(sections)
+            warnings = ["Custom section order unavailable; sections sorted alphabetically"] if sections else []
+        out({"sections": sections, "pages": c.get("pages", []), "cached": True,
+             "sectionOrderWarnings": warnings})
         return
     sections = []
     url = ("/me/onenote/sections?$select=id,displayName,lastModifiedDateTime,parentNotebook"
@@ -208,9 +277,10 @@ def cmd_onenote_list(cached, max_age=0, force=False):
         url = res.get("@odata.nextLink")
     sections = sections[:MAX_SECTIONS]
     cache = c if isinstance(c, dict) else {}
-    # HIGH-RISK WORKAROUND: remote TOC parsing and an unguaranteed ID mapping,
-    # not Graph-native ordering. See section_order.py and docs/onenote-section-order.md.
-    sections, orders, warnings = section_order.arrange(sections, cache.get("sectionOrders"))
+    # This token has already worked for normal notes. Optional metadata uses
+    # the snapshot as-is; it cannot refresh or invalidate the account.
+    token = access_token()
+    sections, orders, warnings = ordered_sections(sections, cache.get("sectionOrders"), token)
     listing = Listing(cache, sections)
     listing.section_orders = orders
     listing.order_warnings = warnings
@@ -222,12 +292,8 @@ def cmd_onenote_list(cached, max_age=0, force=False):
     # the pacer holds the total to four requests in flight.
     from concurrent.futures import ThreadPoolExecutor, as_completed
 
-    # Refresh once, not from four threads at a time. This token needs no
-    # revoked-grant pass of its own: the sections `graph()` above already made
-    # a request on it and forced a refresh if that came back 401, so by the
-    # time the pool starts the sign-in has been proved good.
-    token = access_token()
-
+    # All workers use the already-validated token snapshot. Optional ordering
+    # cannot change it or impose a cooldown on this normal OneNote lane.
     def section_pages(sct):
         found = []
         url = section_pages_url(sct["id"])

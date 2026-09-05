@@ -19,8 +19,8 @@ Microsoft-side changes can cause incorrect ordering or make custom ordering
 unavailable without any change to this code. Bounds, validation and regression
 tests do not eliminate that compatibility risk. The workaround reads metadata
 only; this classification is not a claim of a known security vulnerability or
-a remote note-writing operation. Reported failures retain the last successfully
-read remote order when available, otherwise Graph's sequence.
+a remote note-writing operation. Detected failures sort the affected notebook
+alphabetically and report a warning; no stale custom sequence is retained.
 
 Keep the workaround visibly marked at its entry point, parser and ID mapping.
 Replace it with a supported section-order API if one becomes available; do not
@@ -87,13 +87,31 @@ app-registration permission edit (tenant consent policies still apply).
   redirects or logging credentials. Parsed entries are reused by TOC eTag;
   no note bodies or manual order are stored by this feature.
 - `onenote.py` preserves parsed metadata through partial listing checkpoints.
-  Graph remains authoritative for membership and page order. A failed order
-  fetch retains the last successful remote sequence and reports a warning.
-- `Provider.qml` requests `Files.Read` alongside `Notes.ReadWrite`, offers
-  re-consent for existing accounts, and surfaces metadata warnings.
+  Its independent alphabetical fallback wraps even the optional imports and
+  initialization. It accepts only a permutation of the original Graph sections;
+  optional code cannot replace section data or membership. Graph remains
+  authoritative for page order. The previous fallback cache policy is invalidated.
+  Optional stdout is discarded so even a print-then-exit failure cannot corrupt
+  the provider's JSON reply or expose its exception payload.
+- `section_order.py` requires complete, unambiguous positions for live children
+  and matching IDs/names for every Graph section. A failed notebook, malformed
+  response, parser error or unexpected exception produces alphabetical order
+  and a warning. Failed metadata is discarded, not reused as a stale fallback.
+- OneDrive metadata has its own rate budget and a 45-second pass budget. It
+  receives an existing token snapshot and never refreshes or invalidates the
+  normal OneNote sign-in. A metadata throttle does not park the note request lane.
+- `Provider.qml` requires only `Notes.ReadWrite`. **Enable custom section order…**
+  requests optional `Files.Read` consent without signing out first. Declining,
+  cancelling or losing that permission leaves notes accessible alphabetically.
+  Token renewal retries required scopes if previously granted optional scopes
+  become unavailable; other Microsoft providers retain their existing behavior.
 - Synthetic tests cover package encoding, inherited revisions, duplicate
   historical entries, truncation, cycles, groups, deleted sections, cache
   invalidation/pruning, checkpoint page-order preservation and URL safety.
+  Failure-injection tests cover changed/partial ID mappings, missing positions,
+  malformed responses/caches, broken optional imports, unexpected exceptions,
+  throttles and loss of consent. QML runtime tests verify that optional consent
+  does not hide notes or sign out the account.
 
 Family Notebook matches the screenshot; Family Room also exposes a unique
 readable TOC. One older notebook contains both `.onetoc2` and a localized
@@ -101,7 +119,7 @@ readable TOC. One older notebook contains both `.onetoc2` and a localized
 established, so the provider reports ambiguity instead of guessing by name,
 size or modification time. Single-section notebooks need no ordering lookup.
 Work/school and shared notebooks whose OneDrive item cannot be identified by
-the personal-ID mapping retain Graph's sequence with an explanatory warning.
+the personal-ID mapping use alphabetical section order with an explanatory warning.
 
 ## Other interfaces
 
