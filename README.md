@@ -132,10 +132,26 @@ a minimal provider to start from.
   the filesystem beyond its own state and cache under
   `~/.local/state/omarchy/` and `~/.cache/omarchy/`.
 - **Microsoft account, only after you sign in**: `Mail.ReadWrite` (Sticky
-  Notes are stored in your mailbox), `Notes.ReadWrite` (OneNote), and
-  `User.Read`. Each provider's token is separate and owner-only; signing out
+  Notes are stored in your mailbox), `Notes.ReadWrite` and `Files.Read`
+  (OneNote), and `User.Read`. `Files.Read` allows reading your OneDrive files;
+  the provider uses it only for notebook file listings and `.onetoc2` metadata
+  containing OneNote's custom section order. No separate local order is used.
+  Existing OneNote users must consent to the added scope by signing in again.
+  Each provider's token is separate and owner-only; signing out
   deletes only that one. The plugin talks to `login.microsoftonline.com` and
-  `graph.microsoft.com` and nowhere else.
+  `graph.microsoft.com`; OneNote metadata downloads also use Microsoft's
+  signed file URLs under `files.1drv.com`, `storage.live.com`, `sharepoint.com`
+  or `microsoftpersonalcontent.com`, without forwarding the Graph token.
+
+OneNote custom section ordering is a **high-risk compatibility workaround**,
+not a supported Graph ordering API: it uses a custom TOC parser and an
+unguaranteed Graph/OneDrive ID mapping. See the
+[risk assessment](docs/onenote-section-order.md#risk-classification).
+It currently supports personal OneDrive notebook
+packages with a unique readable `.onetoc2` per folder. Section groups are
+flattened in their remote order. Unsupported or ambiguous metadata is reported;
+the last successfully fetched remote order is retained when available, otherwise
+Graph's sequence is kept. Page ordering still comes directly from Graph.
 
 Developer-facing documentation (architecture, security rules, testing,
 releases) lives in [`docs/`](docs/README.md).

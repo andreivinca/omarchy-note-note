@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""OneNote provider script for Note Note (needs the Notes.ReadWrite scope).
+"""OneNote provider script (Notes.ReadWrite and Files.Read scopes).
 
   onenote.py list [--cached|--max-age S|--force] -> {"sections":[{id,name,notebook,notebookId,modified}],
                                            "pages":[{id,sectionId,title,modified}]}
@@ -23,6 +23,7 @@ import ratelimit  # noqa: E402
 from msgraph import (graph, http, fail, fail_throttled, out, load_json, save_private,  # noqa: E402
                      read_payload, access_token, TRANSIENT_STATUSES, CACHE_DIR, GRAPH)
 import onenote_md  # noqa: E402
+import section_order  # noqa: E402
 
 # OneNote's own Graph budget, shared with no other provider: a throttle here
 # parks OneNote and leaves Sticky Notes listing. Microsoft's delegated OneNote
@@ -121,7 +122,7 @@ class Listing:
     """The listing cache, and what a re-listing may skip.
 
     Two things are folded in here, and both exist to spend fewer requests on
-    an account that has not changed:
+    an account that has not changed (section-order metadata is checked too):
 
     **Continue, never restart.** Each section's pages are written into the
     cache as its request comes back, with the section's own
@@ -131,12 +132,14 @@ class Listing:
     **Diff by timestamp.** The single request that lists all sections already
     says when each was last modified, so a re-listing fetches pages only for
     the sections whose stamp moved (and ones it has never seen). A quiet
-    account re-lists for one request instead of forty. `--force` — the
+    account skips page requests entirely. `--force` — the
     Refresh row — ignores the stamps and fetches everything.
     """
 
     def __init__(self, cache, sections):
         self.sections = sections
+        self.section_orders = cache.get("sectionOrders", {})
+        self.order_warnings = cache.get("sectionOrderWarnings", [])
         self.by_section = {}
         for pg in (cache.get("pages") or []):
             self.by_section.setdefault(pg.get("sectionId", ""), []).append(pg)
@@ -172,7 +175,9 @@ class Listing:
             self.fetched = time.time()
         os.makedirs(CACHE_DIR, exist_ok=True)
         save_private(ONENOTE_CACHE, {"sections": self.sections, "pages": self.pages(),
-                                     "sectionPages": self.seen, "fetched": self.fetched})
+                                     "sectionPages": self.seen, "fetched": self.fetched,
+                                     "sectionOrders": self.section_orders,
+                                     "sectionOrderWarnings": self.order_warnings})
         self.last_write = time.monotonic()
 
     def checkpoint(self):
@@ -182,9 +187,11 @@ class Listing:
 
 def cmd_onenote_list(cached, max_age=0, force=False):
     c = load_json(ONENOTE_CACHE, None)
-    if cached or (max_age and c and time.time() - c.get("fetched", 0) < max_age):
+    if cached or (max_age and c and c.get("sectionOrders", {}).get("version") == section_order.CACHE_VERSION
+                  and time.time() - c.get("fetched", 0) < max_age):
         c = c or {"sections": [], "pages": []}
-        out({"sections": c.get("sections", []), "pages": c.get("pages", []), "cached": True})
+        out({"sections": c.get("sections", []), "pages": c.get("pages", []), "cached": True,
+             "sectionOrderWarnings": c.get("sectionOrderWarnings", [])})
         return
     sections = []
     url = ("/me/onenote/sections?$select=id,displayName,lastModifiedDateTime,parentNotebook"
@@ -200,8 +207,13 @@ def cmd_onenote_list(cached, max_age=0, force=False):
                              "modified": sct.get("lastModifiedDateTime", "")})
         url = res.get("@odata.nextLink")
     sections = sections[:MAX_SECTIONS]
-
-    listing = Listing(c if isinstance(c, dict) else {}, sections)
+    cache = c if isinstance(c, dict) else {}
+    # HIGH-RISK WORKAROUND: remote TOC parsing and an unguaranteed ID mapping,
+    # not Graph-native ordering. See section_order.py and docs/onenote-section-order.md.
+    sections, orders, warnings = section_order.arrange(sections, cache.get("sectionOrders"))
+    listing = Listing(cache, sections)
+    listing.section_orders = orders
+    listing.order_warnings = warnings
     todo = [sct for sct in sections if listing.stale(sct, force)]
 
     # Pages are listed per section: the account-wide /me/onenote/pages call
@@ -263,7 +275,8 @@ def cmd_onenote_list(cached, max_age=0, force=False):
             fail(error, kind=error_kind)
 
     listing.save(True)
-    out({"sections": sections, "pages": listing.pages(), "cached": False})
+    out({"sections": sections, "pages": listing.pages(), "cached": False,
+         "sectionOrderWarnings": listing.order_warnings})
 
 
 # Page images are only ever fetched from Graph's own resource endpoint, with

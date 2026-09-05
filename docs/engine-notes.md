@@ -324,9 +324,16 @@ class is set: extended property `String 0x001A` = `IPM.StickyNote`.
   pages are listed per section and there is no bulk endpoint to fall back on;
   what makes that affordable is diffing each section's own
   `lastModifiedDateTime` (returned by the one request that lists all sections)
-  and fetching pages only where it moved. A quiet account re-lists for one
-  request instead of forty. The caveat is Graph's eventual consistency: a
+  and fetching pages only where it moved. A quiet account skips page requests;
+  section-order discovery additionally reads OneDrive metadata. The caveat
+  is Graph's eventual consistency: a
   change made elsewhere seconds ago can be a refresh cycle late.
+- Sections have no Graph `order` property (v1.0 or beta). Personal notebooks
+  store their custom order in remote `.onetoc2` metadata, accessible with
+  `Files.Read`. The provider reads that format and joins its entries to live
+  section IDs; it never introduces manual/local positions. See
+  [OneNote section order](onenote-section-order.md) for the live evidence,
+  parser/cache design and unsupported or ambiguous cases.
 - Page images need the bearer token and are only ever fetched from the
   resource endpoint — see [security.md](security.md) rule 4.
 

@@ -24,7 +24,7 @@ Item {
   // Pages carry their images through an edit, and a pasted one is uploaded
   // with the save (onenote.py).
   readonly property bool canImages: true
-  readonly property var microsoftScopes: ["Notes.ReadWrite"]
+  readonly property var microsoftScopes: ["Notes.ReadWrite", "Files.Read"]
   // This provider's own app registration: an Entra public client for
   // personal and work accounts, registered by the author, that every user
   // of OneNote here signs in through. Sticky Notes has one of its own.
@@ -93,7 +93,7 @@ Item {
   property var bodies: ({})      // id -> { title, body, editable, originalTitle }
   property var expanded: []      // notebook/section ids the user opened
   property var sections: []
-  readonly property bool ready: ms && ms.signedIn && ms.hasScope("Notes.ReadWrite")
+  readonly property bool ready: ms && ms.signedIn && ms.hasScope("Notes.ReadWrite") && ms.hasScope("Files.Read")
 
   function idOf(path) { return path.substring(root.id.length + 1) }
   function pathOf(id) { return root.id + ":" + id }
@@ -130,6 +130,9 @@ Item {
     }
     if (!ms.hasScope("Notes.ReadWrite")) {
       return [{ kind: "action", path: "relogin", title: ms.loggingIn ? "Cancel signing in…" : "Sign in again to enable OneNote…", icon: ms.loggingIn ? "󰅖" : "󰊻" }]
+    }
+    if (!ms.hasScope("Files.Read")) {
+      return [{ kind: "action", path: "relogin", title: ms.loggingIn ? "Cancel signing in…" : "Sign in again to read OneNote section order…", icon: ms.loggingIn ? "󰅖" : "󰊻" }]
     }
     return null
   }
@@ -496,9 +499,8 @@ Item {
     root.listPages(false)
   }
 
-  // The account-wide listing. One request when nothing changed (the sections
-  // call reports each section's own timestamp and onenote.py fetches pages
-  // only for the ones that moved), and ~40 when everything has.
+  // The account-wide listing checks section timestamps and OneDrive TOCs;
+  // page lists and unchanged TOC downloads are reused from the cache.
   function listPages(force) {
     if (!root.rq || !root.ready) {
       return
@@ -518,6 +520,9 @@ Item {
           }
           if (Array.isArray(r.pages)) {
             root.pages = r.pages
+          }
+          if (Array.isArray(r.sectionOrderWarnings) && r.sectionOrderWarnings.length) {
+            root.statusRequested("OneNote section order: " + r.sectionOrderWarnings.join("; "))
           }
         }
         root.rebuild()
@@ -738,10 +743,9 @@ Item {
     }
     root.pollTick++
     // Everything the poll no longer looks at comes back here instead: every
-    // fifth minute the account is re-listed, which is one request while
-    // nothing has changed (onenote.py diffs each section's own timestamp) and
-    // usually not even that, since the script serves its cache under
-    // --max-age. That is the whole of the budget the old poll was spending.
+    // fifth minute the account is re-listed. Unchanged section timestamps
+    // skip page requests; OneDrive metadata supplies section order. Under
+    // --max-age the complete cached listing avoids both kinds of request.
     if (root.pollTick % 15 === 0) {
       root.listPages(false)
     }

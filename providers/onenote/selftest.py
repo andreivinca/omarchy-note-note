@@ -59,6 +59,7 @@ sys.path.insert(0, os.path.join(HERE, "..", "..", "services", "microsoft"))
 sys.path.insert(0, HERE)
 import msgraph  # noqa: E402
 import onenote  # noqa: E402
+import order_selftest  # noqa: E402
 
 FAILURES = []
 
@@ -285,6 +286,7 @@ def main():
         total += test_the_transient_gate(args.verbose)
         total += test_writes_that_must_not_repeat(args.verbose)
         total += test_the_title_replace_keeps_its_warning(args.verbose)
+        total += check("remote section-order suite", order_selftest.run())
     finally:
         shutil.rmtree(WORK, ignore_errors=True)
 
