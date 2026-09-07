@@ -240,7 +240,7 @@ Item {
   // note: Markdown has no highlight of its own, and the providers already
   // translate the markers into each backend's own.
   function highlightSelection() {
-    if (root.readOnly || root.plain) {
+    if (root.readOnly || root.plain || refusedAcrossCode() || markedInCode(Dialect.INLINE_MARKERS.highlight)) {
       return
     }
     var from = Math.min(area.selectionStart, area.selectionEnd)
@@ -355,8 +355,13 @@ Item {
   // strips them for the same reason (dialect.strip_fragment_markers).
   // Insert at the selection's end and remove second — pastePlain's order,
   // same block-start reason. A clipboard with no HTML flavour is Qt's own
-  // paste after all.
+  // paste after all. Inside a code block the HTML is never wanted: the
+  // clipboard's text goes in as code (pastePlain).
   function pasteRich() {
+    if (selectionInCode()) {
+      pastePlain()
+      return
+    }
     var context = root.editContext()
     root.clipboard.takeHtml(function(html) {
       if (!root.contextCurrent(context)) {
@@ -387,7 +392,9 @@ Item {
   // white-space:pre keeps the runs of spaces (a pasted snippet's indentation)
   // that Qt's HTML parser folds otherwise. Inserted after the selection and
   // the selection removed second, the highlight's order, for the same
-  // block-start reason. A clipboard with no text pastes nothing.
+  // block-start reason. A clipboard with no text pastes nothing. Inside a
+  // code block the text goes in the way typing would put it there
+  // (typeInCode): the span would strip the mono family off the line.
   function pastePlain() {
     if (root.readOnly) {
       return
@@ -397,6 +404,7 @@ Item {
       return
     }
     var context = root.editContext()
+    var inCode = selectionInCode()
     root.clipboard.takeText(function(text) {
       if (!root.contextCurrent(context)) {
         return
@@ -406,8 +414,12 @@ Item {
       }
       var from = Math.min(area.selectionStart, area.selectionEnd)
       var to = Math.max(area.selectionStart, area.selectionEnd)
-      var esc = text.replace(/\r\n?/g, "\n").replace(/&/g, "&amp;").replace(/</g, "&lt;")
-                    .replace(/\n/g, "<br />")
+      var lines = text.replace(/\r\n?/g, "\n")
+      if (inCode) {
+        typeInCode(from, to, lines)
+        return
+      }
+      var esc = lines.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/\n/g, "<br />")
       var before = area.length, added = 0
       atomic(function() {
         area.insert(to, '<span style="white-space:pre;">' + esc + "</span>")
@@ -419,6 +431,138 @@ Item {
       area.cursorPosition = from + added
       root.edited()
     })
+  }
+
+  // ── a code block shows its text as it is ────────────────────────────
+  // Nothing inside a code block is styled: a code line is an all-monospace
+  // paragraph on the block background (qthtml/reader.is_code), the reader
+  // takes a code line's text and nothing else, and Markdown inside a fence
+  // is literal. So the editor keeps the block that way too. A paste broke
+  // it from either side — the clipboard's HTML brings its own fonts, the
+  // plain paste's span had none — and either left a line the reader no
+  // longer took for code, so the next trip through the Markdown (the
+  // second Enter, a block tool, the save) read the block as prose with an
+  // inline-code scrap in it. Inside a code block every paste is therefore
+  // the plain paste, and there it puts the text in the way typing would
+  // (typeInCode). The inline tools — bold, italic, underline, strikeout,
+  // highlight, inline code, the link — type their Markdown there instead
+  // (typeMarker): the marker pair around the selection, shown as the
+  // characters they are, which is what the fence holds on disk. A
+  // selection reaching into or across a block is the one thing no tool
+  // takes (refusedAcrossCode): a style over a block's lines would give
+  // them the prose font, which ends the block.
+
+  // The code blocks of the document, as character spans — the runs the
+  // slabs are drawn from, by whichever reader is built. One run is one
+  // fence: the reader merges neighbouring code lines the same way
+  // (_merge_code). Empty for a note too long to scan.
+  function codeRuns() {
+    if (nativeBlocks.item) {
+      if (!nativeBlocks.item.document) {
+        nativeBlocks.item.document = area.textDocument
+      }
+      return QuoteBars.runsFromBlocks(nativeBlocks.item.blocks()).code
+    }
+    if (area.length > 0 && area.length <= 200000) {
+      return QuoteBars.runs(area.getFormattedText(0, area.length), area.getText(0, area.length)).code
+    }
+    return []
+  }
+
+  // One code block holds the whole selection, or the caret.
+  function selectionInCode() {
+    var from = Math.min(area.selectionStart, area.selectionEnd)
+    var to = Math.max(area.selectionStart, area.selectionEnd)
+    return codeRuns().some(function(run) { return run.from <= from && to <= run.to })
+  }
+
+  // The caret stands on a code line, or the selection holds any character
+  // of one — reaching into a block, or across it.
+  function selectionTouchesCode() {
+    var from = Math.min(area.selectionStart, area.selectionEnd)
+    var to = Math.max(area.selectionStart, area.selectionEnd)
+    return codeRuns().some(function(run) {
+      return from === to ? run.from <= from && from <= run.to : from < run.to && run.from < to
+    })
+  }
+
+  // A selection reaching into or across a code block, which no inline
+  // tool takes; the status line says to pick a side.
+  function refusedAcrossCode() {
+    if (selectionInCode() || !selectionTouchesCode()) {
+      return false
+    }
+    root.statusRequestedText = "Select inside the code block, or outside it"
+    return true
+  }
+
+  // `text` replaces the selection from `from` to `to` the way typing would
+  // put it there: through the inspector's cursor, each newline a block in
+  // the caret's own block format and the text in its character format
+  // (cpp/textblocks.h, insertPlainText) — a line per block, which the
+  // caret map counts on after a re-render. Where the inspector is not
+  // built, a span in the mono family, its newlines line breaks in the one
+  // block. The caret lands after the text; its place comes back, or -1
+  // for a range the document does not have.
+  function typeInCode(from, to, text) {
+    var end
+    if (nativeBlocks.item) {
+      if (!nativeBlocks.item.document) {
+        nativeBlocks.item.document = area.textDocument
+      }
+      end = nativeBlocks.item.insertPlainText(from, to, text)
+      if (end < 0) {
+        return end
+      }
+    } else {
+      var esc = text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/\n/g, "<br />")
+      var before = area.length, added = 0
+      atomic(function() {
+        area.insert(to, '<span style="white-space:pre; font-family:\'monospace\';">' + esc + "</span>")
+        added = area.length - before
+        if (from !== to) {
+          area.remove(from, to)
+        }
+      })
+      end = from + added
+    }
+    area.cursorPosition = end
+    root.edited()
+    return end
+  }
+
+  // Inside a code block an inline tool types its Markdown: the marker pair
+  // around the selection, which stays selected so the tool again takes the
+  // pair off; with nothing selected the pair goes in and the caret between,
+  // for what is typed next.
+  function typeMarker(marker) {
+    var from = Math.min(area.selectionStart, area.selectionEnd)
+    var to = Math.max(area.selectionStart, area.selectionEnd)
+    var text = area.getText(from, to)
+    var wrapped = text.length >= marker.length * 2
+        && text.substring(0, marker.length) === marker
+        && text.substring(text.length - marker.length) === marker
+    var out = wrapped ? text.substring(marker.length, text.length - marker.length) : marker + text + marker
+    var end = typeInCode(from, to, out)
+    if (end < 0) {
+      return
+    }
+    if (from === to) {
+      area.cursorPosition = from + marker.length
+    } else {
+      area.select(from, end)
+    }
+  }
+
+  // The way in for an inline tool with a marker (Dialect.INLINE_MARKERS):
+  // typed inside a code block, and true; false outside one, where the
+  // tool's own work follows.
+  function markedInCode(marker) {
+    if (!selectionInCode()) {
+      return false
+    }
+    typeMarker(marker)
+    return true
   }
 
   function insertImage(path) {
@@ -1267,25 +1411,35 @@ Item {
     withMarkdown(function(lines, map) {
       var i = caretLine(map)
       var out = lines.slice()
+      var target = map.blocks[i]
       if (kind === "code") {
-        // the caret's line is the fence's empty last line; it comes out,
-        // and the blank goes in after the closing fence
-        if (out[i] !== "") {
+        // the caret's line is the fence's empty last line
+        var code = MarkdownBlocks.fences(lines)[i]
+        if (lines[i] !== "" || !code || code.end !== i + 1) {
           return
         }
-        out.splice(i, 1)
-        var code = MarkdownBlocks.fences(out)[i]
-        if (!code || code.end !== i) {
-          return
+        if (code.start === i - 1) {
+          // the block's only line: a fence with nothing in it renders as
+          // this same empty line, so the line stays, the block with it,
+          // and the blank lands after the whole block — Right's landing
+          // (stepPastBlock). Taken out, the line's block number went to
+          // the blank while the block still rendered under it, and the
+          // caret landed back inside the code.
+          out.splice(code.end + 1, 0, "", " ", "")
+          target++
+        } else {
+          // the line comes out, and the blank goes in after the closing
+          // fence, taking the block number the line had
+          out.splice(i, 1)
+          out.splice(code.end, 0, "", " ", "")
         }
-        out.splice(i + 1, 0, "", " ", "")
       } else if (kind === "list") {
         out.splice(i, 1, "", " ", "")
       }
       // a quote's empty line already reads back as a blank paragraph
       // (kept in the map now, stripped only from an unused landing at save
       // time): re-rendering the markdown is the whole edit
-      landOn(out, map.blocks[i], seed)
+      landOn(out, target, seed)
     })
   }
 
@@ -1439,7 +1593,7 @@ Item {
   // style is visible the moment the tool is used. Same insert-then-remove
   // order as highlightSelection, for the same list-item reason.
   function toggleCode() {
-    if (root.readOnly || root.plain) {
+    if (root.readOnly || root.plain || refusedAcrossCode() || markedInCode(Dialect.INLINE_MARKERS.code)) {
       return
     }
     var from = Math.min(area.selectionStart, area.selectionEnd)
@@ -1554,7 +1708,7 @@ Item {
 
   property bool linkBarOpen: false
   function openLinkBar() {
-    if (root.readOnly || root.plain) {
+    if (root.readOnly || root.plain || refusedAcrossCode()) {
       return
     }
     root.linkBarOpen = true
@@ -1570,6 +1724,12 @@ Item {
       return
     }
     var s = area.selectionStart, e = area.selectionEnd
+    if (selectionInCode()) {
+      // the link's Markdown, as the characters they are
+      typeInCode(Math.min(s, e), Math.max(s, e), "[" + text + "](" + url + ")")
+      focusEditor()
+      return
+    }
     atomic(function() {
       if (s !== e) {
         area.remove(Math.min(s, e), Math.max(s, e))
@@ -1622,6 +1782,9 @@ Item {
 
   function toggleFormat(kind) {
     if (!(kind === "bold" || kind === "italic" || kind === "underline" || kind === "strikeout")) {
+      return
+    }
+    if (root.readOnly || root.plain || refusedAcrossCode() || markedInCode(Dialect.INLINE_MARKERS[kind])) {
       return
     }
     var f = area.cursorSelection.font

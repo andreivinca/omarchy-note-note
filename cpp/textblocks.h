@@ -8,8 +8,10 @@
 // the QTextDocument itself, through the TextEdit's `textDocument` property.
 // It is inspection first: the writes are canonical list margins
 // (normalizeListMargins) and an image's display width (setImageWidth, the
-// corner-handle resize), both format-only, and a blank filler character
-// into a block Qt would otherwise hide (fillEmptyBlocksBeforeTables).
+// corner-handle resize), both format-only, a blank filler character
+// into a block Qt would otherwise hide (fillEmptyBlocksBeforeTables), and
+// text put in the way typing would (insertPlainText, the plain paste
+// inside a code block).
 // Removing an empty paragraph also lives here: it must keep the following
 // block's list membership and character format, which QML cannot set.
 // The edit-block brackets (beginEditBlock/
@@ -261,6 +263,28 @@ public:
         cursor.setCharFormat(format);
         cursor.endEditBlock();
         return true;
+    }
+
+    // The plain paste inside a code block: `text` replaces the selection
+    // from `from` to `to` the way typing would put it there — each newline
+    // starts a block in the caret's own block format, and the text takes
+    // the caret's character format (QTextCursor::insertText). A pasted
+    // fragment cannot do that: it brings the clipboard's formats, block
+    // formats included (docs/engine-notes.md), and a code line stays code
+    // only while it is all-monospace on the block background. One undo
+    // step. Answers with the caret's place after the text, or -1 for a
+    // range the document does not have.
+    Q_INVOKABLE int insertPlainText(int from, int to, const QString &text)
+    {
+        QTextDocument *doc = m_document ? m_document->textDocument() : nullptr;
+        if (!doc || from < 0 || from > to || to >= doc->characterCount()) {
+            return -1;
+        }
+        QTextCursor cursor(doc);
+        cursor.setPosition(from);
+        cursor.setPosition(to, QTextCursor::KeepAnchor);
+        cursor.insertText(text);
+        return cursor.position();
     }
 
     // Qt reads a list into canonical margins — 12 above the first item, 12

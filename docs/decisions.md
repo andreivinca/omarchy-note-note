@@ -550,7 +550,13 @@ paragraph lands after it, with its rendering filler removed so typing starts cle
 quotes leave only from their run's last line (an empty line higher up is
 content); an empty list item leaves from anywhere, splitting the list the
 way every editor does. In a table, the second Enter in the last cell turns
-the extra in-cell line into a new row, caret in its first cell.
+the extra in-cell line into a new row, caret in its first cell. A code
+block's only line is the one exception to "the line comes off": a fence
+with nothing in it renders as that same empty line, so the line stays, the
+block with it, and the blank lands after the whole block — Right's landing
+(`stepPastBlock`). Taken off, the line's block number went to the blank
+while the block still rendered under it, and the caret landed back inside
+the code.
 
 The edit is not a hand-rolled document surgery: the editor detects the
 situation synchronously (the native inspector's block formats, or the HTML
@@ -649,6 +655,46 @@ clipboard's HTML flavour, strips the markers the way the save path always
 has, and inserts through the same parser inside one `atomic()` step. A
 clipboard with no HTML on offer falls back to Qt's own paste, and the plain
 paste (ctrl+shift+v) is untouched.
+
+### A code block holds no formatted text, so a paste there is the plain paste
+
+A code line is the dialect's all-monospace paragraph on the block
+background (`reader.is_code`), and a paste broke that from either side: the
+clipboard's HTML brings its own fonts, and the plain paste's span had none
+(engine-notes.md). Either left a line the reader no longer took for code,
+and the next trip through the Markdown — the second Enter, a block tool,
+the save — read the block as prose with an inline-code scrap in it; the
+second Enter then seemed to "remove the code block and put an empty one
+under it", the empty line the first Enter had made being all that still
+read as code.
+
+The rule is the one the block already lives by — nothing inside it is
+styled, everything shows as it is — so inside a code block ctrl+v is the
+plain paste (`NoteEditor.pastePlain`), and there the plain paste puts the
+text in the way typing would: through the native inspector's cursor
+(`insertPlainText`), each newline a block in the caret's own block format
+and the text in its character format, the block's mono. *Considered:* the
+plain paste's own span, in the mono family, its newlines line breaks.
+*Rejected:* that leaves the pasted lines in one block until the next
+re-render, and the caret map counts a block per line — the second Enter
+after such a paste landed the caret one block short, back inside the code.
+It stays as the fallback where the inspector is not built. The reader grows
+the fence past any backtick run the text brought, as it does for every code
+block. And the writer states the family on the code paragraph itself, not
+only on its span, so a line whose characters were all deleted and typed
+again stays code (engine-notes.md, typing into an emptied block).
+
+The inline tools follow the same rule by typing their Markdown there
+instead: inside a code block bold, italic, underline, strikeout, highlight
+and inline code put the dialect's marker pair around the selection
+(`Dialect.INLINE_MARKERS`, the reader's own table), shown as the characters
+they are — which is exactly what the fence holds on disk; the same tool
+again takes the pair off, a caret alone gets the pair with the caret
+between, and the link bar types `[text](url)`. A selection reaching into or
+across a block is the one thing no tool takes, and the status line says to
+pick a side: a style over a block's lines would give them the prose font,
+which ends the block. On disk the block was always literal — `*text*`
+inside a fence shows its stars — and now the tools say so on screen.
 
 ### A separator line is never an item
 

@@ -98,8 +98,8 @@ its row. Rename or remove a notebook by renaming or removing its folder.
 
 The body is Markdown, rendered live and saved back as Markdown, with a
 formatting toolbar for headings, lists, tables, links, images and the usual
-bold/italic/underline/strikethrough/highlight/code shortcuts (`Ctrl+B/I/U/S`,
-`Ctrl+Shift+H`). Search filters by title as you type and by body a moment
+bold/italic/underline/strikethrough/highlight/code shortcuts (`Ctrl+Shift+B`,
+`Ctrl+I/U/S`, `Ctrl+Shift+H`). Search filters by title as you type and by body a moment
 later, where the backend allows it — OneNote and Notion are title-only,
 since neither API exposes body search. **Detach**, in the menu at the top
 right, turns the overlay into an ordinary window you can keep open beside
@@ -168,8 +168,9 @@ releases) lives in [`docs/`](docs/README.md).
 | `Ctrl+Shift+N` | new notebook |
 | `Ctrl+Tab` / `Ctrl+Shift+Tab` | next / previous notebook tab |
 | `Ctrl+K` | search |
+| `Ctrl+B` | hide the sidebar, or bring it back |
 | `Ctrl+D` | delete current note |
-| `Ctrl+B` / `Ctrl+I` / `Ctrl+U` / `Ctrl+S` | bold / italic / underline / strikethrough |
+| `Ctrl+Shift+B` / `Ctrl+I` / `Ctrl+U` / `Ctrl+S` | bold / italic / underline / strikethrough |
 | `Ctrl+Shift+H` | highlight the selection |
 | `Ctrl+↓` / `Ctrl+J` | next note |
 | `Ctrl+↑` | previous note |

@@ -6,3 +6,10 @@ var QUOTE_PX = 40
 var CODE_PAD_PX = 14
 var MAX_IMAGE_DISPLAY = 640
 var LINE_HEIGHT_PCT = 130
+
+// The inline tools' Markdown, by tool id — what a tool types inside a code
+// block, where the fence holds the characters literally (NoteEditor,
+// typeMarker). Mirrors reader.INLINE_MARKERS in
+// services/markdown/qthtml/reader.py, plus the code span's backtick
+// (services/markdown/mdtext.py, code_span).
+var INLINE_MARKERS = { bold: "**", italic: "*", underline: "_", strikeout: "~~", highlight: "==", code: "`" }

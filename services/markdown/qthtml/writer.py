@@ -130,16 +130,23 @@ class _Renderer:
         the lines inside the code block. The left margin is the text's
         padding inside the slab the editor draws
         reaching CODE_PAD_PX back over it; `reader` ignores a code line's
-        margins, so it never reads back as an indent."""
+        margins, so it never reads back as an indent.
+
+        The paragraph carries the monospace family itself, not only its
+        span: Qt gives text typed into a block whose characters have all
+        been deleted the block's own character format, and that format is
+        the paragraph's at import (docs/engine-notes.md). Without the family
+        there, deleting a line's text and retyping it left a body-font run,
+        and the line stopped being code (`reader.is_code`)."""
         margin = indent * dialect.INDENT_PX + dialect.CODE_PAD_PX
         lines = token.get("raw", "").rstrip("\n").split("\n")
         out = []
         for index, line in enumerate(lines):
             top = dialect.CODE_MARGIN_PX if index == 0 else 0
             bottom = dialect.CODE_MARGIN_PX if index == len(lines) - 1 else 0
-            style = ('white-space:pre-wrap; margin-top:%dpx; margin-bottom:%dpx;'
-                     ' margin-left:%dpx; background-color:%s; %s') % (
-                top, bottom, margin, self.code_background, LINE_HEIGHT)
+            style = ("white-space:pre-wrap; margin-top:%dpx; margin-bottom:%dpx;"
+                     " margin-left:%dpx; background-color:%s; font-family:'%s'; %s") % (
+                top, bottom, margin, self.code_background, dialect.MONO_FAMILY, LINE_HEIGHT)
             out.append('<p style="%s"><span style="font-family:\'%s\';">%s</span></p>'
                        % (style, dialect.MONO_FAMILY,
                           _html.escape(line, quote=False) or dialect.EMPTY_CODE_LINE))

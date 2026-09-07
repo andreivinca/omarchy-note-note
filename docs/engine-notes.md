@@ -116,6 +116,17 @@ Qt wraps the text in a new span carrying the same `background-color`, which
 the reader would read as a highlight. So a block background may only sit on
 a paragraph whose text is entirely inside spans — a code line's always is.
 
+**Typing into an emptied block takes the block's own character format**
+(measured on 6.11): with no character left to inherit from, Qt formats the
+typed text with the block's character format, which the HTML import took
+from the paragraph's own style — the `<p>`'s `background-color`, and no
+font unless the `<p>` states one. A code line whose text was deleted and
+typed again therefore came back in the body font (the mono family sat on
+the span alone), and the reader read the line as a highlighted paragraph.
+The writer states `font-family:'monospace'` on the code paragraph itself
+(`writer.code`); Qt exports it back in the `<p>`'s style, which the reader
+ignores — it reads the spans.
+
 **Read the document as a range, not as `text`.** `getFormattedText(0, length)`
 is what the converter is written against: Qt brackets a range with fragment
 markers, and the reader strips them. `TextEdit.text` does answer with the live
@@ -230,6 +241,17 @@ strip the save path always did (`dialect.strip_fragment_markers`) — and
 inserts it through the same parser (`NoteEditor.pasteRich`). Qt's own
 qrichtext meta rides in the HTML head, so the parse mode matches Qt's paste
 exactly.
+
+**A pasted fragment brings its own formats, block formats included**
+(measured on 6.11): text pasted through `insert()` or Qt's own paste keeps
+the clipboard's character formats — a sans-serif span, or a span with no
+family at all — and each block after the first takes the fragment's block
+format, not the block it lands in. Inside a code block either one ends the
+block (the reader wants all-monospace runs on the block background), so a
+paste there is the plain paste, put in through `QTextCursor::insertText`
+(cpp/textblocks.h, `insertPlainText`): each newline starts a block in the
+caret's own block format and the text takes the caret's character format,
+which is exactly what typing does (`NoteEditor.pastePlain`, decisions.md).
 
 **`insert()` parses HTML** in this mode, and `remove()` + `insert()` are
 ordinary edits, so ctrl+z still walks back through toolbar actions. Assigning

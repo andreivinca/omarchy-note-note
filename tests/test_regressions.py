@@ -19,6 +19,7 @@ import notion_md  # noqa: E402 — plugin modules are imported from the source t
 from mdtext import code_span, code_fence  # noqa: E402 — plugin modules are imported from the source tree
 from parse import parse, walk_text  # noqa: E402 — plugin modules are imported from the source tree
 from qthtml import convert, dialect, to_html, to_markdown  # noqa: E402 — plugin modules are imported from the source tree
+from qthtml.reader import INLINE_MARKERS  # noqa: E402 — plugin modules are imported from the source tree
 
 
 class Files(unittest.TestCase):
@@ -180,6 +181,11 @@ class Content(unittest.TestCase):
             self.assertEqual(int(match[1]), getattr(dialect, name), name)
         native = (ROOT / "cpp/textblocks.h").read_text()
         self.assertEqual(int(re.search(r"constexpr qreal percent = (\d+)", native)[1]), dialect.LINE_HEIGHT_PCT)
+        # The markers the inline tools type inside a code block are the reader's.
+        markers = dict(re.findall(r'(\w+): "([^"]+)"', re.search(r"var INLINE_MARKERS = \{([^}]*)\}", js)[1]))
+        expected = {"strike": "strikeout"}
+        self.assertEqual(markers, {**{expected.get(name, name): marker for name, marker in INLINE_MARKERS},
+                                   "code": "`"})
 
 
 if __name__ == "__main__":

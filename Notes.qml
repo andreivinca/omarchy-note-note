@@ -1164,7 +1164,8 @@ Item {
     setFilter("")
     titleBar.focusSearch()
   }
-  // The view bar's toggle: fold the sidebar away, or bring it back.
+  // The view bar's toggle, and ctrl+b: fold the sidebar away, or bring it
+  // back.
   function toggleList() {
     root.listCollapsed = !root.listCollapsed
     root.saveState()
@@ -1609,6 +1610,7 @@ Item {
       closeTree: root.closeTreeCursor,
       nextTab: function() { root.cycleSection(1) },
       previousTab: function() { root.cycleSection(-1) },
+      toggleList: root.toggleList,
       bold: function() { editor.toggleFormat("bold") },
       italic: function() { editor.toggleFormat("italic") },
       underline: function() { editor.toggleFormat("underline") },

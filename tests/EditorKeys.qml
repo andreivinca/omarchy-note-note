@@ -15,11 +15,23 @@ Window {
   height: 700
 
   Markdown.Markdown { id: converter }
+  // The clipboard as the editor asks it (services/clipboard/Clipboard.qml):
+  // a text and an HTML flavour each case sets, never an image.
+  QtObject {
+    id: clip
+    property string html: ""
+    property string text: ""
+    function hasImage(done) { done(false) }
+    function takeImage(done) { done(null) }
+    function takeHtml(done) { done(clip.html) }
+    function takeText(done) { done(clip.text) }
+  }
   Ui.NoteEditor {
     id: editor
     anchors.fill: parent
     hasNote: true
     markdown: converter
+    clipboard: clip
   }
   TestCase { id: keys; name: "editor keys"; when: false }
 
@@ -107,7 +119,9 @@ Window {
     load(data)
     var original = editor.plainText()
     editor.setCursorPosition(original.length)
-    if (data.key === Qt.Key_Return) {
+    // Enter first continues the block with the empty line the second Enter
+    // leaves from — unless the block is that one empty line already (direct)
+    if (data.key === Qt.Key_Return && !data.direct) {
       keys.keyClick(Qt.Key_Return)
     }
     var before = editor.plainText()
@@ -133,6 +147,108 @@ Window {
     require(editor.plainText() === after, "redo restored a placeholder space")
     editor.redo()
     require(editor.plainText() === after + "x", "redo typing changed the paragraph")
+  }
+
+  // A paste inside a code block is the plain paste, whichever flavour the
+  // clipboard offers: the text as it is, a line per block in the block's
+  // monospace, the caret after it, one undo taking it back; `leave` then
+  // presses the second Enter and types, to see the block still leaves
+  // whole and the caret lands on the new paragraph.
+  function pasteIntoCode(data) {
+    load({ source: data.source })
+    var text = editor.plainText()
+    editor.setCursorPosition(data.cursor === undefined ? text.length : data.cursor)
+    for (var i = 0; i < (data.selectBack || 0); i++) {
+      keys.keyClick(Qt.Key_Left, Qt.ShiftModifier)
+    }
+    clip.html = data.html || ""
+    clip.text = data.text
+    if (data.plain) {
+      editor.pastePlain()
+    } else {
+      editor.paste()
+    }
+    keys.tryVerify(function() { return editor.plainText() !== text }, 3000)
+    var pasted = editor.plainText()
+    require(read() === data.expected, "the paste did not land as code lines: " + JSON.stringify(read()))
+    require(editor.cursorPosition() === data.caret, "the caret did not follow the pasted text: " + editor.cursorPosition())
+    editor.undo()
+    require(editor.plainText() === text, "one undo did not take the paste back")
+    editor.redo()
+    require(editor.plainText() === pasted, "redo did not restore the paste")
+    if (!data.leave) {
+      return
+    }
+    editor.setCursorPosition(data.caret)
+    keys.keyClick(Qt.Key_Return)
+    keys.keyClick(Qt.Key_Return)
+    keys.tryVerify(function() { return editor.blockInfoAt(editor.cursorPosition()).kind === "" }, 3000)
+    keys.keyClick(Qt.Key_X)
+    require(read() === data.expected + "\nx\n", "the second Enter did not leave the pasted block whole: " + JSON.stringify(read()))
+  }
+
+  // Deleting a code line's characters and typing again keeps it code: the
+  // paragraph's own character format is monospace (qthtml/writer.code).
+  function retypeCodeLine() {
+    load({ source: "```\ncode\n```\n" })
+    editor.setCursorPosition(editor.plainText().length)
+    for (var i = 0; i < 4; i++) {
+      keys.keyClick(Qt.Key_Backspace)
+    }
+    keys.keyClick(Qt.Key_X)
+    require(read() === "```\nx\n```\n", "retyped text left the code block: " + JSON.stringify(read()))
+  }
+
+  // Inside a code block the inline tools type their Markdown: the marker
+  // pair around the selection, and the same tool again takes it off; with
+  // the caret alone the pair goes in and typing lands between; the link
+  // bar types the link's Markdown. A selection reaching across the block
+  // from the prose around it is refused, the document untouched.
+  function formatInCode() {
+    var source = "before\n\n```\ncode\n```\n\nafter\n"
+    load({ source: source })
+    var original = editor.documentHtml()
+    var code = editor.plainText().indexOf("code")
+    var selectCode = function() {
+      editor.setCursorPosition(code + 4)
+      for (var i = 0; i < 4; i++) {
+        keys.keyClick(Qt.Key_Left, Qt.ShiftModifier)
+      }
+    }
+    var wrapped = function(marker) { return source.replace("code", marker + "code" + marker) }
+    selectCode()
+    editor.toggleFormat("bold")
+    require(read() === wrapped("**"), "bold did not type its stars: " + JSON.stringify(read()))
+    editor.toggleFormat("bold")
+    require(read() === source, "bold again did not take the stars off: " + JSON.stringify(read()))
+    editor.highlightSelection()
+    require(read() === wrapped("=="), "highlight did not type its marks: " + JSON.stringify(read()))
+    editor.highlightSelection()
+    editor.toggleCode()
+    require(read() === wrapped("`"), "inline code did not type its backticks: " + JSON.stringify(read()))
+    editor.toggleCode()
+    require(editor.documentHtml() === original, "the toggles did not leave the block as it was")
+    editor.setCursorPosition(code + 4)
+    editor.toggleFormat("italic")
+    keys.keyClick(Qt.Key_X)
+    require(read() === source.replace("code", "code*x*"), "typing did not land between the pair: " + JSON.stringify(read()))
+    editor.setCursorPosition(editor.plainText().length)
+    for (var i = 0; i < editor.plainText().length; i++) {
+      keys.keyClick(Qt.Key_Left, Qt.ShiftModifier)
+    }
+    var across = editor.documentHtml()
+    editor.toggleFormat("bold")
+    editor.highlightSelection()
+    editor.toggleCode()
+    editor.openLinkBar()
+    require(!editor.linkBarOpen, "the link bar opened on a selection across the block")
+    require(editor.documentHtml() === across, "a tool changed a selection across the block")
+    load({ source: source })
+    selectCode()
+    editor.openLinkBar()
+    require(editor.linkBarOpen, "the link bar did not open inside the code block")
+    editor.insertLink()
+    require(read() === source.replace("code", "[code](https://)"), "the link bar did not type the link: " + JSON.stringify(read()))
   }
 
   function typeAfterRule() {
@@ -235,7 +351,9 @@ Window {
       { name: "Right leaves multiline code without a space", source: "Before\n\n```\nfirst\nsecond\n```\n" },
       { name: "Right leaves empty code without a space", source: "```\n\n```\n" },
       { name: "Right leaves a rule without a space", source: "---\n" },
-      { name: "Enter leaves code without a space", source: "```\ncode\n```\n", key: Qt.Key_Return }
+      { name: "Enter leaves code without a space", source: "```\ncode\n```\n", key: Qt.Key_Return },
+      { name: "Enter leaves an empty code block from its only line", source: "```\n\n```\n",
+        key: Qt.Key_Return, direct: true }
     ]
     for (var k = 0; k < escapes.length; k++) {
       try {
@@ -244,6 +362,43 @@ Window {
       } catch (error) {
         test.checked(escapes[k].name, false, error.message)
       }
+    }
+    var code = "```\ncode\n```\n"
+    var pastes = [
+      { name: "paste lands as code and the block still leaves", source: code,
+        html: "<span style=\"font-family:'Nimbus Sans';\">function void test() {</span>",
+        text: "function void test() {", expected: "```\ncodefunction void test() {\n```\n", caret: 26, leave: true },
+      { name: "paste of several lines adds code lines", source: code,
+        html: "<p>function void test() {</p><p>}</p>", text: "function void test() {\n}",
+        expected: "```\ncodefunction void test() {\n}\n```\n", caret: 28, leave: true },
+      { name: "plain paste lands as code", source: code, plain: true, text: "a\nb",
+        expected: "```\ncodea\nb\n```\n", caret: 7 },
+      { name: "paste replaces the selection", source: code, selectBack: 2, text: "X",
+        expected: "```\ncoX\n```\n", caret: 3 },
+      { name: "paste into an empty code line", source: "```\n\n```\n", text: "x",
+        expected: "```\nx\n```\n", caret: 2 },
+      { name: "paste in prose is Qt's own", source: "para\n", html: "<b>bold</b>", text: "bold",
+        expected: "para**bold**\n", caret: 8 }
+    ]
+    for (var p = 0; p < pastes.length; p++) {
+      try {
+        pasteIntoCode(pastes[p])
+        test.checked(pastes[p].name, true, "")
+      } catch (error) {
+        test.checked(pastes[p].name, false, error.message)
+      }
+    }
+    try {
+      retypeCodeLine()
+      test.checked("retyping an emptied code line keeps it code", true, "")
+    } catch (error) {
+      test.checked("retyping an emptied code line keeps it code", false, error.message)
+    }
+    try {
+      formatInCode()
+      test.checked("the inline tools type their Markdown inside a code block", true, "")
+    } catch (error) {
+      test.checked("the inline tools type their Markdown inside a code block", false, error.message)
     }
     try {
       typeAfterRule()
