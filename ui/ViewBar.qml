@@ -110,7 +110,7 @@ Item {
     accent: root.accent
     iconText: root.listCollapsed ? "󰅂" : "󰅁"
     iconSize: Style.font.icon
-    tooltipText: root.listCollapsed ? "Show sidebar (ctrl+b)" : "Hide sidebar (ctrl+b)"
+    tooltipText: root.listCollapsed ? "Show sidebar (ctrl+e)" : "Hide sidebar (ctrl+e)"
     horizontalPadding: Style.spacing.sm
     onHovered: function(isHovered) { hovering = isHovered }
     onClicked: root.listToggled()

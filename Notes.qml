@@ -1164,7 +1164,7 @@ Item {
     setFilter("")
     titleBar.focusSearch()
   }
-  // The view bar's toggle, and ctrl+b: fold the sidebar away, or bring it
+  // The view bar's toggle, and ctrl+e: fold the sidebar away, or bring it
   // back.
   function toggleList() {
     root.listCollapsed = !root.listCollapsed
