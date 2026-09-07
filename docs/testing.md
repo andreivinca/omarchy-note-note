@@ -110,6 +110,16 @@ check A → B → A loads, stale formatting/paste callbacks, save failures after
 selection changes, failed deletes, and settings changes while writes drain.
 Real temporary files cover image-save ordering, confirmed mutations, byte
 limits and external inotify events immediately after the provider's own saves.
+Offscreen key events exercise double Enter in the last table cell, including
+text after the table, multiple tables, empty cells, header-only tables,
+paragraphs within cells, keypad Enter, and undo/redo. The `--host` run keeps
+this key-event window closed; the default run executes those cases.
+Right-arrow checks cover empty and multiline code blocks and rules, including
+repeated Right, typing into the empty landing paragraph, and undo/redo.
+Delete checks cover empty headings and blank fillers before ordered, bullet
+and task lists, a single-item list, numbered starts and nested code. They
+compare the full document HTML through repeated keyboard and API Undo/Redo,
+including ordinary paragraph joins that trigger list-margin normalization.
 Process cases cover startup failure, stdin delivery, malformed output, nonzero
 exit, cancellation, deadlines and exactly one callback.
 

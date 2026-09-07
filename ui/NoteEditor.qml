@@ -474,17 +474,43 @@ Item {
     area.insert(at, root.imageLead)
     area.cursorPosition = at
   }
-  function undo() {
-    if (area.canUndo) {
-      area.undo()
-      root.edited()
+  property bool replayingHistory: false
+
+  function undo() { replayHistory(false) }
+  function redo() { replayHistory(true) }
+
+  function replayHistory(forward) {
+    if (root.readOnly || !(forward ? area.canRedo : area.canUndo)) {
+      return
     }
+    clearPending()
+    root.replayingHistory = true
+    try {
+      if (forward) {
+        area.redo()
+      } else {
+        area.undo()
+      }
+    } finally {
+      root.replayingHistory = false
+    }
+    root.edited()
   }
-  function redo() {
-    if (area.canRedo) {
-      area.redo()
-      root.edited()
+
+  function deleteParagraphBoundary() {
+    if (root.readOnly || root.plain || area.selectionStart !== area.selectionEnd || !nativeBlocks.item) {
+      return false
     }
+    if (!nativeBlocks.item.document) {
+      nativeBlocks.item.document = area.textDocument
+    }
+    var position = nativeBlocks.item.deleteParagraphBoundary(area.cursorPosition)
+    if (position < 0) {
+      return false
+    }
+    area.cursorPosition = position
+    root.edited()
+    return true
   }
 
   // One tool, one undo step. A tool edits in strokes — highlight inserts
@@ -550,8 +576,9 @@ Item {
   // The document block a position sits in. Qt separates blocks with U+2029
   // and starts every table cell with U+FDD0 (docs/engine-notes.md).
   function blockAt(pos) {
-    var text = area.getText(0, Math.max(0, pos)), count = 0
-    for (var i = 0; i < text.length; i++) {
+    // A ranged getText touching a table includes cells beyond the caret.
+    var text = area.getText(0, area.length), count = 0
+    for (var i = 0; i < Math.min(pos, text.length); i++) {
       var code = text.charCodeAt(i)
       if (code === 0x2029 || code === 0xFDD0) {
         count++
@@ -560,15 +587,17 @@ Item {
     return count
   }
 
-  // Which Markdown line that block is written on.
+  // Which Markdown line owns the block. A table row owns several blocks,
+  // but its map entry names only the first; separators own none.
   function lineOfBlock(map, block) {
-    var blocks = map.blocks || []
+    var blocks = map.blocks || [], line = 0, nearest = -1
     for (var i = 0; i < blocks.length; i++) {
-      if (blocks[i] === block) {
-        return i
+      if (blocks[i] >= 0 && blocks[i] <= block && blocks[i] > nearest) {
+        line = i
+        nearest = blocks[i]
       }
     }
-    return Math.max(0, blocks.length - 1)
+    return line
   }
   function lineAt(map, pos) { return lineOfBlock(map, blockAt(pos)) }
   function caretLine(map) { return lineAt(map, area.cursorPosition) }
@@ -589,7 +618,8 @@ Item {
 
   // caret < 0 means "the end of the note". Block styles never change the
   // document's text — a heading is a font size, not a `#` — so the caret's
-  // position survives the round trip unchanged.
+  // position survives the round trip unchanged. The final positioning and
+  // landing edits belong to the same undo step as the replacement.
   function replaceDoc(md, caret, then) {
     var context = root.editContext()
     var pos = caret === undefined ? area.cursorPosition : (caret < 0 ? Number.MAX_VALUE : caret)
@@ -600,13 +630,13 @@ Item {
       atomic(function() {
         area.remove(0, area.length)
         area.insert(0, html)
+        area.cursorPosition = Math.max(0, Math.min(pos, area.length))
+        if (then) {
+          then()
+        }
       })
-      area.cursorPosition = Math.max(0, Math.min(pos, area.length))
       root.edited()
       focusEditor()
-      if (then) {
-        then()
-      }
     }, root.documentBase)
   }
 
@@ -778,10 +808,11 @@ Item {
   // An edit can leave the document off the form a re-render would give;
   // the inspector restores it synchronously from the text change, before
   // the frame paints — on the debounced decorations tick the wrong form
-  // was visible for a blink first. Three restorations: items typed into a
+  // was visible for a blink first. The restorations: items typed into a
   // list inherit the split item's margins (normalizeListMargins), a block
   // born outside the dialect's writer misses its line height
-  // (normalizeLineHeights), and Enter or a delete can bare the block
+  // (normalizeLineHeights), code lines inherit outer margins when split
+  // (normalizeCodeMargins), and Enter or a delete can bare the block
   // above a table, which Qt then hides — the table rides up over the
   // caret's row until the block gets its blank filler back
   // (fillEmptyBlocksBeforeTables). The caret goes back in front of a
@@ -790,7 +821,7 @@ Item {
   // edits of their own.
   property bool normalizing: false
   function normalizeNow() {
-    if (root.normalizing || root.plain || root.readOnly || !nativeBlocks.item) {
+    if (root.normalizing || root.replayingHistory || root.plain || root.readOnly || !nativeBlocks.item) {
       return
     }
     if (!nativeBlocks.item.document) {
@@ -799,6 +830,7 @@ Item {
     root.normalizing = true
     nativeBlocks.item.normalizeListMargins()
     nativeBlocks.item.normalizeLineHeights()
+    nativeBlocks.item.normalizeCodeMargins()
     var filled = nativeBlocks.item.fillEmptyBlocksBeforeTables()
     root.normalizing = false
     if (filled >= 0 && area.cursorPosition === filled + 1) {
@@ -1080,7 +1112,7 @@ Item {
   // line; Enter again on that empty line leaves the block instead. The edit
   // takes the same markdown trip as every block tool (docs/decisions.md):
   // the empty line comes off the block, a blank paragraph lands after it,
-  // and its filler is selected so typing starts clean.
+  // and its rendering filler is removed so typing starts clean.
 
   // The caret's block as the dialect sees it: its kind (code line, quote
   // line, list item), whether it is empty, and whether it ends its run —
@@ -1200,27 +1232,27 @@ Item {
   }
 
   function leaveTableRow() {
-    withMarkdown(function(lines, map) {
-      var cellBlock = blockAt(area.cursorPosition) - 1   // the extra line adds one
-      var last = lineOfBlock(map, cellBlock)
-      if (!/^\s*\|/.test(lines[last] || "")) {
+    withMarkdown(function(lines) {
+      // Qt can omit an empty paragraph at a cell's start when exporting
+      // HTML. Locate the table by document order, independent of block counts.
+      var text = area.getText(0, area.length)
+      var before = text.substring(0, area.cursorPosition)
+      var index = before.split(root.tableEnd).length - 1
+      var table = MarkdownBlocks.tables(lines)[index]
+      if (!table) {
         return
       }
-      var first = last
-      while (first > 0 && /^\s*\|/.test(lines[first - 1])) {
-        first--
-      }
-      var cols = splitRow(lines[first]).length
+      var cols = splitRow(lines[table.start]).length
       var cells = []
       for (var k = 0; k < cols; k++) {
         cells.push("")
       }
-      var out = lines.slice(0, last + 1).concat([joinRow(cells)], lines.slice(last + 1))
-      // a row's line carries its first cell's block; the new row's first
-      // cell comes one row of cells later
-      var target = map.blocks[last] + cols
+      var out = lines.slice(0, table.end + 1).concat([joinRow(cells)], lines.slice(table.end + 1))
+      // Markdown folds a cell's paragraphs into one. Cell order survives
+      // that conversion even when the document's block numbers change.
+      var target = before.split(root.cellSep).length - 1
       replaceDoc(out.join("\n"), area.cursorPosition,
-                 function() { area.cursorPosition = root.blockStart(target) })
+                 function() { area.cursorPosition = root.cellStart(target) })
     })
   }
 
@@ -1269,25 +1301,23 @@ Item {
     })
   }
 
-  // The landing itself: the rewritten markdown goes in, the caret takes
-  // block `target` with its filler selected so typing starts clean, and a
-  // seed — the keystroke that asked to leave — replaces that filler as
-  // literal text.
+  // The filler keeps the landing paragraph alive through the HTML import.
+  // Once it exists, remove the filler: leaving it selected lets another
+  // Right press walk past it and adds a space to whatever the user types.
+  // A seed — typing on a rule — replaces it with literal text instead.
   function landOn(out, target, seed) {
     replaceDoc(out.join("\n"), area.cursorPosition, function() {
-      selectBlock(target)
-      if (!seed) {
-        return
-      }
-      // the highlight's insert-then-remove order, for the same block reason
-      var from = Math.min(area.selectionStart, area.selectionEnd)
-      var to = Math.max(area.selectionStart, area.selectionEnd)
-      atomic(function() {
+      var from = blockStart(target)
+      var filler = area.getText(0, area.length).charAt(from) === root.imageLead
+      var to = from + (filler ? 1 : 0)
+      if (seed) {
+        // Insert first to keep the landing paragraph's format.
         area.insert(to, seed.replace(/&/g, "&amp;").replace(/</g, "&lt;"))
+      }
+      if (filler) {
         area.remove(from, to)
-      })
-      area.cursorPosition = Math.min(from + seed.length, area.length)
-      root.edited()
+      }
+      area.cursorPosition = Math.min(from + (seed ? seed.length : 0), area.length)
     })
   }
 
@@ -1304,6 +1334,18 @@ Item {
     return t.split("\\|").join("\u0001").split("|").map(function(c) { return c.split("\u0001").join("\\|") })
   }
   function joinRow(cells) { return "| " + cells.map(function(c) { return c.trim() }).join(" | ") + " |" }
+
+  // The start of a cell, numbered across all tables in document order.
+  function cellStart(cell) {
+    var text = area.getText(0, area.length), start = -1
+    for (var i = 0; i <= cell; i++) {
+      start = text.indexOf(root.cellSep, start + 1)
+      if (start < 0) {
+        return area.length
+      }
+    }
+    return start + 1
+  }
 
   // The caret's cell, counted from the table's leading cell separator.
   function caretCell() {
@@ -2045,7 +2087,25 @@ Item {
           Keys.priority: Keys.BeforeItem
           Keys.onPressed: function(event) {
             root.shortcut(event)
-            if (event.accepted || root.plain) {
+            if (event.accepted) {
+              return
+            }
+            if (event.matches(StandardKey.Undo)) {
+              root.undo()
+              event.accepted = true
+              return
+            }
+            if (event.matches(StandardKey.Redo)) {
+              root.redo()
+              event.accepted = true
+              return
+            }
+            if (root.plain) {
+              return
+            }
+            if (event.key === Qt.Key_Delete && event.modifiers === Qt.NoModifier
+                && root.deleteParagraphBoundary()) {
+              event.accepted = true
               return
             }
             if (event.key === Qt.Key_Right

@@ -546,7 +546,7 @@ fallback cannot drift from the native truth unnoticed.
 Enter inside a code block, quote or list continues it — that is Qt's own
 behaviour and the right one. The way *out* is Enter again on the empty line
 that continuation just made: the empty line comes off the block and a blank
-paragraph lands after it, filler selected so typing starts clean. Code and
+paragraph lands after it, with its rendering filler removed so typing starts clean. Code and
 quotes leave only from their run's last line (an empty line higher up is
 content); an empty list item leaves from anywhere, splitting the list the
 way every editor does. In a table, the second Enter in the last cell turns
@@ -570,8 +570,10 @@ has no block before it to join, and the block keeps its marker.
 
 Right at the note's very end now steps past a rule or a code block the way
 the second Enter leaves one: a blank landing paragraph goes in after the
-whole block (`NoteEditor.stepPastBlock`) and the caret takes it, filler
-selected. It is the trip Enter and typing on a rule already took; the
+whole block (`NoteEditor.stepPastBlock`) and the caret takes it. Its filler
+is needed only during HTML import and is removed in the same undo step:
+another Right press must not move past a hidden space before typing.
+It is the trip Enter and typing on a rule already took; the
 rule-only branch became the general one, and `escapeForward` asks the
 caret's block once and dispatches.
 

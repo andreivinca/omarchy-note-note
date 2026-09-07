@@ -126,6 +126,16 @@ DEFAULT_CODE_CHIP = "transparent"
 # reaching the same distance back over it.
 CODE_PAD_PX = 14
 
+# The slab extends 8px above and below its text. A 20px outer margin leaves
+# 12px of clear space between the slab and neighbouring paragraphs. Only
+# the first and last code lines carry it; lines inside the block stay tight.
+# Mirrored by normalizeCodeMargins in cpp/textblocks.h.
+CODE_MARGIN_PX = 20
+
+# Match the code slab's visible clearance: its 20px margin minus the 8px
+# background padding. A table's border already bounds its visible surface.
+TABLE_MARGIN_PX = 12
+
 # How tall a line is drawn: Qt's proportional line height, a little air over
 # the font's natural line (130% of it is about 1.5 lines per font size — the
 # spacing prose editors set). Display only, like the quote's ink: `writer`

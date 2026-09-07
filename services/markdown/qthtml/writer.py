@@ -125,21 +125,25 @@ class _Renderer:
         slab is the editor's (NoteEditor, code slabs) — the background here
         is the marker, passed in near-invisible by the app.
 
-        Vertical margins are zeroed or Qt's default 12px would split the
-        block between lines; since every paragraph is written tight now
-        (block_style), the block sits on the same line rhythm as the text
-        around it, and a blank line is the author's way to give it air. The
-        left margin is the text's padding inside the slab the editor draws
+        Only the first and last lines get vertical margins: room for the
+        slab's padding and a gap to surrounding text, without separating
+        the lines inside the code block. The left margin is the text's
+        padding inside the slab the editor draws
         reaching CODE_PAD_PX back over it; `reader` ignores a code line's
         margins, so it never reads back as an indent."""
         margin = indent * dialect.INDENT_PX + dialect.CODE_PAD_PX
-        style = ' style="margin-top:0px; margin-bottom:0px; margin-left:%dpx; background-color:%s; %s"' % (
-            margin, self.code_background, LINE_HEIGHT)
         lines = token.get("raw", "").rstrip("\n").split("\n")
-        return ['<p%s><span style="font-family:\'%s\';">%s</span></p>'
-                % (style, dialect.MONO_FAMILY,
-                   _html.escape(line, quote=False) or dialect.EMPTY_CODE_LINE)
-                for line in lines]
+        out = []
+        for index, line in enumerate(lines):
+            top = dialect.CODE_MARGIN_PX if index == 0 else 0
+            bottom = dialect.CODE_MARGIN_PX if index == len(lines) - 1 else 0
+            style = ('white-space:pre-wrap; margin-top:%dpx; margin-bottom:%dpx;'
+                     ' margin-left:%dpx; background-color:%s; %s') % (
+                top, bottom, margin, self.code_background, LINE_HEIGHT)
+            out.append('<p style="%s"><span style="font-family:\'%s\';">%s</span></p>'
+                       % (style, dialect.MONO_FAMILY,
+                          _html.escape(line, quote=False) or dialect.EMPTY_CODE_LINE))
+        return out
 
     def block_style(self, indent, quote):
         # Vertical margins are stated on every paragraph, and stated as zero:
@@ -167,22 +171,27 @@ class _Renderer:
 
     def list(self, token, indent, quote):
         tag = "ol" if token.get("attrs", {}).get("ordered") else "ul"
-        return "<%s>%s</%s>" % (tag, "".join(self.item(i, indent, quote) for i in token.get("children") or []), tag)
+        start = token.get("attrs", {}).get("start", 1)
+        attrs = ' start="%d"' % start if tag == "ol" and start != 1 else ""
+        return "<%s%s>%s</%s>" % (
+            tag, attrs, "".join(self.item(i, indent, quote) for i in token.get("children") or []), tag)
 
     def item(self, token, indent, quote):
         checked = token.get("attrs", {}).get("checked")
         is_task = token["type"] == "task_list_item"
-        body = " ".join(self.inline(c.get("children"))
-                        for c in token.get("children") or []
-                        if c["type"] in ("block_text", "paragraph")).strip()
-        if is_task and not body:
+        children = list(token.get("children") or [])
+        body = ""
+        if children and children[0]["type"] in ("block_text", "paragraph"):
+            body = self.inline(children.pop(0).get("children")).strip()
+        if not body:
             body = dialect.EMPTY_ITEM        # Qt drops an item with no content
         if OPENS_WITH_IMAGE.match(body):
             body = dialect.IMAGE_LEAD + body  # Qt paints a leading image in the wrong place
-        nested = "".join(self.list(c, indent, quote)
-                         for c in token.get("children") or [] if c["type"] == "list")
+        # Only the first paragraph belongs on the marker's line. All later
+        # blocks stay in source order, including code and further paragraphs.
+        continuation = "".join(self.blocks(children, indent, quote))
         css = ' class="%s"' % dialect.CHECK_CLASS[bool(checked)] if is_task else ""
-        return '<li%s style="%s">%s%s</li>' % (css, LINE_HEIGHT, body, nested)
+        return '<li%s style="%s">%s%s</li>' % (css, LINE_HEIGHT, body, continuation)
 
     # ---- tables ---------------------------------------------------------
 
@@ -203,7 +212,8 @@ class _Renderer:
                         for row in rows)
         # cellspacing 0 or every cell's border sits beside the table's own and
         # the grid reads doubled; the padding is what keeps text off the rules.
-        return '<table border="1" cellspacing="0" cellpadding="6">%s</table>' % cells
+        style = "margin-top:%dpx; margin-bottom:%dpx;" % (dialect.TABLE_MARGIN_PX, dialect.TABLE_MARGIN_PX)
+        return '<table border="1" cellspacing="0" cellpadding="6" style="%s">%s</table>' % (style, cells)
 
     # ---- inline ---------------------------------------------------------
 

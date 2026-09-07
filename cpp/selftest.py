@@ -60,6 +60,30 @@ Window {
     var cur = e.positionToRectangle(e.cursorPosition)
     return e.positionToRectangle(i + 1).y - (cur.y + cur.height)
   }
+  function codeSpacing() {
+    var blocks = tb.blocks(), outer = [], inner = []
+    for (var i = 0; i < blocks.length; i++) {
+      if (QuoteBars.kindOfBlock(blocks[i]) !== "code") {
+        continue
+      }
+      var first = e.positionToRectangle(blocks[i].position)
+      var last = e.positionToRectangle(blocks[i].end)
+      if (i > 0) {
+        var before = e.positionToRectangle(blocks[i - 1].end)
+        var gap = first.y - before.y - before.height
+        if (QuoteBars.kindOfBlock(blocks[i - 1]) === "code") {
+          inner.push(gap)
+        } else {
+          outer.push(gap - 8) // the slab's vertical padding
+        }
+      }
+      if (i + 1 < blocks.length && QuoteBars.kindOfBlock(blocks[i + 1]) !== "code") {
+        var after = e.positionToRectangle(blocks[i + 1].position)
+        outer.push(after.y - last.y - last.height - 8)
+      }
+    }
+    return { outer: outer, inner: inner }
+  }
   Timer { interval: 60; running: true; onTriggered: {
     var cases = %(cases)s
     for (var key in cases) {
@@ -70,7 +94,8 @@ Window {
         boxesNative: QuoteBars.boxesFromBlocks(tb.blocks()),
         boxesScanned: QuoteBars.boxes(e.getFormattedText(0, e.length), e.getText(0, e.length)),
         kindsNative: tb.blocks().map(function(b) { return QuoteBars.kindOfBlock(b) }),
-        kindsScanned: QuoteBars.kinds(e.getFormattedText(0, e.length))
+        kindsScanned: QuoteBars.kinds(e.getFormattedText(0, e.length)),
+        codeSpacing: codeSpacing()
       }
     }
     // The image phase reads on a second tick, giving the document's
@@ -110,6 +135,23 @@ Window {
     tb.normalizeLineHeights()
     lh.normalized = e.getFormattedText(0, e.length)
     out.lineHeight = lh
+    // Splitting the first or last code line copies its outer margin. The
+    // normalization must keep the run tight and join the keystroke's undo.
+    var edits = []
+    for (var word of ["first", "second"]) {
+      e.text = %(codehtml)s
+      var original = e.getText(0, e.length)
+      e.forceActiveFocus()
+      e.cursorPosition = original.indexOf(word) + 2
+      tc.keyClick(Qt.Key_Return)
+      tb.normalizeCodeMargins()
+      var edit = { spacing: codeSpacing() }
+      e.undo()
+      edit.undone = e.getText(0, e.length) === original
+      edit.afterUndo = codeSpacing()
+      edits.push(edit)
+    }
+    out.codeEdits = edits
     console.error("<<<RESULT>>>" + JSON.stringify(out) + "<<<END>>>")
     Qt.exit(0)
   } }
@@ -119,6 +161,7 @@ Window {
 # The list whose last item sits right above a table — the shape Enter bares
 # a hidden block in (docs/engine-notes.md).
 GAP_MARKDOWN = "1. one\n2. two\n3. three\n\n| a | b |\n|---|---|\n| 1 | 2 |\n"
+CODE_MARKDOWN = "1. Run:\n\n   ```\n   first\n   second\n   ```\n2. Done\n"
 
 
 def make_png(path, width, height):
@@ -139,7 +182,7 @@ def has_quote(markdown):
     for line in markdown.split("\n"):
         if line.strip().startswith("```"):
             fence = not fence
-        elif not fence and line.startswith("> "):
+        elif not fence and line.lstrip().startswith("> "):
             return True
     return False
 
@@ -215,7 +258,8 @@ def main():
                              "quotebars": "file://" + QUOTEBARS,
                              "cases": json.dumps(documents),
                              "imagehtml": json.dumps(to_html(image_markdown)),
-                             "gaphtml": json.dumps(to_html(GAP_MARKDOWN))}
+                             "gaphtml": json.dumps(to_html(GAP_MARKDOWN)),
+                             "codehtml": json.dumps(to_html(CODE_MARKDOWN))}
     with tempfile.NamedTemporaryFile("w", suffix=".qml", delete=False) as handle:
         handle.write(script)
         path = handle.name
@@ -276,6 +320,9 @@ def main():
             print("  FAIL  %-24s markdown %s a rule, kinds say %r"
                   % (name, "holds" if has_rule(markdown) else "holds no",
                      result.get("kindsNative")))
+        elif not code_spacing_ok(result.get("codeSpacing") or {}):
+            failures += 1
+            print("  FAIL  %-24s code spacing %r" % (name, result.get("codeSpacing")))
         elif args.verbose and (native["quote"] or native["code"] or boxes_native):
             print("  ok    %-24s %r %r" % (name, native, boxes_native))
     print("  %d/%d cases" % (len(CASES) - failures, len(CASES)))
@@ -294,6 +341,17 @@ def main():
     height_failures = check_line_height(results.get("lineHeight") or {}, args.verbose)
     failures += height_failures
     print("  %s" % ("ok" if not height_failures else "%d failure(s)" % height_failures))
+
+    print("code spacing: clear of surrounding text, tight inside, preserved through edits and undo")
+    edits = results.get("codeEdits") or []
+    code_ok = len(edits) == 2 and all(
+        edit.get("undone") and code_spacing_ok(edit.get("spacing") or {})
+        and code_spacing_ok(edit.get("afterUndo") or {}) for edit in edits)
+    if not code_ok:
+        failures += 1
+        print("  FAIL %r" % edits)
+    else:
+        print("  ok")
 
     print("\n%s" % ("all green" if not failures else "%d failure(s)" % failures))
     return 1 if failures else 0
@@ -336,12 +394,16 @@ def check_table_gap(result, verbose):
     `fillEmptyBlocksBeforeTables()` must put the dialect's blank filler in,
     give the row its height back, and join the edit — one undo removes the
     row and the filler together. The first check pins Qt's behaviour: the
-    day it fails, Qt lays the bare block out itself and the filler can go."""
+    day it fails, Qt lays the bare block out itself and the filler can go.
+    Subtract the table's outer margin: that decorative gap can conceal the
+    missing row without actually restoring its height."""
     checks = [
-        ("Qt still hides the bare block", result.get("bared", 0) < 0, result.get("bared")),
+        ("Qt still hides the bare block",
+         result.get("bared", 0) - dialect.TABLE_MARGIN_PX < 0, result.get("bared")),
         ("a position was filled", result.get("filled", -1) >= 0, result.get("filled")),
         ("with the dialect's blank", result.get("filler") == "\u00a0", result.get("filler")),
-        ("the row has its height back", result.get("fixed", -1) >= 0, result.get("fixed")),
+        ("the row has its height back",
+         result.get("fixed", -1) - dialect.TABLE_MARGIN_PX >= 0, result.get("fixed")),
         ("one undo removes row and filler",
          result.get("lenUndone") == result.get("lenBefore"),
          (result.get("lenUndone"), result.get("lenBefore"))),
@@ -377,6 +439,15 @@ def check_line_height(result, verbose):
         elif verbose:
             print("  ok    %-28s" % name)
     return failures
+
+
+def code_spacing_ok(spacing):
+    # The rounded slab needs at least 12px of air outside its 8px padding.
+    # Inside it only the line height separates code lines, under 12px at
+    # this test's font size; a copied outer margin would add another 20px.
+    return ("outer" in spacing and "inner" in spacing
+            and all(gap >= 11.9 for gap in spacing["outer"])
+            and all(gap < 12 for gap in spacing["inner"]))
 
 
 if __name__ == "__main__":

@@ -20,3 +20,22 @@ function fences(lines) {
   }
   return result
 }
+
+// The converter writes each table with a pipe-delimited header and a
+// canonical separator. Ignore lookalikes inside fenced code. Table order
+// survives Qt's HTML export even when empty cell paragraphs do not.
+function tables(lines) {
+  var code = fences(lines), result = []
+  for (var i = 0; i + 1 < lines.length; i++) {
+    if (code[i] || !/^\s*\|/.test(lines[i]) || !/^\s*\|(?:---\|)+\s*$/.test(lines[i + 1])) {
+      continue
+    }
+    var start = i
+    i++
+    while (i + 1 < lines.length && !code[i + 1] && /^\s*\|/.test(lines[i + 1])) {
+      i++
+    }
+    result.push({ start: start, end: i })
+  }
+  return result
+}

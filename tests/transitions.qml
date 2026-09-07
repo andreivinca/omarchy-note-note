@@ -12,6 +12,7 @@ import "app/services/notes/sidebar.js" as Sidebar
 import "app/services/providers/settings.js" as Settings
 import "app/ui/MarkdownBlocks.js" as Blocks
 import "app/ui/KeyBindings.js" as Keys
+import "app/tests" as Tests
 
 ShellRoot {
   id: test
@@ -19,6 +20,7 @@ ShellRoot {
   property int processes: 0
   property bool localFinished: false
   property bool watchFinished: false
+  property bool editorFinished: false
   property var appHost: null
   function check(name, ok, detail) {
     test.results.push({ name: name, ok: !!ok, detail: detail || "" })
@@ -26,6 +28,11 @@ ShellRoot {
   ProcessRunner { id: runner }
   FileStore { id: files }
   Local.Provider { id: local; notesDir: Quickshell.env("NOTE_NOTE_TEST_DIR") }
+  Tests.EditorKeys {
+    runKeys: !Quickshell.env("NOTE_NOTE_TEST_HOST")
+    onChecked: function(name, ok, detail) { test.check(name, ok, detail) }
+    onFinished: test.editorFinished = true
+  }
 
   QtObject {
     id: conversions
@@ -403,7 +410,7 @@ ShellRoot {
     repeat: true
     running: true
     onTriggered: {
-      if (test.localFinished && test.watchFinished && test.processes === 0 && (!test.appHost || test.appHost.providersLoaded)) {
+      if (test.localFinished && test.watchFinished && test.editorFinished && test.processes === 0 && (!test.appHost || test.appHost.providersLoaded)) {
         if (test.appHost) {
           test.check("host reads framed configuration at startup", test.appHost.configReady && test.appHost.providers.length === 0)
         }

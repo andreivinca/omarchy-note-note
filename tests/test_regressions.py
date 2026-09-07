@@ -18,7 +18,7 @@ import images  # noqa: E402 — plugin modules are imported from the source tree
 import notion_md  # noqa: E402 — plugin modules are imported from the source tree
 from mdtext import code_span, code_fence  # noqa: E402 — plugin modules are imported from the source tree
 from parse import parse, walk_text  # noqa: E402 — plugin modules are imported from the source tree
-from qthtml import dialect, to_html, to_markdown  # noqa: E402 — plugin modules are imported from the source tree
+from qthtml import convert, dialect, to_html, to_markdown  # noqa: E402 — plugin modules are imported from the source tree
 
 
 class Files(unittest.TestCase):
@@ -154,6 +154,23 @@ class Content(unittest.TestCase):
 
     def test_literal_highlight_markers_are_escaped_on_fallback(self):
         self.assertEqual(walk_text(parse(to_markdown("<p>==literal==</p>"))), "==literal==")
+
+    def test_classic_markdown_keeps_shell_code_in_ordered_items(self):
+        markdown = ("1. **Install:**\n\n   ```bash\n   install-driver --needed\n   enable-service\n   ```\n\n"
+                    "2. **Configure:**\n\n   ```bash\n   name=Token\n   slotListIndex=0\n   ```\n")
+        items = parse(to_markdown(to_html(markdown)))[0]["children"]
+        self.assertEqual(len(items), 2)
+        for item, expected in zip(items, ["install-driver --needed\nenable-service\n",
+                                          "name=Token\nslotListIndex=0\n"]):
+            self.assertEqual([child["type"] for child in item["children"]], ["paragraph", "blank_line", "block_code"])
+            self.assertEqual(item["children"][-1]["raw"], expected)
+
+    def test_table_map_counts_all_exported_cell_paragraphs(self):
+        html = ("<p>Before</p><table><tr><td><p>a</p><p>more</p></td><td><p>b</p></td></tr>"
+                "<tr><td><p>1</p><p></p><p>extra</p></td><td><p>2</p></td></tr></table><p>After</p>")
+        self.assertEqual(convert(html), {
+            "markdown": "Before\n\n| a more | b |\n|---|---|\n| 1 extra | 2 |\n\nAfter\n",
+            "blocks": [0, -1, 1, -1, 4, -1, 8], "count": 9})
 
     def test_document_dialect_agrees_across_adapters(self):
         js = (ROOT / "ui/Dialect.js").read_text()

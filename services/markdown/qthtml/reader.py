@@ -14,6 +14,8 @@ note's text would have changed meaning, the whole document is rendered again
 with strict escaping. Under-escaping is the one failure that silently edits
 someone's note, so it is the one failure that is checked for.
 """
+from itertools import groupby
+
 from . import dialect
 from . import htmltree
 from ._vendor import parse, walk_text
@@ -40,6 +42,8 @@ INLINE_MARKERS = (
 
 
 NO_BLOCK = -1
+LIST_BLOCK_TAGS = frozenset({"p", "div", "h1", "h2", "h3", "h4", "h5", "h6",
+                             "ul", "ol", "blockquote", "table", "hr"})
 
 
 def to_markdown(html, base=""):
@@ -104,10 +108,14 @@ class _Reader:
         self.next_block = 0
 
     def render(self, body):
-        chunks = _merge_code(_drop_leading_spacer(self.walk(body)))
+        chunks = self.prepare(_drop_leading_spacer(self.walk(body)))
+        return _join(chunks, self.next_block)
+
+    def prepare(self, chunks):
+        chunks = _merge_code(chunks)
         if self.as_text is not None:
             chunks = self.unfence(chunks)
-        return _join(_fence(chunks), self.next_block)
+        return _fence(chunks)
 
     def unfence(self, chunks):
         """The code block holding block `as_text`, read as paragraphs. Each
@@ -137,8 +145,28 @@ class _Reader:
 
     def walk(self, node):
         out = []
-        for child in node.children:
-            out.extend(self.block(child))
+        index = 0
+        while index < len(node.children):
+            child = node.children[index]
+            index += 1
+            if child.tag not in ("ul", "ol"):
+                out.extend(self.block(child))
+                continue
+            # Qt closes the list after its final numbered/bulleted block.
+            # Any remaining continuation paragraphs follow the closing tag
+            # and carry their list membership only in -qt-block-indent.
+            trailing = []
+            while index < len(node.children):
+                following = node.children[index]
+                if following.tag is None and not (following.text or "").strip():
+                    index += 1
+                    continue
+                style = dialect.style_map(following.style)
+                if dialect.px(style.get("-qt-block-indent")) <= 0:
+                    break
+                trailing.append(following)
+                index += 1
+            out.append(self.list(child, trailing=trailing))
         return out
 
     def block(self, node):
@@ -223,22 +251,80 @@ class _Reader:
 
     # ---- lists ----------------------------------------------------------
 
-    def list(self, node, depth=0):
-        """Returns a chunk: one Markdown line per item, nested items after it."""
+    def list(self, node, prefix="", depth=1, indents=None, trailing=()):
+        """Read both our nested HTML and Qt's flattened list continuations.
+
+        Qt moves paragraphs out of <li>, sometimes out of a nested list as
+        well. Their -qt-block-indent retains the owning list's depth. Keep
+        each active item's Markdown indent so those blocks remain attached
+        to the same item, even across ordered lists with wider markers.
+        """
+        if indents is None:
+            indents = []
         ordered = node.tag == "ol"
+        index = dialect.px(node.attrs.get("start"), 1)
+        parts = []
+        for child in [*node.children, *trailing]:
+            if child.tag != "li":
+                parts.extend(self.list_continuation([child], depth, indents))
+                continue
+            header, continuation = self.list_item_parts(child)
+            marker = self.marker(child, ordered, index)
+            width = len("%d. " % index) if ordered else 2
+            indents[depth - 1:] = [prefix + " " * width]
+            body = self.inline(header).strip()
+            body_lines = body.split("\n")
+            lines = [prefix + marker + body_lines[0]]
+            lines.extend(indents[-1] + line for line in body_lines[1:])
+            kind = "item" if body else "empty_item"
+            parts.append(("", _Chunk(kind, lines, [self.take()] * len(lines))))
+            parts.extend(self.list_continuation(continuation, depth, indents))
+            index += 1
+
         lines, blocks = [], []
-        for index, item in enumerate(node.find("li"), start=1):
-            body = self.inline([c for c in item.children if c.tag not in ("ul", "ol")]).strip()
-            if body == dialect.EMPTY_ITEM:
-                body = ""
-            lines.append("  " * depth + self.marker(item, ordered, index) + body)
-            blocks.append(self.take())
-            for nested in item.children:
-                if nested.tag in ("ul", "ol"):
-                    inner = self.list(nested, depth + 1)
-                    lines.extend(inner.lines)
-                    blocks.extend(inner.blocks)
+        previous = ""
+        for indent, group in groupby(parts, key=lambda part: part[0]):
+            for chunk in self.prepare([part[1] for part in group]):
+                # A code-only item starts with "- ```". An empty marker
+                # followed by a blank line would end the Markdown item and
+                # put its code outside the list on the next parse.
+                if previous == "empty_item" and chunk.kind == "fence":
+                    lines[-1] += chunk.lines[0]
+                    lines.extend(indent + line if line else "" for line in chunk.lines[1:])
+                    blocks.extend(chunk.blocks[1:])
+                    previous = chunk.kind
+                    continue
+                if lines and chunk.kind not in ("item", "empty_item", "list"):
+                    lines.append("")
+                    blocks.append(NO_BLOCK)
+                lines.extend(indent + line if line else "" for line in chunk.lines)
+                blocks.extend(chunk.blocks)
+                previous = chunk.kind
         return _Chunk("list", lines, blocks)
+
+    def list_item_parts(self, item):
+        """The marker's inline text, followed by the item's block children."""
+        header = []
+        for index, child in enumerate(item.children):
+            if child.tag in LIST_BLOCK_TAGS:
+                if child.tag == "p" and not self.plain(header).strip(" \t\r\n"):
+                    return child.children, item.children[index + 1:]
+                return header, item.children[index:]
+            header.append(child)
+        return header, []
+
+    def list_continuation(self, nodes, depth, indents):
+        parts = []
+        for node in nodes:
+            if node.tag in ("ul", "ol"):
+                prefix = indents[depth - 1] if len(indents) >= depth else ""
+                parts.append(("", self.list(node, prefix, depth + 1, indents)))
+                continue
+            style = dialect.style_map(node.style)
+            level = dialect.px(style.get("-qt-block-indent"), depth)
+            prefix = indents[level - 1] if 0 < level <= len(indents) else ""
+            parts.extend((prefix, chunk) for chunk in self.block(node))
+        return parts
 
     def marker(self, item, ordered, index):
         checked = dialect.CLASS_CHECK.get(item.attrs.get("class", ""))
@@ -249,13 +335,17 @@ class _Reader:
     # ---- tables ---------------------------------------------------------
 
     def table(self, node):
-        """Every cell is a document block; a row is one Markdown line."""
+        """A row is one Markdown line, owning every paragraph in its cells."""
         rows, starts = [], []
         for row in _rows(node):
             cells = [cell for cell in row.children if cell.tag in ("td", "th")]
             if not cells:
                 continue
-            starts.append(self.take(len(cells)))
+            starts.append(self.next_block)
+            for cell in cells:
+                # Enter adds paragraphs inside a cell. They fold into one
+                # Markdown cell, but still count toward later caret positions.
+                self.take(max(1, sum(child.tag == "p" for child in cell.children)))
             rows.append([self.cell(cell) for cell in cells])
         if not rows:
             return [], []

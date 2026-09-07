@@ -104,9 +104,14 @@ the eye sees over the glyph's cell (NoteEditor.qml, block decorations;
 
 **Block backgrounds survive on the paragraph** (measured on 6.11): a
 `background-color` in a `<p>`'s style comes back in the same place, is not
-copied onto spans that already exist, and zeroed vertical margins
-(`margin-top:0px; margin-bottom:0px`, which keep a code block one slab) come
-back zeroed. The one trap: on a paragraph holding *loose* text — no span —
+copied onto spans that already exist, and vertical margins round-trip.
+Code blocks have a 20px margin above their first line and below their last,
+leaving 12px of space outside the slab's 8px padding. Interior margins are
+zero; `normalizeCodeMargins()` restores this after line splits and joins.
+Tables carry 12px top and bottom margins on their frame, matching the clear
+space outside a code slab. These margins survive row edits and HTML export;
+they are display spacing and do not add blank paragraphs to the Markdown.
+The one trap: on a paragraph holding *loose* text — no span —
 Qt wraps the text in a new span carrying the same `background-color`, which
 the reader would read as a highlight. So a block background may only sit on
 a paragraph whose text is entirely inside spans — a code line's always is.
@@ -191,6 +196,16 @@ So the block a caret sits in is the number of U+2029 plus U+FDD0 before it —
 which is how the toolbar turns a caret into a Markdown line, via the map
 `qthtml.convert()` returns.
 
+Read the full plain text before counting separators up to the caret: a
+`getText(0, caret)` range touching a table can include cells past the caret.
+A table row's Markdown line maps to its first cell's block, and all exported
+paragraphs inside its cells count toward the following row's block number.
+Qt can omit an empty paragraph at the start of a cell from its HTML, though,
+so block counts cannot reliably locate a table after Enter. The second Enter
+finds the table by document order, appends after its final Markdown row
+(after the separator for a header-only table), and restores the caret by
+cell order. Table-shaped text inside fenced code does not count as a table.
+
 **An image that opens a list item is painted ~200px too high.** The document
 is right (`<li><img …/>text</li>`), the painting is not: Qt Quick's text node
 draws the image over the items above it. The same item renders correctly once
@@ -226,6 +241,23 @@ the native inspector (`beginEditBlock`/`endEditBlock`, cpp/textblocks.h):
 one transaction, one undo step, and the normalize passes that join the edit
 join the same step. QML alone cannot open an edit block, so without the
 built module undo degrades to walking the strokes again.
+
+**Delete on an empty paragraph must remove the whole block**, including its
+U+00A0 rendering filler. Qt's ordinary Delete at the end of that filler only
+removes the separator; the following list item then joins a non-list block
+and loses its marker. `TextBlocks.deleteParagraphBoundary()` gives the empty
+block the following block's format and block character format before removing
+it, so an empty heading cannot pass its size or weight to the list. Table and
+frame boundaries retain Qt's own deletion behavior.
+
+Paragraph-boundary deletion uses an edit block so the normalizers' repairs
+join the deletion. `joinPreviousEditBlock()` cannot combine a format change
+with Qt's ungrouped single-character Delete. Undo and Redo also emit text
+changes; `NoteEditor.replayHistory()` suppresses normalization during replay,
+otherwise the repairs become fresh edits that alter history and discard
+Redo. Keyboard shortcuts and the editor's public undo/redo functions use
+the same guard. Real-key tests compare the full HTML before Delete and after
+Undo, and repeat Undo/Redo to check that both directions remain stable.
 
 **Verify offscreen** rather than guessing — it takes seconds:
 

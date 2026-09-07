@@ -8,10 +8,11 @@
 // the QTextDocument itself, through the TextEdit's `textDocument` property.
 // It is inspection first: the writes are canonical list margins
 // (normalizeListMargins) and an image's display width (setImageWidth, the
-// corner-handle resize), both format-only, and one blank filler character
-// into a block Qt would otherwise hide (fillEmptyBlocksBeforeTables) — none
-// can remove text, so the worst a bug here can do is mis-draw a block,
-// never lose a character. The edit-block brackets (beginEditBlock/
+// corner-handle resize), both format-only, and a blank filler character
+// into a block Qt would otherwise hide (fillEmptyBlocksBeforeTables).
+// Removing an empty paragraph also lives here: it must keep the following
+// block's list membership and character format, which QML cannot set.
+// The edit-block brackets (beginEditBlock/
 // endEditBlock) write nothing at all: they fence the editor's own strokes
 // into one undo step.
 //
@@ -86,6 +87,55 @@ public:
             return;
         QTextCursor(doc).endEditBlock();
         --m_editDepth;
+    }
+
+    // Forward Delete across a paragraph boundary is one undo transaction,
+    // including the margin repairs it triggers. joinPreviousEditBlock cannot
+    // attach those repairs to Qt's ungrouped, single-character deletion.
+    // Delete an empty paragraph as a block, including its rendering filler.
+    // Deleting only its separator would merge the next item into that filler
+    // and discard its list membership. The surviving paragraph owns the
+    // format: an empty heading must not enlarge the list item moved up into it.
+    // Return the new caret position, or -1 when ordinary Delete should apply.
+    Q_INVOKABLE int deleteParagraphBoundary(int position)
+    {
+        QTextDocument *doc = m_document ? m_document->textDocument() : nullptr;
+        if (!doc || position < 0 || position >= doc->characterCount() - 1) {
+            return -1;
+        }
+        const QTextBlock block = doc->findBlock(position);
+        const QTextBlock next = block.next();
+        if (!next.isValid()) {
+            return -1;
+        }
+        const bool emptyParagraph = (block.text().isEmpty() || block.text() == QString(QChar(0xa0)))
+                && !block.textList() && !isCodeBlock(block)
+                && !block.blockFormat().hasProperty(QTextFormat::BlockTrailingHorizontalRulerWidth);
+        QTextCursor cursor(doc);
+        cursor.setPosition(position);
+        if (!emptyParagraph && !cursor.atBlockEnd()) {
+            return -1;
+        }
+        const QTextCursor following(next);
+        // Paragraph deletion must not merge table cells or remove a frame's
+        // required anchor paragraph. Qt handles those structural boundaries.
+        if (cursor.currentTable() || cursor.currentFrame() != following.currentFrame()) {
+            return -1;
+        }
+        cursor.beginEditBlock();
+        if (emptyParagraph) {
+            const QTextBlockFormat format = next.blockFormat();
+            const QTextCharFormat characters = following.blockCharFormat();
+            cursor.setPosition(block.position());
+            cursor.setBlockFormat(format);
+            cursor.setBlockCharFormat(characters);
+            cursor.setPosition(next.position(), QTextCursor::KeepAnchor);
+            cursor.removeSelectedText();
+        } else {
+            cursor.deleteChar();
+        }
+        cursor.endEditBlock();
+        return cursor.position();
     }
 
     // Every block in document order — paragraphs, list items and table
@@ -273,6 +323,36 @@ public:
         }
     }
 
+    // Enter copies a code line's margins onto both halves. Keep the outer
+    // margins on the run's first and last lines so editing cannot introduce
+    // gaps inside the slab or remove its clearance from neighbouring text.
+    Q_INVOKABLE void normalizeCodeMargins()
+    {
+        // Mirrors CODE_MARGIN_PX in qthtml/dialect.py.
+        constexpr qreal codeMargin = 20;
+        QTextDocument *doc = m_document ? m_document->textDocument() : nullptr;
+        if (!doc) {
+            return;
+        }
+        for (QTextBlock block = doc->begin(); block.isValid(); block = block.next()) {
+            if (!isCodeBlock(block)) {
+                continue;
+            }
+            const qreal top = isCodeBlock(block.previous()) ? 0 : codeMargin;
+            const qreal bottom = isCodeBlock(block.next()) ? 0 : codeMargin;
+            QTextBlockFormat format = block.blockFormat();
+            if (format.topMargin() == top && format.bottomMargin() == bottom) {
+                continue;
+            }
+            format.setTopMargin(top);
+            format.setBottomMargin(bottom);
+            QTextCursor cursor(block);
+            cursor.joinPreviousEditBlock();
+            cursor.setBlockFormat(format);
+            cursor.endEditBlock();
+        }
+    }
+
     // A block with no characters directly above a table takes no height:
     // Qt hides it — the same rule that hides the empty block Qt itself
     // puts over a document-opening table — so Enter at a list's end, or a
@@ -314,6 +394,16 @@ signals:
     void documentChanged();
 
 private:
+    static bool isCodeBlock(const QTextBlock &block)
+    {
+        if (!block.isValid()) {
+            return false;
+        }
+        const QTextBlockFormat format = block.blockFormat();
+        return format.background().style() != Qt::NoBrush
+            && !(format.leftMargin() >= 40 && format.rightMargin() >= 40);
+    }
+
     // The image file's own size, from the resource the document already
     // loaded to paint it (the document caches these, so this is a lookup,
     // not a read). Empty while a resource has not loaded — `images()` then

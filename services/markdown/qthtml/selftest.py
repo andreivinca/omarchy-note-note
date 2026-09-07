@@ -39,6 +39,28 @@ CASES = {
     "escapes": "a - b # c 1. d * e\n",
     "lists": "- bullet\n  - nested\n- second\n",
     "ordered": "1. first\n2. second\n",
+    "code in ordered items": (
+        "1. **Install driver:**\n\n"
+        "   ```\n   install-driver --needed\n   enable-service\n   ```\n"
+        "2. **Configure token:**\n\n"
+        "   ```\n   name=Token\n\n   slotListIndex=0\n   ```\n"
+        "3. **Sign:**\n\n   Open the PDF.\n\n   Press **Sign**.\n"),
+    "code in bullet item": "- Run:\n\n  ```\n  echo one\n  echo two\n  ```\n- Done\n",
+    "code in checkbox item": "- [x] Run:\n\n  ```\n  echo done\n  ```\n- [ ] Next\n",
+    "nested code continuation": (
+        "- outer\n  - inner\n\n    ```\n    echo inner\n    ```\n\n"
+        "    inner after\n\n  outer after\n- last\n"),
+    "ordered nested code": (
+        "9. outer\n   - inner\n\n     ```\n     echo inner\n     ```\n"
+        "10. next\n\n    ```\n    echo next\n    ```\n"),
+    "paragraphs around nested list": (
+        "- first\n\n  before\n  - child\n\n  after\n- second\n"),
+    "list item hard break": "- first  \n  second\n- next\n",
+    "code with literal fence in item": "- Run:\n\n  ````\n  before\n  ```\n  after\n  ````\n",
+    "indented code in item": "- Run:\n\n  ```\n  if ready:\n      run()\n  ```\n",
+    "code opening item": "- ```\n  echo hello\n  ```\n",
+    "nested code at end": "- parent\n  - child\n\n    ```\n    echo child\n    ```\n",
+    "quote and heading in item": "- Title\n\n  > quote\n\n  ## Heading\n- end\n",
     "checkboxes": "- [ ] todo\n- [x] done\n",
     "empty checkbox": "- [ ] \n- [x] done\n",
     "quote": "> quoted line\n",
@@ -236,6 +258,9 @@ def check_as_text(verbose):
           "blocks": [-1, 0, -1, -1, 1, -1, 2], "count": 3}),
         ("an empty block becomes a blank", "```\n\n```\n", 0,
          {"markdown": "\u00a0\n", "blocks": [0], "count": 1}),
+        ("code stays in its list item", "- Run\n\n  ```\n  a = 1\n\n  b = 2\n  ```\n- Done\n", 2,
+         {"markdown": "- Run\n\n  a = 1\n\n  \u00a0\n\n  b = 2\n- Done\n",
+          "blocks": [0, -1, 1, -1, 2, -1, 3, 4], "count": 5}),
         ("a block outside any code is a plain read", "para\n\n```\ncode\n```\n", 0,
          convert(to_html("para\n\n```\ncode\n```\n"))),
     ]
