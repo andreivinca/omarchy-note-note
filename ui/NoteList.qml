@@ -69,6 +69,7 @@ Item {
   // that runs the other way.
   readonly property color accentInk: Qt.tint(foreground, Util.alpha(accent, 0.6))
   property string fontFamily: Style.font.menuFamily
+  property int noteFontSize: Style.font.body
   // (title, preview) -> string shown in the row.
   property var titleFor: function(t, p) { return t || p || "Untitled" }
 
@@ -84,7 +85,11 @@ Item {
   // screen — the model has not heard about the moves yet (see visualModel).
   signal reorderFinished(string notebook, var paths)
 
-  readonly property int rowHeight: Style.spacing.controlHeight
+  // Air between rows. A slot is a control's height plus this, and the card
+  // sits inside the slot with this much between it and its neighbours, so
+  // the gap reads the same whether or not a row is lit.
+  readonly property int rowGap: Style.spacing.xs
+  readonly property int rowHeight: Style.spacing.controlHeight + rowGap
   // The page's own margin. The rows sit inside it, so a title never starts on
   // the panel's edge and the list has air above and below it.
   readonly property real pagePadding: Style.spacing.lg
@@ -177,8 +182,10 @@ Item {
       selectedBackground: root.selectionFill
       selectedText: root.foreground
       fontFamily: root.fontFamily
+      noteFontSize: root.noteFontSize
       titleFor: root.titleFor
       rowHeight: root.rowHeight
+      rowGap: root.rowGap
       rowRadius: root.rowRadius
       textInset: root.textInset
       onActivated: function(path) { root.activated(path) }
@@ -245,7 +252,7 @@ Item {
               id: row
               x: Style.spacing.xxs
               width: slot.width - Style.spacing.xxs * 2
-              height: root.rowHeight - Style.spacing.xxs
+              height: root.rowHeight - root.rowGap
               anchors.verticalCenter: parent.verticalCenter
               radius: root.rowRadius
               readonly property bool current: slot.isNote
@@ -295,7 +302,7 @@ Item {
                   font.family: root.fontFamily
                   // Actions ("New note…", sign in/out, settings) read as chrome,
                   // not as notes: dimmed above, and a size smaller here.
-                  font.pixelSize: (slot.isNew || slot.isAction) ? Style.font.bodySmall : Style.font.body
+                  font.pixelSize: (slot.isNew || slot.isAction) ? Style.font.bodySmall : root.noteFontSize
                   elide: Text.ElideRight
                 }
               }

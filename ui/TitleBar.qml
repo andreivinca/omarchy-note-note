@@ -31,6 +31,7 @@ Item {
   property color foreground: Color.menu.text
   property color accent: Color.accent
   property string fontFamily: Style.font.menuFamily
+  property int tabFontSize: Style.font.bodySmall
   // (KeyEvent) -> bool, the host's shortcuts — run before the field's own
   // key handling, so ctrl+n in the search still makes a note.
   property var shortcutHandler: null
@@ -205,6 +206,7 @@ Item {
       background: root.fill
       foreground: root.foreground
       fontFamily: root.fontFamily
+      fontSize: root.tabFontSize
       onActivated: function(key) { root.sectionActivated(key) }
     }
 

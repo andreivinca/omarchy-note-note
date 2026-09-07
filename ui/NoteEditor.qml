@@ -36,7 +36,10 @@ Item {
   property string fontFamily: Style.font.menuFamily
   // The body must NOT be fixed-pitch: Qt's Markdown writer serialises any
   // monospace text as a code span and drops bold/italic/underline.
-  property string bodyFontFamily: "sans-serif"
+  // The note's own type: its title, its text, and the style previews that
+  // show how that text will look. `fontFamily` is the chrome around it.
+  property string noteFontFamily: "sans-serif"
+  property int bodyFontSize: Style.font.title
   // The conversion service (services/markdown/Markdown.qml). The document is
   // HTML; every note arrives and leaves as Markdown, and this is the boundary.
   property var markdown: null
@@ -115,11 +118,12 @@ Item {
   readonly property bool toolsVisible: hasNote && !plain && !readOnly && !showingNotice
     && (enabledTools === null || enabledTools.length > 0)
 
-  // A document title needs display weight. The note itself fills its pane
+  // Match Heading 1's xx-large size: twice the document's body font.
+  // The note itself fills its pane
   // the way a Markdown document fills an editor — no readable-width cap:
   // the pane's width, set by the window and the splitter, is the line
   // length the user chose.
-  readonly property int titleSize: Math.round(Style.font.heading * 1.55)
+  readonly property int titleSize: Math.round(root.bodyFontSize * 2)
   readonly property bool showingNotice: noticeText.length > 0 || customView !== null
   function showView(component, props) {
     customView = component; customViewProps = props || ({})
@@ -1800,8 +1804,8 @@ Item {
 
             // The two candidate widest rows, measured at their menu size, so
             // every row takes the same width and the hover fill is not ragged.
-            TextMetrics { id: widestHeading; text: "Heading 1"; font.family: root.fontFamily; font.bold: true; font.pixelSize: Math.round(Style.font.body * 2) }
-            TextMetrics { id: widestNormal; text: "Normal text"; font.family: root.fontFamily; font.pixelSize: Style.font.body }
+            TextMetrics { id: widestHeading; text: "Heading 1"; font.family: root.noteFontFamily; font.bold: true; font.pixelSize: root.titleSize }
+            TextMetrics { id: widestNormal; text: "Normal text"; font.family: root.noteFontFamily; font.pixelSize: root.bodyFontSize }
 
             QQC.Popup {
               id: styleMenu
@@ -1836,8 +1840,8 @@ Item {
                       anchors.verticalCenter: parent.verticalCenter
                       text: styleRow.modelData.label
                       color: rowMouse.containsMouse ? Style.hoverStateColor(Color.popups.text, root.accent) : Color.popups.text
-                      font.family: root.fontFamily
-                      font.pixelSize: Math.round(Style.font.body * styleRow.modelData.scale)
+                      font.family: root.noteFontFamily
+                      font.pixelSize: Math.round(root.bodyFontSize * styleRow.modelData.scale)
                       font.bold: styleRow.modelData.bold
                     }
                     MouseArea {
@@ -1920,11 +1924,12 @@ Item {
           visible: !root.showingNotice && root.hasTitle
           enabled: root.hasNote && !root.readOnly
           placeholderText: root.hasNote ? "Untitled" : "Note Note"
-          foreground: root.foreground
+          // The title sits a step behind the body: slightly faded.
+          foreground: Util.alpha(root.foreground, 0.6)
           accent: root.accent
-          font.family: root.fontFamily
+          font.family: root.noteFontFamily
           font.pixelSize: root.titleSize
-          font.bold: true
+          font.bold: false
           horizontalPadding: Style.spacing.xs
           verticalPadding: 0
           // A title is a title: no box around it. The padding still comes off
@@ -2080,8 +2085,8 @@ Item {
           baseUrl: root.documentBase
                    ? "file://" + encodeURI(root.documentBase).replace(/#/g, "%23").replace(/\?/g, "%3F") + "/"
                    : Qt.resolvedUrl(".")
-          font.family: root.bodyFontFamily
-          font.pixelSize: Style.font.title
+          font.family: root.noteFontFamily
+          font.pixelSize: root.bodyFontSize
           wrapMode: TextEdit.Wrap
           selectByMouse: true
           Keys.priority: Keys.BeforeItem
@@ -2167,8 +2172,8 @@ Item {
             text: root.placeholder
             color: root.foreground
             opacity: 0.45
-            font.family: root.bodyFontFamily
-            font.pixelSize: Style.font.title
+            font.family: root.noteFontFamily
+            font.pixelSize: root.bodyFontSize
             wrapMode: Text.Wrap
           }
 
@@ -2197,7 +2202,11 @@ Item {
               id: checkItem
               required property var modelData
               readonly property real glyphWidth: markerMetrics.advanceWidth(modelData.checked ? "☒" : "☐")
-              readonly property int side: Math.round(markerMetrics.height)
+              // A little under an em: taller than the capitals, short of the
+              // line's full height, which is the proportion a task box keeps
+              // beside its text in GitHub or Notion. The cover below stays
+              // the whole cell, so Qt's glyph never shows around it.
+              readonly property int side: Math.round(area.font.pixelSize * 0.9)
               x: modelData.x - markerMetrics.advanceWidth(" ") - glyphWidth - 1
               y: modelData.y
               width: glyphWidth + 2

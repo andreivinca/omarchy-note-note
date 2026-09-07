@@ -54,6 +54,8 @@ Item {
   // The sidebar width the user dragged the splitter to, in pixels, kept
   // across runs. 0 means they never did, and the default width stands.
   property real listWidth: 0
+  // The sidebar folded away behind the view bar's toggle, kept across runs.
+  property bool listCollapsed: false
   property bool deleteConfirmOpen: false
   // Which page stands in for the workspace, by name — "" while the notes
   // themselves are on screen. A name rather than a flag each, so two pages
@@ -103,7 +105,44 @@ Item {
   property color accent: Color.accent
   property color selectedBackground: Color.menu.selectedBackground
   property color selectedText: Color.menu.selectedText
-  readonly property string interfaceFont: "sans-serif"
+  // Two families: the note's own type, and the chrome around it. Both are
+  // bundled in all four faces so bold and italic work offline.
+  readonly property string noteFont: iaWriterMonoS.name
+  readonly property string interfaceFont: nimbusSans.name
+  // The type scale, hung off the shell's base size so it follows the
+  // theme. Three steps: the note's text stands a step above the chrome
+  // around it (sidebar, tabs), and the view bar's captions a step below,
+  // so the eye lands on the note first.
+  readonly property int noteFontSize: Math.round(Style.font.baseSize * 1.25)
+  readonly property int chromeFontSize: Style.font.subtitle
+  readonly property int captionFontSize: Style.font.bodySmall
+
+  FontLoader {
+    id: iaWriterMonoS
+    source: "assets/fonts/ia-writer-mono-s/iAWriterMonoS-Regular.ttf"
+  }
+  FontLoader {
+    source: "assets/fonts/ia-writer-mono-s/iAWriterMonoS-Bold.ttf"
+  }
+  FontLoader {
+    source: "assets/fonts/ia-writer-mono-s/iAWriterMonoS-Italic.ttf"
+  }
+  FontLoader {
+    source: "assets/fonts/ia-writer-mono-s/iAWriterMonoS-BoldItalic.ttf"
+  }
+  FontLoader {
+    id: nimbusSans
+    source: "assets/fonts/nimbus-sans/NimbusSans-Regular.otf"
+  }
+  FontLoader {
+    source: "assets/fonts/nimbus-sans/NimbusSans-Bold.otf"
+  }
+  FontLoader {
+    source: "assets/fonts/nimbus-sans/NimbusSans-Italic.otf"
+  }
+  FontLoader {
+    source: "assets/fonts/nimbus-sans/NimbusSans-BoldItalic.otf"
+  }
 
   // ── shell contract ──────────────────────────────────────────────────
   function open(payloadJson) {
@@ -1125,9 +1164,20 @@ Item {
     setFilter("")
     titleBar.focusSearch()
   }
+  // The view bar's toggle: fold the sidebar away, or bring it back.
+  function toggleList() {
+    root.listCollapsed = !root.listCollapsed
+    root.saveState()
+  }
   function setFilter(text) {
     var searchEnded = root.filterText.length > 0 && text.length === 0
     root.filterText = text
+    // The results stand where the sidebar stands; a search while it is
+    // folded away would answer out of sight, so the search opens it.
+    if (text.length > 0 && root.listCollapsed) {
+      root.listCollapsed = false
+      root.saveState()
+    }
     // Content answers belong to the text they were asked for: a keystroke
     // makes them stale, so they go, and any reply still in flight with them
     // (searchSeq). The pause that follows the typing asks again.
@@ -1627,6 +1677,9 @@ Item {
     if (root.listWidth > 0) {
       st.listWidth = Math.round(root.listWidth)
     }
+    if (root.listCollapsed) {
+      st.listCollapsed = true
+    }
     files.write(root.statePath, JSON.stringify(st, null, 2) + "\n")
   }
   function loadState(raw) {
@@ -1642,6 +1695,9 @@ Item {
       // clamps it against whatever window it wakes up in.
       if (typeof s.listWidth === "number" && isFinite(s.listWidth) && s.listWidth > 0) {
         root.listWidth = s.listWidth
+      }
+      if (s.listCollapsed === true) {
+        root.listCollapsed = true
       }
       // Trusted entry by entry, as a map of strings and nothing else — the
       // way the two fields above are trusted only as their type.
@@ -1712,6 +1768,7 @@ Item {
         foreground: root.foreground
         accent: root.accent
         fontFamily: root.interfaceFont
+        tabFontSize: root.chromeFontSize
         shortcutHandler: root.handleShortcut
         onFilterEdited: function(text) { root.setFilter(text) }
         onClearRequested: root.clearSearch()
@@ -1729,11 +1786,12 @@ Item {
         id: body
         visible: !root.pageOpen
         width: parent.width
-        height: parent.height - titleBar.height - viewBar.height
+        height: parent.height - titleBar.height
         spacing: 0
 
         NoteList {
           id: list
+          visible: !root.listCollapsed
           // The user's width when they have dragged the handle, the default
           // otherwise — clamped either way, so neither the list nor the note
           // can be squeezed out of use by a drag or a narrow window.
@@ -1753,6 +1811,7 @@ Item {
           foreground: root.foreground
           accent: root.accent
           fontFamily: root.interfaceFont
+          noteFontSize: root.chromeFontSize
           titleFor: root.displayTitle
           onActivated: function(path) { root.choosePath(path); editor.focusEditor() }
           onNewRequested: function(target) {
@@ -1814,6 +1873,7 @@ Item {
         // pane laid out after it.
         Item {
           id: splitter
+          visible: !root.listCollapsed
           width: Style.spacing.hairline
           height: parent.height
           z: 1
@@ -1854,29 +1914,84 @@ Item {
           }
         }
 
-        NoteEditor {
-          id: editor
-          width: parent.width - list.width - splitter.width
+        // The note and, along its bottom, the view bar. The bar belongs to
+        // the note pane rather than the window, so the sidebar and its
+        // splitter run the full height beside both; with the sidebar
+        // folded away the pane is the whole width.
+        Column {
+          id: notePane
+          width: parent.width - (list.visible ? list.width + splitter.width : 0)
           height: parent.height
-          markdown: markdownService
-          clipboard: clipboardService
-          canImages: { var p = root.providerOf(root.currentPath); return p ? p.canImages === true : false }
-          hasNote: root.currentPath !== ""
-          plain: { var p = root.providerOf(root.currentPath); return p ? !p.markdown : false }
-          hasTitle: { var p = root.providerOf(root.currentPath); return p ? p.hasTitle : true }
-          enabledTools: { var p = root.providerOf(root.currentPath); return (p && p.tools !== undefined) ? p.tools : null }
-          placeholder: root.loadingPath && root.loadingPath === root.currentPath ? "Loading…"
-            : (root.rows.length === 0 && !root.filterText ? "No notes yet — press ctrl+n to create one." : "")
-          foreground: root.foreground
-          accent: root.accent
-          background: root.background
-          fontFamily: root.interfaceFont
-          bodyFontFamily: root.interfaceFont
-          shortcutHandler: root.handleShortcut
-          onEdited: root.onEdited()
-          onStatusRequestedTextChanged: if (statusRequestedText) {
-            root.showStatus(statusRequestedText)
-            statusRequestedText = ""
+          spacing: 0
+
+          NoteEditor {
+            id: editor
+            width: parent.width
+            height: parent.height - viewBar.height
+            markdown: markdownService
+            clipboard: clipboardService
+            canImages: { var p = root.providerOf(root.currentPath); return p ? p.canImages === true : false }
+            hasNote: root.currentPath !== ""
+            plain: { var p = root.providerOf(root.currentPath); return p ? !p.markdown : false }
+            hasTitle: { var p = root.providerOf(root.currentPath); return p ? p.hasTitle : true }
+            enabledTools: { var p = root.providerOf(root.currentPath); return (p && p.tools !== undefined) ? p.tools : null }
+            placeholder: root.loadingPath && root.loadingPath === root.currentPath ? "Loading…"
+              : (root.rows.length === 0 && !root.filterText ? "No notes yet — press ctrl+n to create one." : "")
+            foreground: root.foreground
+            accent: root.accent
+            background: root.background
+            fontFamily: root.interfaceFont
+            noteFontFamily: root.noteFont
+            bodyFontSize: root.noteFontSize
+            shortcutHandler: root.handleShortcut
+            onEdited: root.onEdited()
+            onStatusRequestedTextChanged: if (statusRequestedText) {
+              root.showStatus(statusRequestedText)
+              statusRequestedText = ""
+            }
+          }
+
+          // ---- view bar
+          ViewBar {
+            id: viewBar
+            width: parent.width
+            // The outer corner is the card's; the inner one, against the
+            // sidebar, is square — unless the sidebar is folded away and the
+            // bar runs the whole width.
+            leftRadius: root.listCollapsed ? root.chromeRadius : 0
+            rightRadius: root.chromeRadius
+            listCollapsed: root.listCollapsed
+            onListToggled: root.toggleList()
+            sourceName: root.sourceName
+            sourceLogo: root.sourceLogo
+            sourceInk: root.sourceInk
+            sourceBase: root.sourceBase
+            crumb: root.currentCrumb
+            // The storage word: what the open note is, on the host's authority —
+            // a local note is its file, a remote one is "synced online", and the
+            // two transient states name themselves.
+            storage: {
+              if (!root.currentPath) {
+                return ""
+              }
+              if (root.loadingPath === root.currentPath) {
+                return "loading…"
+              }
+              if (editor.readOnly) {
+                return "read-only here"
+              }
+              var p = root.providerOf(root.currentPath)
+              return p && p.id === "local" ? root.currentPath.substring(root.currentPath.lastIndexOf("/") + 1) : "synced online"
+            }
+            unsaved: root.dirty || (root.saveRevision >= 0 && root.saveInFlight(root.currentPath))
+            statusText: root.statusText
+            wordCount: editor.wordCount
+            countVisible: root.currentPath !== "" && !editor.showingNotice
+            background: root.background
+            foreground: root.foreground
+            accent: root.accent
+            fontFamily: root.interfaceFont
+            fontSize: root.captionFontSize
           }
         }
       }
@@ -1930,43 +2045,6 @@ Item {
         accent: root.accent
         fontFamily: root.interfaceFont
         onCloseRequested: root.closePage()
-      }
-
-      // ---- view bar
-      ViewBar {
-        id: viewBar
-        visible: !root.pageOpen
-        width: parent.width
-        cornerRadius: root.chromeRadius
-        sourceName: root.sourceName
-        sourceLogo: root.sourceLogo
-        sourceInk: root.sourceInk
-        sourceBase: root.sourceBase
-        crumb: root.currentCrumb
-        // The storage word: what the open note is, on the host's authority —
-        // a local note is its file, a remote one is "synced online", and the
-        // two transient states name themselves.
-        storage: {
-          if (!root.currentPath) {
-            return ""
-          }
-          if (root.loadingPath === root.currentPath) {
-            return "loading…"
-          }
-          if (editor.readOnly) {
-            return "read-only here"
-          }
-          var p = root.providerOf(root.currentPath)
-          return p && p.id === "local" ? root.currentPath.substring(root.currentPath.lastIndexOf("/") + 1) : "synced online"
-        }
-        unsaved: root.dirty || (root.saveRevision >= 0 && root.saveInFlight(root.currentPath))
-        statusText: root.statusText
-        wordCount: editor.wordCount
-        countVisible: root.currentPath !== "" && !editor.showingNotice
-        background: root.background
-        foreground: root.foreground
-        accent: root.accent
-        fontFamily: root.interfaceFont
       }
     }
 

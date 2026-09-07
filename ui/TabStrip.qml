@@ -23,6 +23,7 @@ Item {
   property color background: Color.menu.background
   property color foreground: Color.menu.text
   property string fontFamily: Style.font.menuFamily
+  property int fontSize: Style.font.bodySmall
   signal activated(string key)
 
   clip: true
@@ -70,7 +71,8 @@ Item {
     Row {
       id: row
       height: strip.height
-      spacing: Style.spacing.xs
+      // The gap between two tabs; each tab pads its own label inside.
+      spacing: Style.spacing.md
 
       Repeater {
         id: tabs
@@ -114,8 +116,10 @@ Item {
               visible: tab.branded && status === Image.Ready
               source: tab.modelData.logo || ""
               anchors.verticalCenter: parent.verticalCenter
-              width: Style.font.iconSmall
-              height: Style.font.iconSmall
+              // The logo is as tall as the label's type, so the two read as
+              // one size whatever the tab font is set to.
+              width: root.fontSize
+              height: root.fontSize
               sourceSize.width: width * 2
               sourceSize.height: height * 2
               fillMode: Image.PreserveAspectFit
@@ -137,7 +141,7 @@ Item {
                 ? Qt.tint(root.foreground, Util.alpha(tab.base, TabColors.inkAlpha()))
                 : Util.alpha(root.foreground, 0.68)
               font.family: root.fontFamily
-              font.pixelSize: Style.font.bodySmall
+              font.pixelSize: root.fontSize
               elide: Text.ElideRight
             }
 

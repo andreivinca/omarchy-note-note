@@ -23,6 +23,7 @@ Item {
   property color selectedBackground: Color.menu.selectedBackground
   property color selectedText: Color.menu.selectedText
   property string fontFamily: Style.font.menuFamily
+  property int noteFontSize: Style.font.body
   property var titleFor: function(t, p) { return t || p || "Untitled" }
 
   signal activated(string path)
@@ -30,6 +31,7 @@ Item {
   // Row geometry, handed down by NoteList: these results stand where its rows
   // stood, so they must measure exactly as its rows do.
   property real rowHeight: Style.spacing.controlHeight
+  property real rowGap: Style.spacing.xxs
   property real rowRadius: Math.min(Style.cornerRadius, Style.space(6))
   property real textInset: Style.spacing.md
   readonly property int count: root.model ? root.model.length : 0
@@ -77,7 +79,7 @@ Item {
         Rectangle {
           x: Style.spacing.xxs
           width: parent.width - Style.spacing.xxs * 2
-          height: root.rowHeight - Style.spacing.xxs
+          height: root.rowHeight - root.rowGap
           anchors.verticalCenter: parent.verticalCenter
           radius: root.rowRadius
           color: hit.current ? root.selectedBackground : (hitHover.hovered ? Style.hoverFill : "transparent")
@@ -96,7 +98,7 @@ Item {
             text: root.titleFor(hit.modelData.title, hit.modelData.preview)
             color: hit.current ? root.selectedText : root.foreground
             font.family: root.fontFamily
-            font.pixelSize: Style.font.body
+            font.pixelSize: root.noteFontSize
             elide: Text.ElideRight
           }
 

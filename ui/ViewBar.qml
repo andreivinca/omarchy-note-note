@@ -3,8 +3,8 @@ import qs.Commons
 import qs.Ui
 
 // The view bar — the status strip a desktop app keeps along its bottom edge.
-// Left to right it answers: whose notes these are (the open tab's source, a
-// full-height segment in the tab's own wash, flush with the bar's corner the
+// Left to right: the sidebar toggle, then it answers whose notes these are
+// (the open tab's source, a full-height segment in the tab's own wash, the
 // way an IDE's remote badge is), where the open note lives (the provider's
 // crumb, then the storage word), whether everything is put away (the unsaved
 // dot), what just happened (the transient status), and how much is written
@@ -15,8 +15,9 @@ import qs.Ui
 // metrics at the same y or centers on it. Nothing here is nested in a padded
 // box of its own — that is what put a label half a pixel off the line.
 //
-// Presentation only: every value arrives bound from the host, and nothing
-// here signals back — a status strip is read, not driven.
+// Presentation, plus one control: the toggle folds the sidebar away and
+// brings it back (listToggled). Every other value arrives bound from the
+// host, and nothing else here signals back.
 Item {
   id: root
 
@@ -48,22 +49,35 @@ Item {
   property string statusText: ""
   property int wordCount: 0
   property bool countVisible: false
+  // The sidebar is folded away: the toggle then points the way back.
+  property bool listCollapsed: false
+  signal listToggled()
   property color background: Color.menu.background
   property color foreground: Color.menu.text
   property color accent: Color.accent
   property string fontFamily: Style.font.menuFamily
+  // One size for every caption on the bar; the source logo follows it.
+  property int fontSize: Style.font.caption
   // The bar sits flush along the bottom of whatever hosts it. In the overlay
   // that host is a rounded card whose border is painted under the content,
-  // so the bar's bottom corners must curve with it or they square it off.
-  property real cornerRadius: 0
+  // so a bottom corner the bar reaches must curve with it or it squares the
+  // card off. Each corner is the host's to set: the bar may stop short of
+  // one, against the sidebar, and reach the other.
+  property real leftRadius: 0
+  property real rightRadius: 0
+  // The badges on the bar — the toggle's hover ring and the source pill —
+  // share one shape: a pixel short of the bar's height at either end, with
+  // a soft corner.
+  readonly property real badgeInset: Style.space(1)
+  readonly property real badgeRadius: Style.space(3)
 
   height: Style.space(26)
 
   Rectangle {
     anchors.fill: parent
     color: Qt.tint(root.background, Util.alpha(root.foreground, 0.015))
-    bottomLeftRadius: root.cornerRadius
-    bottomRightRadius: root.cornerRadius
+    bottomLeftRadius: root.leftRadius
+    bottomRightRadius: root.rightRadius
   }
 
   Rectangle {
@@ -74,33 +88,65 @@ Item {
     color: Util.alpha(root.foreground, 0.1)
   }
 
-  // The source segment: the bar's own height under the hairline, flush with
-  // the left edge — a block of the bar, not a pill floating on it. Sized off
-  // its label, which is laid out first (below) and is the whole bar's line.
+  // The sidebar toggle, first in the bar: a chevron pointing the way the
+  // sidebar will go — left to fold it away, right to bring it back.
+  Button {
+    id: toggle
+    anchors.left: parent.left
+    anchors.leftMargin: Style.spacing.xs
+    anchors.top: topRule.bottom
+    anchors.topMargin: root.badgeInset
+    anchors.bottom: parent.bottom
+    anchors.bottomMargin: root.badgeInset
+    radius: root.badgeRadius
+    property bool hovering: false
+    // Quiet, like the editor's toolbar: the outline appears under the
+    // cursor — and only the outline. The kit's button would also fill
+    // itself; here the ring alone says it is a button, in the source
+    // pill's own shape beside it.
+    bordered: hovering
+    color: "transparent"
+    foreground: root.foreground
+    accent: root.accent
+    iconText: root.listCollapsed ? "󰅂" : "󰅁"
+    iconSize: Style.font.icon
+    tooltipText: root.listCollapsed ? "Show sidebar" : "Hide sidebar"
+    horizontalPadding: Style.spacing.sm
+    onHovered: function(isHovered) { hovering = isHovered }
+    onClicked: root.listToggled()
+  }
+
+  // The source segment, right after the toggle: a pill a pixel short of the
+  // bar's height at either end, so it reads as a badge on the bar rather
+  // than a block of it. Sized off its label, which is laid out first
+  // (below) and is the whole bar's line.
   Rectangle {
     id: sourceBlock
     visible: root.sourceName.length > 0
-    anchors.left: parent.left
+    anchors.left: toggle.right
+    anchors.leftMargin: Style.spacing.xs
     anchors.top: topRule.bottom
+    anchors.topMargin: root.badgeInset
     anchors.bottom: parent.bottom
-    width: sourceLabel.x + sourceLabel.width + Style.spacing.lg
+    anchors.bottomMargin: root.badgeInset
+    radius: root.badgeRadius
+    width: sourceLabel.x - x + sourceLabel.width + Style.spacing.lg
     // The tab's colour said quietly; without a tab yet, the neutral fill
     // every theme has.
     color: root.sourceBase.a > 0 ? Util.alpha(root.sourceBase, 0.16)
                                  : Util.alpha(root.foreground, 0.05)
-    bottomLeftRadius: root.cornerRadius
   }
 
   Image {
     id: sourceLogoMark
     visible: root.sourceName.length > 0 && status === Image.Ready
     source: root.sourceLogo
-    x: Style.spacing.lg
+    x: sourceBlock.x + Style.spacing.lg
     anchors.verticalCenter: sourceLabel.verticalCenter
-    width: Style.font.caption
-    height: Style.font.caption
-    sourceSize.width: Style.font.caption * 2
-    sourceSize.height: Style.font.caption * 2
+    width: root.fontSize
+    height: root.fontSize
+    sourceSize.width: root.fontSize * 2
+    sourceSize.height: root.fontSize * 2
     fillMode: Image.PreserveAspectFit
     smooth: true
   }
@@ -112,18 +158,18 @@ Item {
     id: sourceLabel
     visible: root.sourceName.length > 0
     textFormat: Text.PlainText
-    x: Style.spacing.lg + (sourceLogoMark.visible ? sourceLogoMark.width + Style.spacing.xs : 0)
+    x: sourceBlock.x + Style.spacing.lg + (sourceLogoMark.visible ? sourceLogoMark.width + Style.spacing.xs : 0)
     y: Math.round((parent.height - height) / 2)
     text: root.sourceName
     color: root.sourceInk
     Behavior on color { ColorAnimation { duration: 150 } }
     font.family: root.fontFamily
-    font.pixelSize: Style.font.caption
+    font.pixelSize: root.fontSize
   }
 
   Row {
     id: contextRow
-    anchors.left: sourceBlock.visible ? sourceBlock.right : parent.left
+    anchors.left: sourceBlock.visible ? sourceBlock.right : toggle.right
     anchors.leftMargin: Style.spacing.lg
     y: sourceLabel.y
     spacing: Style.spacing.md
@@ -137,7 +183,7 @@ Item {
       text: root.shownCrumb
       color: Util.alpha(root.foreground, 0.7)
       font.family: root.fontFamily
-      font.pixelSize: Style.font.caption
+      font.pixelSize: root.fontSize
       elide: Text.ElideRight
     }
 
@@ -147,7 +193,7 @@ Item {
       text: "·"
       color: Util.alpha(root.foreground, 0.35)
       font.family: root.fontFamily
-      font.pixelSize: Style.font.caption
+      font.pixelSize: root.fontSize
     }
 
     Text {
@@ -157,7 +203,7 @@ Item {
       text: root.storage
       color: Util.alpha(root.foreground, 0.5)
       font.family: root.fontFamily
-      font.pixelSize: Style.font.caption
+      font.pixelSize: root.fontSize
       elide: Text.ElideRight
     }
 
@@ -173,7 +219,7 @@ Item {
       text: "●"
       color: Qt.tint(root.foreground, Util.alpha(root.accent, 0.6))
       font.family: root.fontFamily
-      font.pixelSize: Style.font.caption
+      font.pixelSize: root.fontSize
     }
   }
 
@@ -191,7 +237,7 @@ Item {
     text: root.statusText
     color: Qt.tint(root.foreground, Util.alpha(root.accent, 0.6))
     font.family: root.fontFamily
-    font.pixelSize: Style.font.caption
+    font.pixelSize: root.fontSize
     elide: Text.ElideRight
     horizontalAlignment: Text.AlignRight
   }
@@ -206,6 +252,6 @@ Item {
     text: root.wordCount + (root.wordCount === 1 ? " word" : " words")
     color: Util.alpha(root.foreground, 0.55)
     font.family: root.fontFamily
-    font.pixelSize: Style.font.caption
+    font.pixelSize: root.fontSize
   }
 }
