@@ -2055,13 +2055,18 @@ Item {
     anchors.bottomMargin: Style.spacing.panelPadding
     anchors.leftMargin: Style.spacing.panelPadding
     anchors.rightMargin: Style.spacing.panelPadding
-    spacing: Style.spacing.xs
-
+    // The title stands as far from the body's first line as from the
+    // toolbar's edge above it. Above, that is the panel padding plus the
+    // leading the title's face carries over its caps; below, this gap
+    // plus the body's slab inset (area.topPadding) and the two faces'
+    // leading between them — measured on the bundled faces at the default
+    // scale, the same 29px each way.
+    spacing: Style.spacing.xxxl
 
     // ---- header: the title belongs on the note's own sheet
     Item {
       width: parent.width
-      height: titleColumn.implicitHeight + Style.spacing.md
+      height: titleColumn.implicitHeight
 
       Column {
         id: titleColumn
