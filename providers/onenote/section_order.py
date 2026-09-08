@@ -13,6 +13,11 @@ For verified personal notebooks, IDs identify OneDrive package items. Groups are
 folders within that package, each with its own TOC. The UI is flat, so walk
 groups in their remote position and keep their sections together. No manual
 positions, note contents, signed URLs or raw TOC files are stored locally.
+
+A folder may hold more than one TOC: an old desktop client leaves a localized
+"Open Notebook.onetoc2" beside the ".onetoc2" current clients write, and only
+the newest is maintained. Order numbers may repeat or skip; equal numbers keep
+the order the TOC lists them in, since OneNote's own tie-break is undocumented.
 """
 import json
 import re
@@ -39,6 +44,8 @@ RATE_WINDOWS = [(60, 30), (3600, 180)]
 # HIGH-RISK WORKAROUND: observed personal-ID shape, not a documented mapping.
 # Keep this restriction; do not infer support for other notebook ID formats.
 ITEM_ID = re.compile(r"0-([0-9A-Fa-f]{16}![0-9]+)\Z")
+# Graph's UTC stamps: fixed width up to the second, then up to seven digits.
+TIMESTAMP = re.compile(r"(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2})(?:\.(\d{1,7}))?Z\Z")
 DOWNLOAD_HOSTS = (".files.1drv.com", ".storage.live.com", ".sharepoint.com",
                   ".microsoftpersonalcontent.com")
 
@@ -153,6 +160,14 @@ def item_path(item_id):
     return "/me/drive/items/" + urllib.parse.quote(item_id, safe="")
 
 
+def modified_at(item):
+    """A sortable key for an item's Graph timestamp, whatever its fraction width."""
+    match = TIMESTAMP.fullmatch(str(item.get("lastModifiedDateTime", "")))
+    if not match:
+        raise OrderUnavailable("invalid section metadata timestamp")
+    return match[1], (match[2] or "").ljust(7, "0")
+
+
 class Ordering:
     def __init__(self, remote, cached):
         self.remote = remote
@@ -163,7 +178,7 @@ class Ordering:
         self.section_names = {}
 
     def children(self, item_id):
-        url = item_path(item_id) + "/children?$select=id,name,size,file,folder,eTag&$top=200"
+        url = item_path(item_id) + "/children?$select=id,name,size,file,folder,eTag,lastModifiedDateTime&$top=200"
         found, visited = [], set()
         while url:
             if url in visited:
@@ -212,23 +227,43 @@ class Ordering:
             raise OrderUnavailable("too many cached section-order entries")
         return entries
 
+    def table_of_contents(self, children):
+        """The TOC file OneNote currently maintains for this folder.
+
+        An old desktop client leaves a localized "Open Notebook.onetoc2"
+        beside the ".onetoc2" that current clients write, and stops updating
+        it. Live-verified: reordering in the web app rewrote only the newer
+        file. The most recently modified one is therefore the notebook's.
+        """
+        tables = [item for item in children
+                  if "file" in item and item.get("name", "").lower().endswith(".onetoc2")]
+        if not tables:
+            raise OrderUnavailable("notebook folder has no .onetoc2 metadata")
+        if len(tables) == 1:
+            return tables[0]
+        stamps = [modified_at(item) for item in tables]
+        newest = max(stamps)
+        if stamps.count(newest) > 1:
+            raise OrderUnavailable("notebook folder has no unique .onetoc2 metadata")
+        return tables[stamps.index(newest)]
+
     def folder(self, item_id, depth=0):
         if item_id in self.visited or len(self.visited) >= MAX_FOLDERS or depth >= MAX_DEPTH:
             raise OrderUnavailable("cyclic or excessive notebook hierarchy")
         self.visited.add(item_id)
         children = self.children(item_id)
-        tables = [item for item in children if "file" in item and item.get("name", "").lower().endswith(".onetoc2")]
-        if len(tables) != 1:
-            raise OrderUnavailable("notebook folder has no unique .onetoc2 metadata")
-        positions = {entry["name"].casefold(): entry["order"] for entry in self.entries(tables[0])}
+        # Order numbers may repeat and skip; the web client writes both. The
+        # rank after a stable sort is the position, so equal numbers keep the
+        # order the TOC lists them in.
+        ranked = sorted(self.entries(self.table_of_contents(children)), key=lambda entry: entry["order"])
+        positions = {entry["name"].casefold(): rank for rank, entry in enumerate(ranked)}
         relevant = [item for item in children
                     if item.get("name", "").casefold() != "onenote_recyclebin"
                     and ("folder" in item or item.get("name", "").lower().endswith(".one"))]
-        # Incomplete or ambiguous live metadata is not a trustworthy order.
+        # A live section the TOC never mentions has no position at all.
         # Deleted TOC records still never introduce sections into the listing.
-        live_positions = [positions.get(item["name"].casefold()) for item in relevant]
-        if None in live_positions or len(set(live_positions)) != len(live_positions):
-            raise OrderUnavailable("incomplete or ambiguous live section order")
+        if any(item["name"].casefold() not in positions for item in relevant):
+            raise OrderUnavailable("incomplete live section order")
         relevant.sort(key=lambda item: positions[item["name"].casefold()])
         ordered = []
         for item in relevant:

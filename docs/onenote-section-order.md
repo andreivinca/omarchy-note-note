@@ -93,8 +93,10 @@ app-registration permission edit (tenant consent policies still apply).
   authoritative for page order. The previous fallback cache policy is invalidated.
   Optional stdout is discarded so even a print-then-exit failure cannot corrupt
   the provider's JSON reply or expose its exception payload.
-- `section_order.py` requires complete, unambiguous positions for live children
-  and matching IDs/names for every Graph section. A failed notebook, malformed
+- `section_order.py` requires a position for every live child and matching
+  IDs/names for every Graph section. Order numbers may repeat or skip, as the
+  web client writes both; equal numbers keep the order the TOC lists them in,
+  since OneNote's own tie-break is undocumented. A failed notebook, malformed
   response, parser error or unexpected exception produces alphabetical order
   and a warning. Failed metadata is discarded, not reused as a stale fallback.
 - OneDrive metadata has its own rate budget and a 45-second pass budget. It
@@ -107,7 +109,8 @@ app-registration permission edit (tenant consent policies still apply).
   become unavailable; other Microsoft providers retain their existing behavior.
 - Synthetic tests cover package encoding, inherited revisions, duplicate
   historical entries, truncation, cycles, groups, deleted sections, cache
-  invalidation/pruning, checkpoint page-order preservation and URL safety.
+  invalidation/pruning, checkpoint page-order preservation, repeated and
+  skipped order numbers, several TOC files and URL safety.
   Failure-injection tests cover changed/partial ID mappings, missing positions,
   malformed responses/caches, broken optional imports, unexpected exceptions,
   throttles and loss of consent. QML runtime tests verify that optional consent
@@ -115,9 +118,11 @@ app-registration permission edit (tenant consent policies still apply).
 
 Family Notebook matches the screenshot; Family Room also exposes a unique
 readable TOC. One older notebook contains both `.onetoc2` and a localized
-`Deschidere blocnotes.onetoc2`. Their authoritative relationship is not
-established, so the provider reports ambiguity instead of guessing by name,
-size or modification time. Single-section notebooks need no ordering lookup.
+`Deschidere blocnotes.onetoc2`. Reordering it in the web app (2026-09-08)
+rewrote only `.onetoc2`; the localized file is a desktop-client leftover
+untouched since 2025. When a folder holds several TOC files the provider
+therefore reads the most recently modified one, and reports ambiguity only
+when no single newest file exists. Single-section notebooks need no ordering lookup.
 Work/school and shared notebooks whose OneDrive item cannot be identified by
 the personal-ID mapping use alphabetical section order with an explanatory warning.
 

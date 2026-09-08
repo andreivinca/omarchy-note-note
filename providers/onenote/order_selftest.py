@@ -230,13 +230,27 @@ class OrderingTests(unittest.TestCase):
         with self.assertRaisesRegex(order.OrderUnavailable, "cyclic"):
             order.Ordering(remote, {}).children(BOOK[2:])
 
-    def test_ambiguous_toc_is_not_guessed(self):
-        remote = Remote()
-        remote.children.append({"id": "extra", "name": ".onetoc2", "file": {}})
-        result, _, warnings = order.arrange(sections(), remote=remote)
-        self.assertEqual(result, alphabetical())
-        self.assertTrue(warnings)
-        self.assertEqual(remote.downloads, 0)
+    def test_newest_of_several_tocs_is_used(self):
+        for newest in (TOC, "extra"):
+            remote = Remote()
+            remote.children[-1]["lastModifiedDateTime"] = "2026-09-08T08:03:37Z"
+            stamp = "2025-06-15T16:35:10Z" if newest == TOC else "2026-09-08T08:03:37.5Z"
+            remote.children.append({"id": "extra", "name": ".onetoc2", "file": {}, "lastModifiedDateTime": stamp})
+            result, saved, warnings = order.arrange(sections(), remote=remote)
+            self.assertEqual([s["name"] for s in result], ["Welcome", "Food", "Health", "New"])
+            self.assertFalse(warnings)
+            self.assertEqual(list(saved["files"]), [newest])
+
+    def test_tocs_without_a_newest_are_not_guessed(self):
+        for stamps in [(None, None), ("2026-09-08T08:03:37Z", "2026-09-08T08:03:37Z"),
+                       ("2026-09-08T08:03:37Z", "yesterday")]:
+            remote = Remote()
+            remote.children[-1]["lastModifiedDateTime"] = stamps[0]
+            remote.children.append({"id": "extra", "name": ".onetoc2", "file": {}, "lastModifiedDateTime": stamps[1]})
+            result, _, warnings = order.arrange(sections(), remote=remote)
+            self.assertEqual(result, alphabetical())
+            self.assertTrue(warnings)
+            self.assertEqual(remote.downloads, 0)
 
     def test_nested_group_position_and_recycle_bin(self):
         remote = Remote()
@@ -294,15 +308,22 @@ class OrderingTests(unittest.TestCase):
             self.assertFalse(saved["files"])
             self.assertTrue(warnings)
 
-    def test_missing_or_ambiguous_live_positions_are_rejected(self):
-        for orders in [(3, 1, 5), (3, 1, 5, 5)]:
-            remote = Remote()
-            remote.download = lambda item: fixture(
-                names=("Food.one", "Welcome.one", "Health.one", "New.one"), orders=orders)
-            result, saved, warnings = order.arrange(sections(), remote=remote)
-            self.assertEqual(result, alphabetical())
-            self.assertTrue(warnings)
-            self.assertFalse(saved["files"])
+    def test_missing_live_position_is_rejected(self):
+        remote = Remote()
+        remote.download = lambda item: fixture(
+            names=("Food.one", "Welcome.one", "Health.one", "New.one"), orders=(3, 1, 5))
+        result, saved, warnings = order.arrange(sections(), remote=remote)
+        self.assertEqual(result, alphabetical())
+        self.assertTrue(warnings)
+        self.assertFalse(saved["files"])
+
+    def test_equal_and_skipped_numbers_keep_toc_order(self):
+        remote = Remote()
+        remote.download = lambda item: fixture(
+            names=("Food.one", "Welcome.one", "Health.one", "New.one"), orders=(4, 1, 4, 9))
+        result, _, warnings = order.arrange(sections(), remote=remote)
+        self.assertEqual([s["name"] for s in result], ["Welcome", "Food", "Health", "New"])
+        self.assertFalse(warnings)
 
     def test_invalid_children_and_cache_do_not_abort(self):
         for invalid in [None, {}, {"name": "x.one"}, {"id": "x", "name": []}]:
