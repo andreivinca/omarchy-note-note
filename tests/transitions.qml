@@ -116,6 +116,8 @@ ShellRoot {
     property var conversions: []
     function cursorPosition() { return 0 }
     function setCursorPosition(position) {}
+    function viewState() { return { cursor: 0, scroll: 0 } }
+    function restoreViewState(state) {}
     function clearNotice() {}
     function setNote(t, b, shown) { title = t; body = b; if (shown) { shown(true) } }
     function snapshotDocument() { return { title: title, body: body, base: documentBase } }

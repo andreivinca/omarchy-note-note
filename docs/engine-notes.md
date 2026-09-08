@@ -127,6 +127,14 @@ The writer states `font-family:'monospace'` on the code paragraph itself
 (`writer.code`); Qt exports it back in the `<p>`'s style, which the reader
 ignores — it reads the spans.
 
+**`readOnly` moves the caret to the end** (measured on 6.11):
+`QQuickTextEdit::setReadOnly` moves the cursor to the document's end
+whichever way the flag turns, and the editor's scroll follower then brings
+the view to it. The session loads every note read-only and releases it
+once shown, so a note longer than its pane opened scrolled to the bottom.
+The editor applies the flag itself and puts the caret and the scroll back
+around it (`NoteEditor.applyReadOnly`).
+
 **Read the document as a range, not as `text`.** `getFormattedText(0, length)`
 is what the converter is written against: Qt brackets a range with fragment
 markers, and the reader strips them. `TextEdit.text` does answer with the live

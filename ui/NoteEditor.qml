@@ -230,8 +230,14 @@ Item {
     settingText = true
     area.text = document
     settingText = false
-    // The note opens at its top: caret on the first character, and the view
-    // pinned there — ensureVisible follows the caret everywhere after this.
+    showTop()
+  }
+
+  // The note's top: caret on the first character, and the view pinned
+  // there — ensureVisible follows the caret everywhere after this, and
+  // on its own it would stop at the caret's rectangle, the body's inset
+  // below the very top.
+  function showTop() {
     area.cursorPosition = 0
     flick.contentY = 0
   }
@@ -303,7 +309,33 @@ Item {
     var chip = String(root.codeChipColour).replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
     return html.replace(new RegExp("background-color\\s*:\\s*" + chip + "\\s*;?", "gi"), "")
   }
+  // Qt moves the caret to the document's end whenever a TextEdit's
+  // readOnly changes (QQuickTextEdit::setReadOnly, measured on 6.11), and
+  // the view follows the caret. A note is loaded read-only and released
+  // once it is on screen (services/notes/NoteSession.qml, load), so every
+  // note too long for its pane opened scrolled to the bottom. The flag is
+  // applied here, and the caret and the scroll go back where they were.
+  // The decorations follow the flag too: a read-only note has no image
+  // handles.
+  onReadOnlyChanged: {
+    applyReadOnly()
+    scheduleDecorations()
+  }
+  onHasNoteChanged: applyReadOnly()
+  Component.onCompleted: applyReadOnly()
+  function applyReadOnly() {
+    var view = viewState()
+    area.readOnly = !root.hasNote || root.readOnly
+    restoreViewState(view)
+  }
+
   function focusEditor() { area.forceActiveFocus() }
+  // From the title into the note: Enter or Down lands the caret on the
+  // first line of the body, not wherever it last was.
+  function focusBody() {
+    showTop()
+    focusEditor()
+  }
 
   // ── pasting ─────────────────────────────────────────────────────────
   // Ctrl+V is ours only long enough to ask what the clipboard holds: a
@@ -1062,7 +1094,6 @@ Item {
   // display cap the converter puts on a large image that names no width.
   readonly property int maxImageDisplay: Dialect.MAX_IMAGE_DISPLAY
   readonly property int minImageWidth: 48
-  onReadOnlyChanged: scheduleDecorations()
 
   function imageGeometry() {
     var images = nativeBlocks.item.images(), out = []
@@ -1760,6 +1791,17 @@ Item {
     }
   }
   function cursorPosition() { return area.cursorPosition }
+  // Where the reader is: the caret, and how far the note is scrolled. A
+  // reload in place puts both back (services/notes/NoteSession.qml, load)
+  // — the caret alone would scroll the view to itself, and it sits where
+  // the last typing left it, often the bottom, while the reader may be at
+  // the top.
+  function viewState() { return { cursor: area.cursorPosition, scroll: flick.contentY } }
+  function restoreViewState(state) {
+    area.cursorPosition = Math.max(0, Math.min(state.cursor, area.length))
+    // Within the note's extent: a reload can have made it shorter.
+    flick.contentY = Math.max(0, Math.min(state.scroll, flick.contentHeight - flick.height))
+  }
   function setCursorPosition(pos) { area.cursorPosition = Math.max(0, Math.min(pos, area.length)) }
   function focusTitle() { titleField.forceActiveFocus() }
 
@@ -2106,9 +2148,9 @@ Item {
           onTextEdited: root.edited()
           Keys.priority: Keys.BeforeItem
           Keys.onPressed: function(event) { root.shortcut(event) }
-          Keys.onReturnPressed: root.focusEditor()
-          Keys.onEnterPressed: root.focusEditor()
-          Keys.onDownPressed: root.focusEditor()
+          Keys.onReturnPressed: root.focusBody()
+          Keys.onEnterPressed: root.focusBody()
+          Keys.onDownPressed: root.focusBody()
         }
 
         // Only the empty-state hint lives here; where a note comes from is
@@ -2240,7 +2282,8 @@ Item {
           // clip squares them off.
           topPadding: 8
           bottomPadding: 8
-          readOnly: !root.hasNote || root.readOnly
+          // Applied by hand, never bound: see applyReadOnly.
+          readOnly: true
           color: root.foreground
           selectionColor: Style.selectionFill
           selectedTextColor: root.foreground

@@ -251,6 +251,55 @@ Window {
     require(read() === source.replace("code", "[code](https://)"), "the link bar did not type the link: " + JSON.stringify(read()))
   }
 
+  // From the title, Down lands the caret on the body's first line, and a
+  // reload in place puts the caret and the scroll back where they were.
+  function titleDownAndViewState() {
+    var lines = []
+    for (var i = 0; i < 80; i++) {
+      lines.push("line " + i)
+    }
+    load({ source: lines.join("\n\n") + "\n" })
+    editor.setCursorPosition(editor.plainText().length)
+    var state = editor.viewState()
+    require(state.cursor === editor.plainText().length && state.scroll > 0, "the caret at the end did not scroll the view")
+    editor.focusTitle()
+    keys.keyClick(Qt.Key_Down)
+    require(editor.bodyFocused, "Down in the title did not focus the body")
+    require(editor.cursorPosition() === 0, "Down in the title did not land on the first line: " + editor.cursorPosition())
+    require(editor.viewState().scroll === 0, "the first line is not in view")
+    editor.restoreViewState(state)
+    var back = editor.viewState()
+    require(back.cursor === state.cursor && back.scroll === state.scroll,
+            "the view state did not come back: " + JSON.stringify(back) + " vs " + JSON.stringify(state))
+  }
+
+  // The session's own sequence — read-only while a note loads, released
+  // once it is shown — leaves a long note at its top: Qt's readOnly
+  // toggle would put the caret at the end and scroll the view after it.
+  function releasedAtTop() {
+    var lines = []
+    for (var i = 0; i < 80; i++) {
+      lines.push("line " + i)
+    }
+    editor.readOnly = true
+    editor.setNote("", "")
+    var shown = false
+    editor.setNote("Long", lines.join("\n\n") + "\n", function(ok) {
+      editor.readOnly = false
+      shown = ok
+    })
+    keys.tryVerify(function() { return shown }, 3000)
+    keys.wait(100)
+    var view = editor.viewState()
+    require(view.cursor === 0 && view.scroll === 0, "the released note is not at its top: " + JSON.stringify(view))
+    // The caret stays through a toggle; the scroll may settle by the
+    // toolbar's height, which leaves the pane while the note is read-only.
+    editor.setCursorPosition(editor.plainText().length)
+    editor.readOnly = true
+    editor.readOnly = false
+    require(editor.cursorPosition() === editor.plainText().length, "a read-only toggle moved the caret")
+  }
+
   function typeAfterRule() {
     load({ source: "---\n" })
     var original = editor.plainText()
@@ -399,6 +448,18 @@ Window {
       test.checked("the inline tools type their Markdown inside a code block", true, "")
     } catch (error) {
       test.checked("the inline tools type their Markdown inside a code block", false, error.message)
+    }
+    try {
+      releasedAtTop()
+      test.checked("a note released from read-only stays at its top", true, "")
+    } catch (error) {
+      test.checked("a note released from read-only stays at its top", false, error.message)
+    }
+    try {
+      titleDownAndViewState()
+      test.checked("Down from the title lands on the first line; a reload keeps the view", true, "")
+    } catch (error) {
+      test.checked("Down from the title lands on the first line; a reload keeps the view", false, error.message)
     }
     try {
       typeAfterRule()

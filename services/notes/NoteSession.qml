@@ -57,7 +57,9 @@ Item {
     session.loadFailed = false
     session.loadingPath = path
     session.dirty = false
-    var position = reload ? editor.cursorPosition() : 0
+    // A note opens at its top (NoteEditor.showBody); a reload in place
+    // keeps the caret and the scroll where the reader had them.
+    var view = reload ? editor.viewState() : null
     editor.clearNotice()
     editor.readOnly = true
     editor.documentBase = ""
@@ -102,7 +104,9 @@ Item {
           session.noteUnavailable(session.notDisplayable)
           return
         }
-        editor.setCursorPosition(position)
+        if (view) {
+          editor.restoreViewState(view)
+        }
         session.noteReady(result.editable === false)
         if (reload) {
           session.report(provider.name + ": reloaded, changed elsewhere")
