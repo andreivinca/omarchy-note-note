@@ -2013,6 +2013,11 @@ Item {
             bodyFontSize: root.noteFontSize
             shortcutHandler: root.handleShortcut
             onEdited: root.onEdited()
+            onLinkOpenRequested: function(url) {
+              if (!Qt.openUrlExternally(url)) {
+                root.showStatus("Could not open link")
+              }
+            }
             onStatusRequestedTextChanged: if (statusRequestedText) {
               root.showStatus(statusRequestedText)
               statusRequestedText = ""
@@ -2053,6 +2058,7 @@ Item {
             }
             unsaved: root.dirty || (root.saveRevision >= 0 && root.saveInFlight(root.currentPath))
             statusText: root.statusText
+            hoveredLink: editor.hoveredLink
             wordCount: editor.wordCount
             countVisible: root.currentPath !== "" && !editor.showingNotice
             background: root.background

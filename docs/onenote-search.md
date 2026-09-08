@@ -36,9 +36,8 @@ attachment-content search.
   the provider's normal Graph lane.
 
 Initial download time depends on page count, response times and the available
-budget. The investigation's 51-second batch measurement is not a timing
-promise for this implementation: this path accounts for each page request
-and keeps capacity available for normal note use.
+budget. Indexing accounts for each page request and keeps capacity available
+for normal note use.
 
 ## Storage and lifecycle
 
@@ -60,6 +59,3 @@ protection against late responses.
 
 `debugState` reports the window state, queue pauses and content-search
 counts, worker count and budget delay without exposing note text.
-
-The alternative server APIs and their limitations remain recorded in the
-[investigation](future/onenote-web-search-investigation.md).

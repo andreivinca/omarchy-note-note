@@ -120,6 +120,20 @@ Delete checks cover empty headings and blank fillers before ordered, bullet
 and task lists, a single-item list, numbered starts and nested code. They
 compare the full document HTML through repeated keyboard and API Undo/Redo,
 including ordinary paragraph joins that trigger list-margin normalization.
+Pointer events check link previews in the view bar, directly opening editable
+and read-only links, selecting link text without opening it, and clearing the
+preview when the pointer leaves or the note changes. These checks capture
+open requests without launching a browser.
+URL cases type new addresses after a linked list item, check their destinations
+as they grow and through undo/redo, and cover punctuation, code spans, named
+links and plain-text notes. These run with the actual iA Writer Mono S note font
+to distinguish prose from inline code. Direct-click checks cover wrapped URLs
+and table cells. Deletion, undo, selection and Markdown checks ensure the
+display styling stays outside the saved document.
+The `http://google.com` cursor regression compares the last character's advance
+with ordinary text and checks mouse placement after `m`, Delete, Backspace,
+extending the URL, and continuing with a space. Existing explicit Markdown links
+stay unchanged.
 Process cases cover startup failure, stdin delivery, malformed output, nonzero
 exit, cancellation, deadlines and exactly one callback.
 

@@ -63,6 +63,22 @@ Item {
 
   readonly property alias title: titleField.text
   readonly property bool bodyFocused: area.activeFocus
+  onPlainChanged: root.configureLinkDisplay()
+  onLinkColourChanged: root.configureLinkDisplay()
+  readonly property string hoveredLink: root.hasNote && !root.showingNotice && root.visible && linkHover.hovered
+    ? root.linkAt(linkHover.point.position.x, linkHover.point.position.y) : ""
+  signal linkOpenRequested(string url)
+
+  function linkAt(x, y) {
+    if (!nativeBlocks.item) {
+      return area.linkAt(x, y)
+    }
+    // Refresh a stationary pointer's preview when typing changes its URL.
+    if (!nativeBlocks.item.linkRevision) {
+      return ""
+    }
+    return nativeBlocks.item.linkAt(x - area.leftPadding, y - area.topPadding)
+  }
   // Plain characters, not a serialisation — for backends that store text.
   function plainText() { return area.getText(0, area.length) }
 
@@ -229,6 +245,10 @@ Item {
     }
     settingText = true
     area.text = document
+    if (nativeBlocks.item) {
+      nativeBlocks.item.document = area.textDocument
+      root.configureLinkDisplay()
+    }
     settingText = false
     showTop()
   }
@@ -978,6 +998,19 @@ Item {
     }
   }
 
+  function configureLinkDisplay() {
+    if (!nativeBlocks || !nativeBlocks.item) {
+      return
+    }
+    var wasNormalizing = root.normalizing
+    root.normalizing = true
+    try {
+      nativeBlocks.item.configureLinks(root.linkColour, root.plain)
+    } finally {
+      root.normalizing = wasNormalizing
+    }
+  }
+
   // The native marker's cell, measured the way Qt Quick lays it out: the
   // glyph's right edge sits one space ahead of the text, the glyph its own
   // advance before that, fontMetrics.height() tall from the line's top
@@ -1011,6 +1044,8 @@ Item {
     nativeBlocks.item.normalizeListMargins()
     nativeBlocks.item.normalizeLineHeights()
     nativeBlocks.item.normalizeCodeMargins()
+    // Clear anchors inherited by empty paragraphs.
+    nativeBlocks.item.normalizeLinks()
     var filled = nativeBlocks.item.fillEmptyBlocksBeforeTables()
     root.normalizing = false
     if (filled >= 0 && area.cursorPosition === filled + 1) {
@@ -2270,6 +2305,7 @@ Item {
 
         TextEdit {
           id: area
+          objectName: "noteBody"
           width: flick.width
           // Fill the frame so a click anywhere in the empty area focuses
           // the editor.
@@ -2300,6 +2336,30 @@ Item {
           font.pixelSize: root.bodyFontSize
           wrapMode: TextEdit.Wrap
           selectByMouse: true
+          // Native detection handles raw URLs and explicit links together.
+          // Qt's activation remains available when the module is absent.
+          onLinkActivated: function(link) {
+            if (!nativeBlocks.item) {
+              root.linkOpenRequested(link)
+            }
+          }
+          HoverHandler {
+            id: linkHover
+            cursorShape: root.hoveredLink ? Qt.PointingHandCursor : Qt.IBeamCursor
+          }
+          TapHandler {
+            enabled: !!nativeBlocks.item && root.hasNote && !root.showingNotice
+            acceptedButtons: Qt.LeftButton
+            acceptedModifiers: Qt.NoModifier
+            // Observe taps without taking text-selection drags from TextEdit.
+            gesturePolicy: TapHandler.DragThreshold
+            onTapped: function(eventPoint) {
+              var href = root.linkAt(eventPoint.position.x, eventPoint.position.y)
+              if (href) {
+                root.linkOpenRequested(href)
+              }
+            }
+          }
           Keys.priority: Keys.BeforeItem
           Keys.onPressed: function(event) {
             root.shortcut(event)

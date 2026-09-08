@@ -78,6 +78,31 @@ The editor's document is HTML, converted at both ends by
 follows is Qt's actual behaviour, measured on 6.11 — the converter is written
 against these, and `qthtml/selftest.py` fails the moment one changes.
 
+**Enter at a linked list item's end inherits its anchor.** The empty new
+block carries the previous item's URL in its block character format. Clear
+the anchor, link colour and underline from that empty block during the same
+normalization transaction as the split. Clearing only a text fragment cannot
+fix an empty block (`cpp/textlinks.cpp`, `normalizeAnchors`).
+
+**Automatic URL styling belongs in the highlighter.** `TextLinks` applies only
+the link colour and underline through `QSyntaxHighlighter`, leaving the
+document's character formats, cursor advances, Markdown and undo history
+unchanged. Bare URLs track the typed address; explicit Markdown links keep
+their label and target. Loading completes the initial highlighting pass while
+editor change notifications are guarded, so it cannot mark a note as edited.
+
+The same detector hit-tests document coordinates for the view-bar preview and
+direct clicks, including wrapped URLs and table cells. A passive `TapHandler`
+uses the drag threshold so selecting text does not open a link; modified
+clicks stay with the text editor. The native detector handles all links when
+built, and Qt's own activation handles explicit links in the fallback.
+
+**A monospace note font does not make prose into code.** The inline-code
+dialect explicitly uses the generic `monospace` family. Match that exact family,
+not fixed pitch or any name containing "mono": the app's normal note face is
+iA Writer Mono S. Plain-text notes ignore character-format semantics altogether,
+since switching Qt's rich document to plain text can retain old anchor formats.
+
 **Qt keeps appearance, not semantics.** The writer serialises how a block
 *looks*, so the reader has to infer what it *is*:
 

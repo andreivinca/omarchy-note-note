@@ -468,7 +468,9 @@ ShellRoot {
     }
   }
   Timer {
-    interval: 20000
+    // Real keyboard and pointer coverage takes around 20 seconds. Leave
+    // room for the remaining cases and for slower desktop runs.
+    interval: 45000
     running: true
     onTriggered: { test.check("all asynchronous scenarios finished", false); test.report() }
   }
