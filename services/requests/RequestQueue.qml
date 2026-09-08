@@ -27,7 +27,7 @@ Item {
   // Jobs run in parallel up to this many. The Python-side slot cap holds
   // total HTTP concurrency to MAX_CONCURRENT however many jobs run.
   property int concurrency: 3
-  // Set by the host while the window is hidden: reads stop, writes drain.
+  // Hidden window: ordinary reads stop; writes and opted-in background work run.
   property bool paused: false
 
   readonly property int depth: root.revision >= 0 ? Scheduler.depth(root.queue) : 0
@@ -48,7 +48,7 @@ Item {
   // enqueue(opts, start, settled) -> handle { cancel() }
   //
   //   opts:     { key, mode: "append"|"replace"|"dedupe", priority: 0|1,
-  //               owner, flush: bool, label }
+  //               owner, flush: bool, runWhenPaused: bool, label }
   //   start:    function(ctx) — begin the work, and call ctx.done(result)
   //             exactly once. A second call is ignored, so a process that
   //             answers twice cannot double-deliver.
@@ -67,7 +67,7 @@ Item {
     var o = opts || {}
     var r = Scheduler.enqueue(root.queue, {
       key: o.key, mode: o.mode, priority: o.priority, owner: o.owner,
-      flush: o.flush, label: o.label, start: start, settled: waiter })
+      flush: o.flush, runWhenPaused: o.runWhenPaused, label: o.label, start: start, settled: waiter })
     if (r.superseded) {
       root.answer(r.superseded, null, { superseded: true, cancelled: false,
                                         attempts: r.superseded.attempts })

@@ -28,11 +28,13 @@ Item {
   // Environment for any process that uses msgraph.py on this account's behalf.
   readonly property var env: ({ NOTE_NOTE_MS_ACCOUNT: root.owner, NOTE_NOTE_MS_CLIENT_ID: root.clientId,
                                 NOTE_NOTE_MS_SCOPES: root.scopes, NOTE_NOTE_MS_TOKEN: root.tokenPath,
+                                NOTE_NOTE_MS_CACHE_SESSION: root.cacheSession,
                                 NOTE_NOTE_MS_OPTIONAL_SCOPES: root.optionalScopes })
 
   property bool configured: false
   property bool signedIn: false
   property string account: ""
+  property string cacheSession: ""
   property string grantedScope: ""
   property bool loggingIn: false
 
@@ -86,8 +88,9 @@ Item {
           root.configured = st.configured === true
           root.signedIn = st.signedIn === true
           root.account = st.account || ""
+          root.cacheSession = st.cacheSession || ""
           root.grantedScope = st.scope || ""
-        } catch (e) { root.configured = false; root.signedIn = false; root.grantedScope = "" }
+        } catch (e) { root.configured = false; root.signedIn = false; root.grantedScope = ""; root.cacheSession = "" }
         root.updated()
       }
     }
@@ -119,7 +122,7 @@ Item {
     command: ["python3", root.script, "logout"]
     environment: root.env
     onExited: {
-      root.signedIn = false; root.account = ""; root.grantedScope = ""
+      root.signedIn = false; root.account = ""; root.grantedScope = ""; root.cacheSession = ""
       root.updated()
       if (root.reloginPending) {
         root.reloginPending = false

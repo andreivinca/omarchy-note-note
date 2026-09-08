@@ -1,26 +1,37 @@
 # OneNote content search
 
-*Status: routes under test, none built. The measurements here are real. The
-one thing this document no longer proposes is downloading every page.*
+*Status: investigated on 2026-09-08; background text caching is now implemented
+on branch `1.0.13`. See [implemented behavior](../onenote-search.md). OneDrive
+section narrowing works, but reading its 24 candidate pages took 12 seconds
+and left four transient failures. [The web-search investigation](onenote-web-search-investigation.md)
+found server search code paths, but a successful authenticated request and
+a maintainable sign-in path have not been demonstrated.*
 
-OneNote is the one provider whose notes are searched by title and preview
+Before this implementation, OneNote notes were searched by title and preview
 alone. Everything a user actually wrote — a phone number, a price, a URL, the
 line they remember but cannot name — is invisible. On the account this was
 measured against, of the 21 pages containing `http`, 18 are reachable *only*
 through their body; `kg`, `euro`, `telefon` and `email` are 100% body-only.
-Today a search for any of them returns nothing, and the user has no way to
-know the note is there.
+Those body-only searches returned nothing, with no way to
+know the note was there.
 
-An earlier draft of this page answered with "fetch every page once into a
-local index". That works — it was measured, and the numbers are kept below
-because two of the routes that follow reuse them — but it makes the plugin
-copy a whole account's notes to disk to answer a two-word search, and it is
-rejected as the plan. What follows is every way found to search without
-that, in the order they should be tried.
+The important distinction is when content is read. Fetching pages after
+the user types makes search slow. Reading them in the background, retaining
+the extracted text across restarts, and refreshing it makes subsequent
+searches local. OneNote for Windows also caches opened cloud notebooks;
+Microsoft documents that behavior in its
+[storage guidance](https://support.microsoft.com/en-us/onenote/manage-notebook-storage-in-onenote).
+
+A text cache does need an initial content read for every page it covers.
+It does not need to download image or attachment resources. The earlier
+measurement below reported 51 seconds for 268 pages and 83 KB of extracted
+text; this was not repeated during the latest investigation and is not a
+promised sync time. The alternatives below explain why a faster online
+search route has not yet replaced that recommendation.
 
 ## What is closed, and why
 
-`providers/onenote/Provider.qml` leaves `search()` out and says why: Graph's
+The provider previously omitted `search()` because Graph's
 pages endpoint has no content-search parameter. Microsoft **had** this for
 consumer notebooks, deprecated it, and decommissioned it on **5 May 2024**
 so that it deliberately returns `400`. The announcement — *OneNote
@@ -47,37 +58,40 @@ account and is also closed:
 | `GET /me/onenote/pages/{id}/preview` | Needs the page id already; 300 characters of one known page, not a search |
 | Copilot Retrieval API, `POST /beta/copilot/retrieval` | Public preview, August 2026. It **does** index `.one` files for semantic and hybrid retrieval and returns text chunks with no download — but it needs a Microsoft 365 Copilot licence on a work tenant, and *"user-level data sources such as OneDrive aren't available"* on pay-as-you-go. Nothing for personal accounts |
 
-The conclusion to draw is that Microsoft exposes no page-level content
-search for personal accounts. The conclusion **not** to draw is that the
-plugin therefore has to read every page: the routes below each let a server
-say *where* to look, and read only that.
+No supported page-level content search for personal accounts was found.
+This does not prove that local caching is the only possible approach:
+OneDrive can narrow candidate sections, and the first-party web client
+contains separate server search paths. Neither currently gives Note Note
+a verified, responsive page-search integration.
 
-## Route 1 — let OneDrive's search narrow, read only what it names
+## Route 1 — OneDrive can narrow, but candidate reads are too slow
 
-*Personal accounts. Untested; the probe beside this file settles it.*
+*Verified on one personal account; unsuitable by itself for interactive
+search. See the [measurements and limits](onenote-web-search-investigation.md#why-the-onedrive-narrowing-route-is-insufficient-by-itself).*
 
 Graph's drive search, `GET /me/drive/root/search(q='…')`, is documented for
 personal accounts with `Files.Read`, and its `q` is documented as matched
 *"across several fields including filename, metadata, and file content"*.
 A consumer notebook is a folder in OneDrive and each section is a `.one`
 file inside it, so if OneDrive's index reads `.one` content the way it reads
-a `.docx`, one request returns the **sections** that hold the words. Whether
-it does is the unknown: no Microsoft page says either way, and no report
-found settles it.
+a `.docx`, one request can return the **sections** that hold the words.
+The live `telefon` test returned two known sections and confirmed two
+page-body matches. Coverage, freshness and behavior on other accounts are
+not established.
 
-Two things make the route cheap if it works. The ids already line up: a
+Two things reduce the number of requests. The ids already line up: a
 personal account's section id, `0-1E92922A0811E22E!358707`, is the
 OneDrive item id `1E92922A0811E22E!358707` with `0-` in front, and a
 notebook id has the same shape over the notebook's folder — so a drive hit
 maps to a section in the listing cache by string comparison, no request
 spent. That is read off the id format, not a documented guarantee, which is
-why the probe checks it first. And the section is the natural unit to read
+why a provider must validate it. And the section is the natural unit to read
 next: pages are already listed per section (`onenote.py`,
 `section_pages_url`), and `/$batch` carries twenty pages' content per
-request, so a search that lands on three sections costs one drive request
-and one or two batches, and the bodies land in the `bodies` cache the
-provider already keeps. Nothing is fetched before the user asks, and nothing
-is kept beyond what the search read.
+request. The batch count depends on how many pages the matching sections
+contain. Those bodies could land in the provider's existing `bodies` cache.
+This saves repeated reads, but does not solve the measured delay on the
+first search of a section.
 
 If OneDrive only names the **notebook** (Graph exposes a notebook as one
 `package` item, and its `.one` children may not be searchable one by one),
@@ -85,26 +99,35 @@ the same shape narrows to a notebook instead of a section — on this account
 17 sections at worst, still a fraction of the 39.
 
 The cost is the scope. `Files.Read` is read access to the whole OneDrive,
-not just notebooks; there is no narrower scope the endpoint accepts. So
-this is an opt-in — a setting under the OneNote provider, off by default,
-that asks for the extra scope at the next sign-in and says plainly why —
-and a line in `security.md` before it ships.
+not just notebooks; there is no narrower scope the endpoint accepts. The
+existing optional section-order integration already uses that permission,
+so no additional consent was needed for these probes. Any implementation
+must handle accounts that have not granted it. Background page-text
+caching can use the provider's existing OneNote permission instead.
 
-**To run the probe** (five minutes, read-only, its own token file so the
-app's sign-in is untouched):
+The previously referenced `probe-onedrive-search.py` is absent from this
+repository. The 2026-09-08 checks used ad hoc read-only requests with the
+existing sign-in, which already had `Files.Read` from section ordering.
+Finding candidate sections is evidence for narrowing, not an acceptance
+test for search performance or completeness.
 
-```
-python3 docs/future/probe-onedrive-search.py login
-python3 docs/future/probe-onedrive-search.py search kg euro telefon http --verify
-python3 docs/future/probe-onedrive-search.py logout
-```
+## Web-client route — return matching page identities from the server
 
-Read the result like this. *Sections in the listing, and `--verify` finds
-the term in their pages*: the route works at section grain, build it.
-*Notebooks only*: it works at notebook grain, build it with the notebook as
-the unit. *Nothing for terms that are certainly in page bodies* (the four
-above are): OneDrive does not index `.one` content, and the route is closed
-— write that into the table above and move on to route 3.
+Microsoft's public OneNote web scripts contain a notebook search GET to
+`OneNoteS2SHandler.ashx?action=search` and a section search POST to
+`OneNote.ashx`. Their response handlers consume page results and
+`PageIdsWithHits`, respectively. These avoid the candidate-page download
+step in the client.
+
+They use Office web's configured service and request manager, which can
+supply document access tokens, canaries and session/routing headers. The
+existing browser sign-in did provide a fresh document token and loaded
+the web app, but notebook search was disabled in its current settings.
+Notebook-search replay returned error HTML; section-search replay returned
+a protocol error. No successful search was demonstrated. This route needs
+more research before implementation. The
+[investigation](onenote-web-search-investigation.md) records the versioned
+source, authentication flow, request shapes and remaining checks.
 
 ## Route 2 — work and school accounts have an index already
 
@@ -114,8 +137,8 @@ pages, and news"*, and a OneNote hit is the notebook item. That is the same
 narrowing as route 1 at notebook grain, through a different request, with
 `Files.Read.All` or `Sites.Read.All`. It is not a separate design: the hit
 → container → batch shape is one code path with two ways of getting the
-hit, and it should be built as one, once route 1 has shown the shape is
-worth building.
+hit, and could share its implementation. The measured candidate-read delay
+means neither is currently recommended as the normal interactive path.
 
 The Copilot Retrieval API is the only endpoint found that returns OneNote
 *text* without a download. It is gated on a Copilot licence and a tenant, so
@@ -127,33 +150,51 @@ The retirement post says there is no replacement and points at a forum.
 Nobody appears to have asked the question there in a form that can be
 voted on: searches of Microsoft Q&A, the Tech Community ideas board and the
 Graph docs repository found no tracked request to restore the endpoint. So
-the first ask is ours to make. The text is ready in
-`onenote-search-request-to-microsoft.md`, with where to post it. The
-argument it makes is the one this page makes: without a search endpoint,
+the request could be made there. The previously referenced
+`onenote-search-request-to-microsoft.md` is absent from this repository.
+The argument would be the one this page makes: without a public search endpoint,
 every third-party client copies every page of every user to search two
 words, which is worse for Microsoft's servers, worse for the user's
-privacy, and worse for the throttling budget Microsoft itself set — and
-OneNote for the web already searches a notebook stored in OneDrive
-server-side, so the index exists.
+privacy, and worse for the throttling budget Microsoft itself set. The
+web client's server-search code paths are evidence that Microsoft has
+implemented another mechanism; successful live behavior and its underlying
+index were not established by this investigation.
 
-Even a good answer is months away, so this runs alongside routes 1 and 4,
-not instead of them.
+There is no known response timeline, so this should not hold up a usable
+search implementation.
 
-## Route 4 — if every door stays shut: search where the user is looking
+## Recommended design — background text cache
 
-Reading pages is unavoidable then, but reading *all* of them is not. The
-host asks `search()` once the typing pauses and treats the answer as
-best-effort. The provider can answer for the scope the user is in — with
-notebook tabs on, the open notebook; otherwise the sections the user has
-expanded — by batching only those pages' content on demand, streaming hits
-back as batches land, and keeping the bodies in the existing `bodies`
-cache under the page's `modified` stamp so a second search of the same
-place is free. A "Search all notebooks…" action row can offer the rest, as
-an explicit act the user pays for knowingly. Nothing is fetched before a
-search, nothing is written to disk beyond what the app already caches, and
-the batch findings below apply as they stand.
+Read the pages in the configured search scope gradually in the background,
+starting with the active notebook. Store page IDs and extracted searchable
+text on disk so progress survives a restart. Fetch HTML for extraction;
+leave image and attachment resources to the existing on-demand loaders.
+Full coverage of the selected scope requires eventually reading every
+accessible page in that scope.
 
-## What the batch measurement taught, kept for routes 1 and 4
+Search the available text immediately. Show how much of the scope is
+indexed while the initial sync is incomplete, and retain failed pages as
+pending work. A missing hit during indexing must not look like a complete
+search with no matches. Refresh text when a page is read or saved, reconcile
+additions and deletions from successful listings, and periodically revisit
+older entries because OneNote's modified stamps can miss changes.
+
+Reuse the existing request queue and rate limiter. Background reads must
+yield to opening and saving notes, retry transient per-page failures, and
+resume unfinished work. Keep the cache private, separate it by account,
+and clear it on sign-out through the existing cache-cleanup path.
+
+The current `search(query, cb)` contract accepts exactly one callback;
+the earlier suggestion to stream batches of hits is incompatible with it.
+Implement local search within that contract. If completing background work
+should update an already displayed query, define that invalidation path
+explicitly in the host rather than calling the callback repeatedly.
+
+The implementation follows this design for all listed pages and shows
+coverage in the search panel. A working web integration could later
+complement this cache.
+
+## Earlier full-account batch measurement
 
 `/$batch` carries OneNote page content, twenty pages per HTTP request.
 Measured end-to-end on a real account of 268 pages across 39 sections:
@@ -168,7 +209,7 @@ Measured end-to-end on a real account of 268 pages across 39 sections:
 
 The things whoever builds a batch path must know:
 
-**Batch throttle accounting contradicts itself.** Microsoft documents that
+**A batch does not bypass throttling.** Microsoft documents that
 "requests in a batch are evaluated individually against the applicable
 throttling limits", but 268 inner requests in 51 seconds — a sustained
 315/min against a documented 120/min limit — drew no `429` at all. That is
@@ -188,9 +229,9 @@ here all cleared on one attempt.
 **`lastModifiedDateTime` is the cache key, and it is not fully trusted.**
 `PROVIDERS.md` already calls OneNote's change marker untrustworthy, which is
 why `poll()` re-reads the open note. A body cached under a stamp that did
-not move when the page did will match the old text. For routes 1 and 4 the
-consequence is a missed hit until the page is opened again, which is the
-same best-effort the host already expects, not a silently stale index.
+not move when the page did will match the old text. Opening the page fixes
+only that entry. A persistent search cache also needs a bounded periodic
+refresh policy; change stamps alone cannot guarantee fresh results.
 
 **Whatever is read is decrypted note text.** The `bodies` cache is
 in-memory today. If any route writes bodies to disk it goes under
@@ -199,13 +240,14 @@ line in `security.md` first.
 
 ## Order of work
 
-1. Run the probe. It decides between route 1 and route 4 for personal
-   accounts, and it is the only step that costs nothing to build.
-2. Post the request to Microsoft. It costs an afternoon once and nothing
-   after.
-3. Build the hit → container → batch path for whichever grain the probe
-   found, as an opt-in that asks for `Files.Read`; or, if OneDrive does not
-   index notebooks, route 4 at the open notebook's scope with no new scope
-   at all.
-4. Fold work accounts in through the Microsoft Search API once the path
-   exists.
+1. Implemented in `1.0.13`: background text caching, incomplete-coverage UI
+   and periodic refresh. See [current behavior](../onenote-search.md).
+2. Implemented: request-queue scheduling, private cache storage and sign-out
+   cleanup, with isolated Python and QML regression tests.
+3. Keep the web route as a separate research option. Its acceptance criteria
+   are a successful search, verified result IDs and latency, and context
+   that the app can obtain and renew. A copied browser request alone does
+   not establish a maintainable integration.
+4. Treat work-account integration separately once a satisfactory search
+   design exists. A request to Microsoft can be drafted independently;
+   posting it requires the user's authorization.

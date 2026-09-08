@@ -125,6 +125,30 @@ applies in reverse (`services/clipboard/clipboard.py`,
 - Prune caches by count *and* by total bytes (400 files / 200 MiB), oldest
   first.
 
+OneNote content search stores decrypted, normalized page text in
+`~/.cache/omarchy/note-note-onenote-search.json`. The cache is limited to
+3,000 listed pages, 128 KiB of UTF-8 text per page and 16 MiB of serialized
+JSON. Cache reads take at most the cap plus one byte. Oversized pages are
+left pending and reported in search coverage; text is never silently
+truncated and counted as complete. Search does not load image or attachment
+resources, execute HTML, or follow links. Indexing reads page HTML through
+the existing bounded Graph transport and OneNote permission.
+
+The cache uses `save_private` (0600 atomic replacement) and a separate
+0600 `flock` file for transactions between provider processes. A random
+`cacheSession` in the provider's token file scopes text and listing caches
+to one sign-in; refresh retains it and a new sign-in replaces it. Late jobs
+verify their session and page revision before committing. Parallel workers
+claim different pages under that lock; claims record the worker PID and a
+bounded lease, so a stopped worker cannot block indexing indefinitely. Sign-out removes
+the text cache under the lock; late reads cannot recreate it, and delayed
+cleanup for an old session cannot delete a new session's cache. Token updates
+and logout also share a lock; an in-flight refresh cannot restore a signed-out
+account or overwrite a newer sign-in. Saves hold
+their cached text for at least 60 seconds against eventually consistent
+reads. The index does not copy token-file fields, image bytes or image/object
+resource attributes. User-authored text and links remain searchable.
+
 ### 7. Anything that decodes untrusted data gets limits and a timeout
 
 ImageMagick is invoked with

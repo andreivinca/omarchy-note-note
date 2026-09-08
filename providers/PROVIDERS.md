@@ -173,6 +173,15 @@ them.
   searched by title and preview alone (Notion does: its public API searches
   titles only, and fetching every page's blocks per keystroke is not a
   search).
+- `searchChanged()` (optional signal) — searchable content or its coverage
+  changed. The host updates the coverage and, if a query is open, coalesces
+  another `search()` call to this provider. Each call still gets exactly one
+  callback. An older answer to the same query cannot replace the newer one.
+- `searchStatus(sectionKey)` (optional) — a short coverage/status string for
+  the current provider section, or `""` when no notice is needed. The host
+  displays it below the result count. Incomplete coverage keeps an empty
+  result from appearing to be a complete content search. OneNote reports
+  initial indexing, refreshes, unavailable pages and pauses here.
 - `setOrder(sectionKey, paths)`
 - `crumb(path)` → string for the editor's description line
 - `createTargetFor(path)` → target for Ctrl+N while `path` is open, or ""
@@ -287,7 +296,8 @@ rq.cancelOwner(owner)
 | `mode` | what a newcomer does to a **queued** job of the same key. `append` (default) nothing; `replace` supersedes it, because the newer job contains its intent (a newer save of one page); `dedupe` joins it, so three asks for one listing are one request |
 | `priority` | `0` interactive, `1` background. 0 dispatches first, and a background job never takes the lane's last slot, so a keystroke never waits behind a poll |
 | `owner` | your provider, for `cancelOwner` and for the round-robin that stops one provider starving another |
-| `flush` | this is a **write**. Writes keep draining while the window is hidden; reads do not |
+| `flush` | this is a **write**. Writes keep draining while the window is hidden; ordinary reads do not |
+| `runWhenPaused` | explicit background work such as content indexing may run while the window is hidden. It remains cancellable read work and still obeys priority and service cooldowns |
 | `label` | a word for warnings |
 
 `start(ctx)` begins the work and calls `ctx.done(result)` **exactly once** — a

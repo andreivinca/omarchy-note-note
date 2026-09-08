@@ -100,8 +100,12 @@ The body is Markdown, rendered live and saved back as Markdown, with a
 formatting toolbar for headings, lists, tables, links, images and the usual
 bold/italic/underline/strikethrough/highlight/code shortcuts (`Ctrl+B/I/U/S`,
 `Ctrl+Shift+H`). Search filters by title as you type and by body a moment
-later, where the backend allows it — OneNote and Notion are title-only,
-since neither API exposes body search. **Detach**, in the menu at the top
+later. OneNote builds a private text cache in the background and shows how
+many pages are searchable while it fills; searches then use the saved text.
+Indexing reads page text without downloading images or attachments. See
+[OneNote search](docs/onenote-search.md) for sync and coverage details.
+Notion remains title-only because its API does not expose body search.
+**Detach**, in the menu at the top
 right, turns the overlay into an ordinary window you can keep open beside
 your work; **Back to overlay** brings it back.
 

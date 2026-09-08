@@ -17,7 +17,9 @@ users only sign in to their account. An optional
 {"microsoft": {"<provider id>": {"clientId": ..., "tenant": ...}}}
 gives one provider a registration of the user's own instead.
 """
-import json, os, sys, time, urllib.request, urllib.parse, urllib.error
+import contextlib
+import fcntl
+import json, os, sys, time, urllib.request, urllib.parse, urllib.error, uuid
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(HERE, "..", "..", "lib"))
@@ -192,6 +194,17 @@ def signed_in(client_id):
     return tok
 
 
+@contextlib.contextmanager
+def token_lock():
+    os.makedirs(os.path.dirname(TOKENS), mode=0o700, exist_ok=True)
+    fd = os.open(TOKENS + ".lock", os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600)
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX)
+        yield
+    finally:
+        os.close(fd)
+
+
 def forget_token(expected_refresh=None):
     """Throw the sign-in away. `cmd_status` then reports signed out and the
     provider shows its sign-in row, which is the only useful thing to offer
@@ -207,12 +220,13 @@ def forget_token(expected_refresh=None):
     still holds the very token whose refresh failed. `cmd_logout` passes
     nothing and means it unconditionally.
     """
-    if expected_refresh is not None and (load_json(TOKENS, None) or {}).get("refresh_token") != expected_refresh:
-        return
-    try:
-        os.remove(TOKENS)
-    except OSError:
-        pass
+    with token_lock():
+        if expected_refresh is not None and (load_json(TOKENS, None) or {}).get("refresh_token") != expected_refresh:
+            return
+        try:
+            os.remove(TOKENS)
+        except OSError:
+            pass
 
 
 def access_token(force=False):
@@ -236,6 +250,9 @@ def access_token(force=False):
     tok = signed_in(client_id)
     if not tok:
         fail("not signed in")
+    expected = os.environ.get("NOTE_NOTE_MS_CACHE_SESSION", "")
+    if expected and tok.get("cacheSession") != expected:
+        fail("the signed-in account changed")
     if not force and tok.get("expires_at", 0) - 60 > time.time():
         return tok["access_token"]
     used = tok.get("refresh_token", "")
@@ -273,16 +290,26 @@ def access_token(force=False):
             # the rotation is why this failed and its token is the good one —
             # take it rather than reporting a sign-out that is not true.
             fresh = signed_in(client_id)
+            if fresh and fresh.get("cacheSession") != tok.get("cacheSession"):
+                fail("the signed-in account changed")
             if fresh and fresh.get("refresh_token") != used:
                 return fresh["access_token"]
             forget_token(used)
             fail("not signed in")
         fail("sign-in expired: %s" % res.get("error_description", res.get("error", status)))
-    tok.update(res)
-    tok["expires_at"] = time.time() + int(res.get("expires_in", 3600))
-    tok["client_id"] = client_id
-    save_private(TOKENS, tok)
-    return tok["access_token"]
+    # Do not hold the lock during a network request: logout must be immediate.
+    # Recheck under the same lock used by logout and login before committing.
+    with token_lock():
+        fresh = signed_in(client_id)
+        if not fresh or fresh.get("cacheSession") != tok.get("cacheSession"):
+            fail("the signed-in account changed")
+        if fresh.get("refresh_token") != used:
+            return fresh["access_token"]
+        tok.update(res)
+        tok["expires_at"] = time.time() + int(res.get("expires_in", 3600))
+        tok["client_id"] = client_id
+        save_private(TOKENS, tok)
+        return tok["access_token"]
 
 
 def graph(method, path, data=None, extra_headers=None, max_bytes=MAX_BODY, transient_5xx=True):
@@ -318,11 +345,17 @@ def adopt_legacy_token():
 
 
 def cmd_status():
-    adopt_legacy_token()
     client_id, _ = config()
-    tok = signed_in(client_id) if client_id else None
+    with token_lock():
+        adopt_legacy_token()
+        tok = signed_in(client_id) if client_id else None
+        # A cache belongs to this sign-in, not to a display name that two accounts
+        # can share. Refresh preserves it; a new device-code sign-in replaces it.
+        if tok and not tok.get("cacheSession"):
+            tok["cacheSession"] = uuid.uuid4().hex
+            save_private(TOKENS, tok)
     out({"configured": bool(client_id), "signedIn": bool(tok), "account": (tok or {}).get("account", ""),
-         "scope": (tok or {}).get("scope", "")})
+         "scope": (tok or {}).get("scope", ""), "cacheSession": (tok or {}).get("cacheSession", "")})
 
 
 def cmd_login():
@@ -348,7 +381,9 @@ def cmd_login():
         if status == 200 and "access_token" in tok:
             tok["expires_at"] = time.time() + int(tok.get("expires_in", 3600))
             tok["client_id"] = client_id
-            save_private(TOKENS, tok)
+            tok["cacheSession"] = uuid.uuid4().hex
+            with token_lock():
+                save_private(TOKENS, tok)
             # Asked with the token just minted, not through `graph()`: this
             # probe is allowed to fail (the account name is a nicety, hence
             # the `else ""`), and `graph()` would answer a 401 here — Entra
@@ -359,7 +394,12 @@ def cmd_login():
                          headers={"Authorization": "Bearer " + tok["access_token"],
                                   "Accept": "application/json"}, transient_5xx=False)
             tok["account"] = (me.get("mail") or me.get("userPrincipalName") or me.get("displayName") or "") if s == 200 else ""
-            save_private(TOKENS, tok)
+            with token_lock():
+                current = signed_in(client_id)
+                if not current or current.get("cacheSession") != tok["cacheSession"]:
+                    fail("the signed-in account changed")
+                current["account"] = tok["account"]
+                save_private(TOKENS, current)
             out({"ok": True, "account": tok["account"]})
             return
         err = tok.get("error", "")

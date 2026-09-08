@@ -167,6 +167,19 @@ Item {
     Scheduler.onResult(s, b, { kind: "throttled", retryAfter: 5 }, 0)
     harness.check("a parked write waits for the cooldown too", Scheduler.nextRunnable(s, 0, opts) === null)
 
+    s = Scheduler.makeState()
+    var indexOwner = { name: "index" }
+    a = Scheduler.enqueue(s, { key: "index", priority: 1, runWhenPaused: true, owner: indexOwner }).job
+    b = Scheduler.enqueue(s, { key: "poll", priority: 1 }).job
+    dropped = Scheduler.setPaused(s, true)
+    harness.check("hidden indexing survives while ordinary polls are cancelled",
+                  dropped.length === 1 && dropped[0] === b && s.jobs[0] === a)
+    harness.check("hidden indexing remains a read", a.flush === false)
+    harness.check("hidden indexing can run", Scheduler.nextRunnable(s, 0, opts) === a)
+    s.cooldownUntil = 5000
+    harness.check("hidden indexing obeys the service cooldown", Scheduler.nextRunnable(s, 0, opts) === null)
+    harness.check("hidden indexing is cancelled with its owner", Scheduler.cancelOwner(s, indexOwner)[0] === a)
+
     // A provider going away.
     s = Scheduler.makeState()
     var owner = { name: "provider" }

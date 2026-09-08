@@ -10,6 +10,10 @@
   onenote.py create <sectionId> <file>  -> {"ok":true,"page":{...}}
   onenote.py delete <id>
   onenote.py create-section <notebookId> <file|->  -> {"ok":true,"section":{...}}
+  onenote.py search-sync <file|->      -> reconcile {"pages":[...]} with the text cache
+  onenote.py search-step <file|->      -> index one due page, with {"preferredSections":[...]}
+  onenote.py search <file|->           -> local matches for {"query":"..."}
+  onenote.py clear-search <session>    -> clear text belonging to that sign-in
 """
 import html as _html
 import contextlib
@@ -24,6 +28,7 @@ import ratelimit  # noqa: E402
 from msgraph import (graph, http, fail, fail_throttled, out, load_json, save_private,  # noqa: E402
                      read_payload, access_token, TRANSIENT_STATUSES, CACHE_DIR, GRAPH)
 import onenote_md  # noqa: E402
+import search_index  # noqa: E402
 
 # OneNote's own Graph budget, shared with no other provider: a throttle here
 # parks OneNote and leaves Sticky Notes listing. Microsoft's delegated OneNote
@@ -122,6 +127,103 @@ def section_pages_url(section_id):
     """
     return ("/me/onenote/sections/%s/pages?$select=id,title,lastModifiedDateTime&$orderby=order&$top=100"
             % urllib.parse.quote(section_id, safe=""))
+
+
+def content_index():
+    client_id = msgraph.config()[0]
+    token = msgraph.signed_in(client_id) or {}
+    session = os.environ.get("NOTE_NOTE_MS_CACHE_SESSION") or token.get("cacheSession", "")
+
+    def valid():
+        current = msgraph.signed_in(client_id) or {}
+        return bool(session and current.get("cacheSession") == session)
+
+    return search_index.Index(CACHE_DIR, session, valid)
+
+
+def current_session():
+    return (msgraph.signed_in(msgraph.config()[0]) or {}).get("cacheSession", "")
+
+
+def load_listing(default=None):
+    cached = load_json(ONENOTE_CACHE, None)
+    if not isinstance(cached, dict) or cached.get("cacheSession", "") != current_session():
+        return default
+    return cached
+
+
+def save_listing(cached):
+    session = os.environ.get("NOTE_NOTE_MS_CACHE_SESSION") or current_session()
+    if session != current_session():
+        return
+    cached["cacheSession"] = session
+    save_private(ONENOTE_CACHE, cached)
+
+
+def search_ticket(page_id):
+    try:
+        return content_index().ticket(page_id)
+    except (OSError, ValueError):
+        return None
+
+
+def remember_search(page_id, html, ticket=None, saved=False):
+    # Cache maintenance cannot turn a successful note read/save into a failed
+    # operation. The background controller reports cache failures separately.
+    try:
+        return content_index().record(page_id, search_index.searchable_text(html), ticket, saved)
+    except (OSError, ValueError):
+        return False
+
+
+def cmd_search_sync(payload):
+    data = read_payload(payload)
+    if not isinstance(data, dict):
+        fail("invalid search inventory")
+    out({"status": content_index().sync(data.get("pages"))})
+
+
+def cmd_search_step(payload):
+    data = read_payload(payload) or {}
+    preferred = data.get("preferredSections", [])
+    if not isinstance(preferred, list) or len(preferred) > MAX_SECTIONS:
+        fail("invalid search scope")
+    index = content_index()
+    ticket = index.next_page(preferred)
+    if ticket is None:
+        out({"status": index.status()})
+        return
+    delay = ratelimit.background_delay(msgraph.RATE_KEY, msgraph.RATE_WINDOWS)
+    if delay > 0:
+        out({"status": index.status(), "deferred": True, "retryAfter": delay})
+        return
+    ticket = index.claim_page(preferred)
+    if ticket is None:
+        out({"status": index.status()})
+        return
+    try:
+        status, html = graph_raw("GET", "/me/onenote/pages/" + urllib.parse.quote(ticket["id"], safe="")
+                                 + "/content", transient_5xx=False)
+    except (ratelimit.Throttled, SystemExit):
+        index.failed(ticket)
+        raise
+    if status == 200:
+        try:
+            index.record(ticket["id"], search_index.searchable_text(html), ticket)
+        except ValueError:
+            index.failed(ticket)
+    else:
+        index.failed(ticket, status)
+    out({"status": index.status()})
+
+
+def cmd_search(payload):
+    data = read_payload(payload) or {}
+    query = data.get("query", "")
+    if not isinstance(query, str) or len(query) > 4096:
+        fail("invalid search query")
+    result = content_index().search(query)
+    out({"paths": ["onenote:" + page_id for page_id in result["ids"]], "status": result["status"]})
 
 
 def has_section_order_scope():
@@ -233,13 +335,19 @@ class Listing:
         if complete:
             self.fetched = time.time()
         os.makedirs(CACHE_DIR, exist_ok=True)
-        save_private(ONENOTE_CACHE, {"sections": self.sections, "pages": self.pages(),
+        save_listing({"sections": self.sections, "pages": self.pages(),
                                      "sectionPages": self.seen, "fetched": self.fetched,
                                      "sectionOrders": self.section_orders,
                                      "sectionOrderVersion": SECTION_ORDER_VERSION,
                                      "sectionOrderScope": self.order_scope,
-                                     "sectionOrderWarnings": self.order_warnings})
+                                     "sectionOrderWarnings": self.order_warnings,
+                                     "inventoryComplete": complete and self.within_limits()})
         self.last_write = time.monotonic()
+
+    def within_limits(self):
+        # Hitting either listing cap means we cannot claim complete coverage.
+        return (len(self.sections) < MAX_SECTIONS
+                and sum(len(self.by_section.get(sct["id"], [])) for sct in self.sections) < MAX_PAGES)
 
     def checkpoint(self):
         if time.monotonic() - self.last_write >= CHECKPOINT_SECONDS:
@@ -247,12 +355,13 @@ class Listing:
 
 
 def cmd_onenote_list(cached, max_age=0, force=False):
-    c = load_json(ONENOTE_CACHE, None)
+    c = load_listing()
     order_scope = has_section_order_scope()
     current_order = (isinstance(c, dict) and c.get("sectionOrderVersion") == SECTION_ORDER_VERSION
                      and c.get("sectionOrderScope") == order_scope)
     if cached or (max_age and c and current_order
                   and time.time() - c.get("fetched", 0) < max_age):
+        inventory_ready = c is not None
         c = c or {"sections": [], "pages": []}
         sections = c.get("sections", [])
         warnings = c.get("sectionOrderWarnings", [])
@@ -260,6 +369,8 @@ def cmd_onenote_list(cached, max_age=0, force=False):
             sections = alphabetical_sections(sections)
             warnings = ["Custom section order unavailable; sections sorted alphabetically"] if sections else []
         out({"sections": sections, "pages": c.get("pages", []), "cached": True,
+             "inventoryReady": inventory_ready,
+             "inventoryComplete": c.get("inventoryComplete", False),
              "sectionOrderWarnings": warnings})
         return
     sections = []
@@ -342,6 +453,7 @@ def cmd_onenote_list(cached, max_age=0, force=False):
 
     listing.save(True)
     out({"sections": sections, "pages": listing.pages(), "cached": False,
+         "inventoryComplete": listing.within_limits(),
          "sectionOrderWarnings": listing.order_warnings})
 
 
@@ -572,16 +684,17 @@ def cmd_onenote_pages(section_ids):
             for pg in res.get("value", []):
                 found.append({"id": pg["id"], "title": pg.get("title", "") or "", "sectionId": sid, "modified": pg.get("lastModifiedDateTime", "")})
             url = res.get("@odata.nextLink")
-    c = load_json(ONENOTE_CACHE, None)
+    c = load_listing()
     if c:
         c["pages"] = [p for p in c.get("pages", []) if p["sectionId"] not in section_ids] + found
-        save_private(ONENOTE_CACHE, c)
+        save_listing(c)
     out({"sections": section_ids[:10], "pages": found})
 
 
 def cmd_onenote_page(page_id):
     _image_budget[0] = time.monotonic() + IMAGE_BUDGET_SECONDS
     _image_budget[1] = 0
+    ticket = search_ticket(page_id)
     status, html = graph_raw("GET", "/me/onenote/pages/" + urllib.parse.quote(page_id, safe="") + "/content")
     if status != 200:
         try:
@@ -590,6 +703,7 @@ def cmd_onenote_page(page_id):
             fail("Graph error %s" % status)
     r = onenote_md.html_to_markdown(html, cached_image)
     remember_images(page_id, r["images"], r["editable"])
+    remember_search(page_id, html, ticket)
     out({"title": r["title"], "body": r["body"], "editable": r["editable"], "markdown": True})
 
 
@@ -880,6 +994,7 @@ def cmd_onenote_update(page_id, path):
                 warning = "title not saved: " + graph_err(json.loads(res), status)
             except ValueError:
                 warning = "title not saved (Graph error %s)" % status
+    remember_search(page_id, "<body>" + wrap_runs(runs) + "</body>", saved=True)
     out({"ok": True, "warning": warning} if warning else {"ok": True})
 
 
@@ -919,7 +1034,7 @@ def cmd_onenote_create(section_id, path):
     pg = json.loads(res)
     page = {"id": pg["id"], "title": pg.get("title", "") or "", "sectionId": section_id,
             "modified": pg.get("lastModifiedDateTime", "")}
-    c = load_json(ONENOTE_CACHE, {"sections": [], "pages": []})
+    c = load_listing({"sections": [], "pages": []})
     # A new page goes to the end of its section, which is where OneNote itself
     # puts one and so where the next listing will show it. (It used to go to
     # the front, which was right while the list was newest-first.)
@@ -928,7 +1043,13 @@ def cmd_onenote_create(section_id, path):
                default=len(kept) - 1)
     kept.insert(last + 1, page)
     c["pages"] = kept
-    save_private(ONENOTE_CACHE, c)
+    save_listing(c)
+    try:
+        index = content_index()
+        index.sync([page], replace=False)
+        index.record(page["id"], search_index.searchable_text(html), saved=True)
+    except (OSError, ValueError):
+        pass
     out({"ok": True, "page": page})
 
 
@@ -944,14 +1065,14 @@ def cmd_onenote_create_section(notebook_id, path):
         fail(graph_err(res, status))
     section = {"id": res["id"], "name": res.get("displayName", name),
                "notebook": "", "notebookId": notebook_id}
-    c = load_json(ONENOTE_CACHE, None)
+    c = load_listing()
     if c:
         for sct in c.get("sections", []):
             if sct.get("notebookId") == notebook_id:
                 section["notebook"] = sct.get("notebook", "")
                 break
         c["sections"] = c.get("sections", []) + [section]
-        save_private(ONENOTE_CACHE, c)
+        save_listing(c)
     out({"ok": True, "section": section})
 
 
@@ -962,9 +1083,13 @@ def cmd_onenote_delete(page_id):
             fail(graph_err(json.loads(res), status))
         except ValueError:
             fail("Graph error %s" % status)
-    c = load_json(ONENOTE_CACHE, {"sections": [], "pages": []})
+    c = load_listing({"sections": [], "pages": []})
     c["pages"] = [p for p in c.get("pages", []) if p["id"] != page_id]
-    save_private(ONENOTE_CACHE, c)
+    save_listing(c)
+    try:
+        content_index().remove(page_id)
+    except (OSError, ValueError):
+        pass
     out({"ok": True})
 
 
@@ -992,6 +1117,15 @@ def main(argv):
         cmd_onenote_delete(argv[2])
     elif cmd == "create-section" and len(argv) >= 4:
         cmd_onenote_create_section(argv[2], argv[3])
+    elif cmd == "search-sync" and len(argv) >= 3:
+        cmd_search_sync(argv[2])
+    elif cmd == "search-step" and len(argv) >= 3:
+        cmd_search_step(argv[2])
+    elif cmd == "search" and len(argv) >= 3:
+        cmd_search(argv[2])
+    elif cmd == "clear-search" and len(argv) >= 3:
+        search_index.Index(CACHE_DIR, argv[2]).clear()
+        out({"ok": True})
     elif cmd == "clear-cache":
         try:
             os.remove(ONENOTE_CACHE)

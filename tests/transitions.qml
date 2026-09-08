@@ -22,6 +22,28 @@ ShellRoot {
   property bool watchFinished: false
   property bool editorFinished: false
   property var appHost: null
+  function hostSearchCases() {
+    var app = test.appHost
+    var source = { id: "cachetest", sections: [], replies: [], search: function(query, callback) { this.replies.push(callback) } }
+    var other = { id: "othertest", sections: [], replies: [], search: function(query, callback) { this.replies.push(callback) } }
+    app.providers = [source, other]
+    app.filterText = "needle"
+    app.runContentSearch()
+    other.replies[0]({ paths: ["othertest:hit"] })
+    app.invalidateContentSearch(source)
+    app.refreshCachedSearch()
+    source.replies[1]({ paths: ["cachetest:new"] })
+    source.replies[0]({ paths: ["cachetest:old"] })
+    check("cache refresh rejects an older answer to the same query",
+          app.contentHits.cachetest["cachetest:new"] && !app.contentHits.cachetest["cachetest:old"])
+    check("indexing refreshes only its provider", other.replies.length === 1 && app.contentHits.othertest["othertest:hit"])
+    app.askProvider(source, "needle", app.searchSeq)
+    app.setFilter("changed")
+    source.replies[2]({ paths: ["cachetest:late"] })
+    check("typing rejects in-flight cache search results", Object.keys(app.contentHits).length === 0)
+    app.providers = []
+    app.setFilter("")
+  }
   function check(name, ok, detail) {
     test.results.push({ name: name, ok: !!ok, detail: detail || "" })
   }
@@ -359,6 +381,7 @@ ShellRoot {
     property bool loggingIn: false
     property bool filesRead: false
     property string account: "test"
+    property string cacheSession: ""
     property var env: ({})
     property int optionalLogins: 0
     property int destructiveLogins: 0
@@ -368,12 +391,24 @@ ShellRoot {
     function relogin() { destructiveLogins++ }
   }
   OneNote.Provider { id: oneNote; ms: oneNoteAccount }
+  Component { id: oneNoteFactory; OneNote.Provider {} }
   Microsoft.Account {
     id: scopeAccount
     scopes: "offline_access User.Read Notes.ReadWrite"
     optionalScopes: "Files.Read"
   }
   function oneNoteCases() {
+    var created = oneNoteFactory.createObject(test, {
+      host: { currentPath: "onenote:page" }, ms: oneNoteAccount
+    })
+    check("OneNote search waits for inventory during dynamic provider startup",
+          created && created.searchStatus("onenote") === "Preparing content search…")
+    created.onSections = [{ id: "section", notebookId: "book" }, { id: "other", notebookId: "other-book" }]
+    created.pages = []
+    created.searchInventoryReady = true
+    check("OneNote search scope follows the initialized inventory",
+          JSON.stringify(created.searchSections("book")) === '["section"]')
+    created.destroy()
     oneNote.onSections = [{ id: "section", name: "Section", notebookId: "book", notebook: "Book" }]
     oneNote.pages = [{ id: "page", sectionId: "section", title: "Note" }]
     oneNote.rebuild()
@@ -415,6 +450,7 @@ ShellRoot {
       if (test.localFinished && test.watchFinished && test.editorFinished && test.processes === 0 && (!test.appHost || test.appHost.providersLoaded)) {
         if (test.appHost) {
           test.check("host reads framed configuration at startup", test.appHost.configReady && test.appHost.providers.length === 0)
+          test.hostSearchCases()
         }
         test.completionChecks.forEach(function(check) { check() })
         test.check("runner releases every process", runner.active === 0)

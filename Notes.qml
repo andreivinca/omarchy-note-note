@@ -404,9 +404,8 @@ Item {
       root.queueList[i].cancelOwner(owner)
     }
   }
-  // Hidden: reads and polls stop, as they always have. Queued *writes* keep
-  // draining — a save this app already accepted is finished, or fails out
-  // loud, even if the window closed meanwhile (docs/business-requirements.md).
+  // Hidden: ordinary reads and polls stop. Writes keep draining, and explicit
+  // background work such as the search index can continue in the same lane.
   function pauseQueues(paused) {
     for (var i = 0; i < root.queueList.length; i++) {
       root.queueList[i].paused = paused
@@ -517,6 +516,9 @@ Item {
     }
     root.applyProviderSettings(p)
     p.updated.connect(function() { root.rebuildRows() })
+    if (p.searchChanged) {
+      p.searchChanged.connect(function() { root.invalidateContentSearch(p) })
+    }
     p.statusRequested.connect(function(t) { root.showStatus(t) })
     p.noticeRequested.connect(function(title, text, code, actions) { editor.showNotice(title, text, code, actions) })
     p.noticeCleared.connect(function() { editor.clearNotice() })
@@ -730,6 +732,10 @@ Item {
   function retireProvider(provider) {
     root.cancelQueuedFor(provider)
     root.providers = root.providers.filter(function(p) { return p !== provider })
+    var waiting = Object.assign({}, root.searchWaiting)
+    delete waiting[provider.id]
+    root.searchWaiting = waiting
+    delete root.invalidSearchProviders[provider.id]
     provider.destroy()
   }
   function reorderProviders() {
@@ -972,6 +978,10 @@ Item {
   // searchBusy recompute.
   property var searchWaiting: ({})
   property int searchSeq: 0
+  property int searchRevision: 0
+  property int searchRequestSeq: 0
+  property var searchRequests: ({})
+  property var invalidSearchProviders: ({})
   // Whether note bodies are searched at all. When false the providers are
   // simply never asked — the decision is the host's alone, made by calling
   // or not calling. True until a setting owns it.
@@ -984,6 +994,47 @@ Item {
   readonly property bool searchBusy: root.filterText.length >= 2 && root.searchContent
     && (contentSearchTimer.running || Object.keys(root.searchWaiting).length > 0)
   Timer { id: contentSearchTimer; interval: 350; onTriggered: root.runContentSearch() }
+  Timer { id: cachedSearchTimer; interval: 300; onTriggered: root.refreshCachedSearch() }
+
+  function invalidateContentSearch(provider) {
+    root.searchRevision++
+    if (root.filterText.length < 2 || !root.searchContent || contentSearchTimer.running) {
+      return
+    }
+    var pending = Object.assign({}, root.invalidSearchProviders)
+    pending[provider.id] = provider
+    root.invalidSearchProviders = pending
+    // Repeated indexing progress cannot keep postponing the same query.
+    if (!cachedSearchTimer.running) {
+      cachedSearchTimer.start()
+    }
+  }
+
+  function refreshCachedSearch() {
+    var pending = root.invalidSearchProviders
+    root.invalidSearchProviders = ({})
+    if (root.filterText.length < 2 || !root.searchContent || contentSearchTimer.running) {
+      return
+    }
+    var waiting = Object.assign({}, root.searchWaiting)
+    for (var id in pending) {
+      if (root.providers.indexOf(pending[id]) >= 0) {
+        waiting[id] = true
+      }
+    }
+    root.searchWaiting = waiting
+    for (var key in pending) {
+      if (root.providers.indexOf(pending[key]) >= 0) {
+        askProvider(pending[key], root.filterText, root.searchSeq)
+      }
+    }
+  }
+
+  function activeSearchStatus() {
+    var provider = root.activeProvider(), key = root.activeKey()
+    return provider && typeof provider.searchStatus === "function"
+      ? provider.searchStatus(key.substring(key.indexOf("/") + 1)) : ""
+  }
   function runContentSearch() {
     // One character is not a content query: title matching already answers
     // it, and a body holding some letter is every body there is.
@@ -1010,8 +1061,11 @@ Item {
     if (typeof p.search !== "function") {
       return
     }
+    var request = ++root.searchRequestSeq
+    root.searchRequests[p.id] = request
     p.search(q, function(r) {
-      if (seq !== root.searchSeq || !root.filterText) {
+      if (seq !== root.searchSeq || root.searchRequests[p.id] !== request || !root.filterText
+          || root.providers.indexOf(p) < 0) {
         return
       }
       var waiting = {}
@@ -1185,6 +1239,8 @@ Item {
     root.searchSeq++
     root.contentHits = ({})
     root.searchWaiting = ({})
+    root.invalidSearchProviders = ({})
+    cachedSearchTimer.stop()
     if (text.length > 0) {
       contentSearchTimer.restart()
     } else {
@@ -1257,10 +1313,19 @@ Item {
     var lanes = []
     for (var q = 0; q < root.queueList.length; q++) {
       lanes.push({ key: root.queueList[q].domain, depth: root.queueList[q].depth,
+                   paused: root.queueList[q].paused,
                    cooling: root.queueList[q].cooling,
                    cooldown: Math.round(root.queueList[q].cooldownRemaining) })
     }
-    return JSON.stringify({ currentPath: root.currentPath, loadingPath: root.loadingPath, loadingNote: root.loadingNote,
+    var searches = {}
+    for (var i = 0; i < root.providers.length; i++) {
+      var provider = root.providers[i]
+      if (typeof provider.searchDiagnostics === "function") {
+        searches[provider.id] = provider.searchDiagnostics()
+      }
+    }
+    return JSON.stringify({ opened: root.opened, search: searches,
+                            currentPath: root.currentPath, loadingPath: root.loadingPath, loadingNote: root.loadingNote,
                             status: root.statusText, readOnly: editor.readOnly, words: editor.wordCount, notice: editor.noticeTitle, viewFocused: editor.viewHasFocus,
                             dirty: root.dirty, saving: root.saveInFlight(root.currentPath),
                             defaultOwed: root.defaultOwed,
@@ -1807,6 +1872,7 @@ Item {
           treeCursor: root.treeCursor
           filtering: root.filterText.length > 0
           searchBusy: root.searchBusy
+          searchStatus: root.searchRevision >= 0 && root.revision >= 0 ? root.activeSearchStatus() : ""
           sections: root.tabs
           activeKey: root.revision < 0 ? "" : root.activeKey()
           canCreateNotebook: root.revision < 0 ? false : root.canCreateNotebook()
