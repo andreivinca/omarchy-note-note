@@ -283,9 +283,8 @@ class Converter:
         holder.children = inline_nodes
         text = self.inline(holder).strip()
         marker = ("%d. " % n) if kind == "ol" else "- "
-        if text.startswith("[ ] ") or text.startswith("[x] "):
-            marker = "- "
-        elif inline_nodes and inline_nodes[0].tag is None:
+        checkbox = text.startswith(("[ ] ", "[x] "))
+        if not checkbox and inline_nodes and inline_nodes[0].tag is None:
             text = escape_line_start(text)
         self.lines.append("  " * depth + marker + text.replace("\n", " "))
         for s in sublists:
@@ -339,44 +338,6 @@ def _find_all(node, tag):
     return found
 
 
-# The data-id we put on every text run we write, so a later save can find the
-# div again. OneNote keeps data-id through an update; the generated id (which
-# is the only thing a replace can target) changes on every write, so it has to
-# be read back each time.
-TEXT_RUN_ID = "nn-text-%d"
-
-
-def page_structure(html):
-    """The page's top-level runs, as a save needs to see them.
-
-        [{"kind": "text",  "id": "div:{…}", "dataId": "nn-text-0"},
-         {"kind": "image", "id": "img:{…}", "src": "https://…/resources/…"}]
-
-    Anything else at the top level (a stray paragraph OneNote or another
-    client added) is reported as a text run with no data-id, which is enough
-    for the save to notice the page is not ours to patch piecemeal.
-    """
-    tb = TreeBuilder()
-    tb.feed(html)
-    bodies = _find_all(tb.root, "body") or [tb.root]
-    outer = None
-    for body in bodies:
-        for c in body.children:
-            if c.tag == "div":
-                outer = c
-                break
-    if outer is None:
-        return []
-    runs = []
-    for c in outer.children:
-        if c.tag == "img":
-            runs.append({"kind": "image", "id": c.attrs.get("id", ""),
-                         "src": c.attrs.get("src") or c.attrs.get("data-fullres-src", "")})
-        elif c.tag is None and not (c.text or "").strip():
-            continue
-        else:
-            runs.append({"kind": "text", "id": c.attrs.get("id", ""), "dataId": c.attrs.get("data-id", "")})
-    return runs
 
 
 def html_to_markdown(html, image_path_for=None):
@@ -562,7 +523,7 @@ def _render_list(t, out, depth, image_ref=None):
     ordered = t.get("attrs", {}).get("ordered", False)
     # A top-level list made only of checkboxes is how OneNote's own to-do
     # paragraphs come back from the editor; write them as such.
-    if depth == 0 and items and all(i["type"] == "task_list_item" for i in items) and not any(_has_sublist(i) for i in items):
+    if depth == 0 and not ordered and items and all(i["type"] == "task_list_item" for i in items) and not any(_has_sublist(i) for i in items):
         for i in items:
             tag = "to-do:completed" if i.get("attrs", {}).get("checked") else "to-do"
             out.append(_p(tag, _item_inline(i, image_ref)))
@@ -783,11 +744,9 @@ def markdown_to_runs(md, image_ref=None):
         [{"kind": "text", "html": "<p>…</p><p>…</p>"},
          {"kind": "image", "html": "<img …/>", "url": "file:///…"}]
 
-    Text runs are what a save rewrites; image runs are what it leaves alone.
-    Keeping them apart is the whole reason a page with images can be edited:
-    OneNote cannot delete or replace a paragraph, only a whole div, so the
-    text between two images is written as one div that can be replaced on its
-    own — with the images beside it never touched (docs/engine-notes.md).
+    The element planner updates individual changed blocks and images.
+    Runs also group text when creating a page. Unchanged images stay outside
+    every replacement; sending one back would copy its resource.
     """
     blocks = []
     _render_blocks(hoist_images(_parse(md or "")), blocks, 0, image_ref)

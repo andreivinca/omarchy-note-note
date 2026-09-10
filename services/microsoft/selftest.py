@@ -227,6 +227,40 @@ def test_other_statuses_reach_the_caller(verbose):
     return failures
 
 
+def test_retry_policy_and_cooldown_are_independent(verbose):
+    failures = 0
+    # A read can replay in place. A write that needs reconciliation must
+    # leave this process, even when Retry-After would permit a short sleep.
+    endpoint = Endpoint(graph=[(503, b"busy", headers(Retry_After="0")), (200, b"{}", headers())])
+    with scripted(endpoint):
+        status, _ = msgraph.http("GET", ME)
+    failures += check("a safe read replays", status == 200 and len(endpoint.calls) == 2)
+
+    for policy in (msgraph.RetryPolicy.NEVER, msgraph.RetryPolicy.RESTART):
+        key = "test-policy-" + policy.value
+        endpoint = Endpoint(graph=[(503, b"busy", headers(Retry_After="999"))])
+        restarted = False
+        status = None
+        with scripted(endpoint), patch.object(msgraph, "RATE_KEY", key):
+            try:
+                status, _ = msgraph.http("PATCH", ME, {}, retry_policy=policy)
+            except ratelimit.Throttled:
+                restarted = True
+        failures += check(policy.value + " records the account cooldown", ratelimit.cooldown_remaining(key) > 990)
+        failures += check(policy.value + " sends one request", len(endpoint.calls) == 1)
+        failures += check(policy.value + " controls job restart", restarted == (policy is msgraph.RetryPolicy.RESTART))
+        if policy is msgraph.RetryPolicy.NEVER:
+            failures += check("an uncertain write reaches the caller", status == 503)
+
+    # 429 is an explicit refusal, so even a create can retry that rejection.
+    endpoint = Endpoint(graph=[(429, b"busy", headers(Retry_After="0")), (201, b"{}", headers())])
+    with scripted(endpoint):
+        status, _ = msgraph.http("POST", ME, {}, retry_policy=msgraph.RetryPolicy.NEVER)
+    failures += check("a rejected create may retry", status == 201 and len(endpoint.calls) == 2)
+    print("retry permission is distinct from account cooldown")
+    return failures
+
+
 def test_revoked_grant_refreshes_once(verbose):
     """§3b: a 401 on a token this disk still calls valid forces one refresh
     and repeats the request once, with the new token."""
@@ -414,6 +448,7 @@ def main():
         total += test_throttled_statuses(args.verbose)
         total += test_transient_statuses(args.verbose)
         total += test_other_statuses_reach_the_caller(args.verbose)
+        total += test_retry_policy_and_cooldown_are_independent(args.verbose)
         total += test_revoked_grant_refreshes_once(args.verbose)
         total += test_dead_grant_is_forgotten(args.verbose)
         total += test_ordinary_expiry_keeps_its_message(args.verbose)

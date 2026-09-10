@@ -2,6 +2,7 @@ import QtQuick
 import QtTest
 import "../ui" as Ui
 import "../services/markdown" as Markdown
+import "../services/notes" as Notes
 
 // Real keys and the real converter, in the transition runner's isolated
 // offscreen window. The optional desktop host check keeps this window shut.
@@ -34,6 +35,91 @@ Window {
     clipboard: clip
   }
   TestCase { id: keys; name: "editor keys"; when: false }
+
+  QtObject {
+    id: mergeProvider
+    property string name: "OneNote"
+    property var saves: []
+    function load(path, callback) {
+      callback({ title: "Groceries", body: "original\n" })
+    }
+    function save(path, title, body, callback, options) {
+      saves.push({ body: body, callback: callback, options: options })
+    }
+    function noteEdited(path) {}
+  }
+  Notes.NoteSession {
+    id: mergeSession
+    editor: editor
+    providerFor: function(path) { return mergeProvider }
+    versionFor: function(path) { return "1" }
+    report: function(message) {}
+  }
+
+  function mergeSave() {
+    keys.tryVerify(function() { return mergeProvider.saves.length > 0 }, 3000)
+    require(mergeProvider.saves.length > 0, "conflict action did not request a save")
+    return mergeProvider.saves.shift()
+  }
+
+  function conflictControl(name) {
+    var control = keys.findChild(editor, name)
+    require(control !== null, "missing conflict control: " + name)
+    return control
+  }
+
+  function conflictPanel() {
+    var conflict = { id: "first", parts: [
+      { id: "body:0", field: "body", base: "original", local: "ours", remote: "theirs" }
+    ] }
+    mergeSession.selectPath("test:merge")
+    keys.tryVerify(function() { return !mergeSession.loadingNote }, 3000)
+    editor.restoreDocument({ title: "Groceries", body: "<p>ours</p>", base: "" })
+    mergeSession.onEdited()
+    mergeSession.flushSave()
+    mergeSave().callback({ error: "conflict", conflict: conflict })
+    keys.wait(50)
+    var panel = conflictControl("mergeConflict")
+    require(panel.conflict.id === "first", "editor opened the conflict without its data")
+    ;["base", "local", "remote"].forEach(function(side) {
+      var passage = conflictControl("conflict-body:0-" + side)
+      require(passage.text === conflict.parts[0][side] && passage.width > 0 && passage.height > 0,
+              side + " passage is not displayed")
+    })
+    require(!conflictControl("resolveConflict").enabled, "save enabled before making a choice")
+    keys.mouseClick(conflictControl("continueEditing"))
+    require(!editor.showingNotice && !editor.readOnly && mergeSession.dirty && editor.plainText() === "ours",
+            "Continue editing did not return to the retained draft")
+
+    mergeSession.flushSave()
+    mergeSave().callback({ error: "conflict", conflict: conflict })
+    keys.wait(50)
+    keys.mouseClick(conflictControl("retryMerge"))
+    var retry = mergeSave()
+    require(!retry.options.resolution && retry.body.trim() === "ours", "retry used a resolution or lost the draft")
+    retry.callback({ error: "conflict", conflict: conflict })
+    keys.wait(50)
+    keys.mouseClick(conflictControl("choose-body:0-both"))
+    require(conflictControl("resolveConflict").enabled, "choosing a version did not enable save")
+
+    var latest = { id: "latest", parts: [
+      { id: "body:0", field: "body", base: "original", local: "ours", remote: "latest remote" }
+    ] }
+    mergeSession.showConflict("test:merge", latest)
+    keys.wait(50)
+    require(conflictControl("mergeConflict").conflict.id === "latest" &&
+            conflictControl("conflict-body:0-remote").text === "latest remote" &&
+            !conflictControl("resolveConflict").enabled,
+            "reopening the same view retained stale content or choices")
+    keys.mouseClick(conflictControl("choose-body:0-both"))
+    keys.mouseClick(conflictControl("resolveConflict"))
+    var resolved = mergeSave()
+    require(resolved.options.resolution.id === "latest" &&
+            resolved.options.resolution.choices["body:0"] === "both", "save did not submit the displayed resolution")
+    resolved.callback({})
+    require(!editor.showingNotice && !editor.readOnly && !mergeSession.dirty && !mergeSession.busy,
+            "resolved save did not release the conflict")
+  }
 
   function require(ok, message) {
     if (!ok) {
@@ -498,6 +584,12 @@ Window {
       } catch (error) {
         test.checked(deletions[d].name, false, error.message)
       }
+    }
+    try {
+      conflictPanel()
+      test.checked("conflict passages and all actions work through the real editor", true, "")
+    } catch (error) {
+      test.checked("conflict passages and all actions work through the real editor", false, error.message)
     }
     test.finished()
   }

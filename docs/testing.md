@@ -1,6 +1,6 @@
 # Testing and development
 
-The aggregate runner exercises all ten suites without real accounts or note
+The aggregate runner exercises all twelve suites without real accounts or note
 contents:
 
 ```bash
@@ -120,8 +120,22 @@ Delete checks cover empty headings and blank fillers before ordered, bullet
 and task lists, a single-item list, numbered starts and nested code. They
 compare the full document HTML through repeated keyboard and API Undo/Redo,
 including ordinary paragraph joins that trigger list-margin normalization.
+Conflict-panel checks use the real editor loader and click every action,
+including replacing an already-open conflict with fresh data.
 Process cases cover startup failure, stdin delivery, malformed output, nonzero
 exit, cancellation, deadlines and exactly one callback.
+
+`providers/onenote/merge_selftest.py` applies PATCH commands to a simulated
+element tree with generated IDs. A late phone checkbox update must still find
+its original item after an app save. Checks also cover repeated labels,
+mixed checkbox/prose edits, bare blank lines, preserved inline formatting,
+individual and nested list items, table-cell paragraphs, empty-page appends,
+inserts and deletions, missing targets, rejected updates, and invalid
+simulations. The simulated server rejects a whole-page replacement.
+Shared-library tests enumerate check-state combinations with simultaneous
+prose edits and insertions and exercise alignment with provider-neutral
+records. Transition tests deliver OneNote loads out of order and verify
+the displayed document, editing baseline, cached result, and captured save.
 
 ## Testing the editor's document format
 
@@ -183,6 +197,8 @@ network — every request is answered by a stub:
 python3 providers/local/selftest.py       # the listing's order, and statx(2)
 python3 providers/notion/selftest.py      # a page is never emptied to save it
 python3 providers/onenote/selftest.py     # which writes may be run again
+python3 lib/notemerge/selftest.py         # shared merging and recovery storage
+python3 providers/onenote/merge_selftest.py # concurrent edits, conflicts and OneNote saves
 python3 services/microsoft/selftest.py    # 5xx and 401 classification
 ```
 
@@ -244,25 +260,32 @@ and compare.
 
 ## Testing the OneNote save planner
 
-`plan_commands` decides what a save touches, and must never touch an
-unchanged image. It is pure — plan against a fake structure, no network:
+`onenote_patch.plan` decides what a save touches and preserves unchanged
+element identities. It is pure: plan against synthetic HTML, with no network:
 
 ```bash
 python3 - <<'EOF'
-import sys; sys.path.insert(0, "providers/onenote"); import onenote
-page = [{"kind": "text", "id": "div:{a}"},
-        {"kind": "image", "id": "img:{b}", "src": "https://…/resources/AAA/$value"}]
-note = [{"kind": "text", "html": "<p>edited</p>"},
-        {"kind": "image", "html": "…", "ref": "https://…/resources/AAA/$value"}]
-for c in onenote.plan_commands(note, page):
-    print(c["action"], c["target"], c["content"][:60])
+import sys
+sys.path[:0] = ["lib", "providers/onenote"]
+from onenote_patch import plan
+page = '<body><div><p id="p:text">Original</p><img id="img:photo" src="resource"/></div></body>'
+desired = '<p>Edited</p><img src="resource"/>'
+for command in plan(page, desired).commands:
+    print(command["action"], command["target"], command["content"])
 EOF
 ```
 
-The invariants worth checking after any change: a text-only edit produces only
-div replaces; a kept image's id appears in **no** command; a reordered image
-or a foreign page shape returns `None` (the caller then rebuilds with every
-image uploaded, never referenced).
+The invariants worth checking after any change: only changed elements are
+replaced, an unchanged image appears in no command, list edits retain their
+unchanged items, and the simulated document preserves both content and IDs.
+An unsupported edit or failed validation keeps the draft and sends no write.
+Changed images carry upload bytes and unique resource-correlation markers.
+The retry regressions run through the real HTTP retry loop with scripted
+503 responses: uncertain inserts/uploads are sent once, replacement retries
+fetch and merge again, and cooldown recording never grants replay permission.
+Checkbox tests preserve native inline styling in both bulleted and numbered
+lists. The shared journal tests reject a second view's attempt to replace an
+unresolved draft, including after a partial write or process restart.
 
 ## Testing against real accounts
 
@@ -272,7 +295,8 @@ The scripts run standalone with the same environment the provider uses:
 export NOTE_NOTE_MS_TOKEN=$HOME/.local/state/omarchy/note-note-ms-onenote.json
 python3 providers/onenote/onenote.py list --cached
 python3 providers/onenote/onenote.py page "<id>"
-echo '{"title":"t","originalTitle":"t","body":"x"}' | python3 providers/onenote/onenote.py update "<id>" -
+# Use the exact "view" returned by page; it identifies the editing baseline.
+echo '{"title":"t","view":"<returned-view>","body":"x"}' | python3 providers/onenote/onenote.py update "<id>" -
 ```
 
 Rules when a real account is involved:

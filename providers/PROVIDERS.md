@@ -81,7 +81,13 @@ them.
 ## Functions
 
 - `refresh()` — (re)load; emit `changed` when `sections` are ready.
-- `load(path, cb)` → `cb({ title, body, editable, error, base })`
+- `load(path, cb)` → `cb({ title, body, editable, error, base, view, recovered, conflict })`
+  `view` (optional) is an opaque editing baseline. The host accepts it with
+  the displayed document and passes it back in `save` options. A provider
+  must not infer the active editor's baseline from its body cache or from a
+  load callback that the host may have discarded.
+  `recovered: true` means this is an unsaved recovery draft. The host keeps
+  it marked unsaved and shows the common conflict view if `conflict` exists.
   May return a handle `{ cancel() }` — `services.requests`' `enqueue()` hands
   you one. The host cancels the load of a note the user has already stepped
   past (Ctrl+↑/↓ through a slow provider), so the note they stopped on is not
@@ -93,7 +99,16 @@ them.
   name their images by a relative path (the local provider's `.assets/`):
   the editor resolves the links against it and the converter measures the
   files through it. Leave it out when every image is an absolute file:// URL.
-- `save(path, title, body, cb)` → `cb({ error, warning })`
+- `save(path, title, body, cb, options)` → `cb({ error, warning, conflict })`
+  `options` is optional; `view` identifies the captured document's baseline,
+  and `resolution` carries explicit choices from the conflict view.
+  A merge-aware provider returns `{error, conflict}` when a
+  save needs review and must validate the choices against a fresh remote read.
+  The shared [Python merge library](../lib/notemerge/README.md) implements the
+  algorithm, conflict protocol, editing baselines and private recovery storage.
+  Providers own format conversion, account identity and conditional writes.
+  The OneNote provider is the first integration. Existing providers can ignore
+  `options` and retain their four-argument function.
   Call `cb` exactly once, always. A save superseded by a newer one answers
   `{}`: the newer save contains this one's intent and answers for it. A save
   you could not send at all — your lane emptied by a sign-out, your provider
@@ -308,6 +323,18 @@ script printed, and the lane reads one field of it:
 | `"throttled"` | park **the whole lane** until `retryAfter` seconds have passed (10s → 20s → 40s → 60s when the field is absent), then re-run this job at the head of the queue. Retried for as long as the app is open |
 | `"transient"` | re-run **this job only**, after 2.5s, 5s, 10s; the third answer is delivered whatever it says |
 | anything else | delivered as it stands — including a plain `{ "error": … }`, which is what every script answered before this existed |
+
+### Microsoft retry policies
+
+Microsoft adapters pass a `msgraph.RetryPolicy` through `graph()`, `http()`,
+or `request()`: `REPLAY` permits repeating a safe read, `RESTART` returns a
+retry signal so the job fetches and merges again, and `NEVER` returns an
+uncertain response without retrying. Reads default to `REPLAY`, other methods
+to `RESTART`; creates, uploads, and partial-write handlers explicitly use
+`NEVER`. A 503 records the account cooldown under every policy. A 429 is an
+explicit rejection and can be retried under any policy. Do not turn an
+uncertain mutation into a `throttled` or `transient` job result unless a new
+run can reconcile its outcome before writing again.
 
 ### Rate keys
 

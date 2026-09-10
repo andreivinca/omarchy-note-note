@@ -402,11 +402,28 @@ class is set: extended property `String 0x001A` = `IPM.StickyNote`.
 **Editing a page that has images.** All of this was measured; the
 documentation disagrees with the service in three places.
 
-- There is **no `delete` action** ("The PATCH action $Delete not supported"),
-  and **`replace` on a `p` is not supported either** ("The PATCH target P for
-  action replace is not supported") — whatever the docs' table says. The only
-  things that can be rewritten are the page `body`, a **div inside a div**, and
-  an `img`.
+- There is **no `delete` action** ("The PATCH action $Delete not supported").
+  Replace a removed element with an empty div, which OneNote drops.
+- **Paragraph replacement by generated ID works.** Verified with HTTP 204
+  while correcting two checklist items; the earlier measurement that returned
+  "The PATCH target P for action replace is not supported" is no longer a
+  reason to replace the whole text section. Use the current generated ID,
+  as in Microsoft's [to-do update example](https://learn.microsoft.com/en-us/graph/onenote-update-page#update-a-to-do-item).
+  If the API rejects an item update, preserve the draft and report the error;
+  never retry that rejection as a whole-page replacement.
+- **A correct text merge is not enough for phone sync.** Replacing a whole
+  text section removes unchanged item identities. A phone can later sync an
+  edit to an old item and OneNote can append it as another item. The observed
+  duplicate was already present in the next Graph read, before our text merge.
+  `onenote_patch.py` uses the shared `notemerge.align` library to plan changes
+  to individual paragraphs, headings, list items and table-cell paragraphs,
+  leaving unchanged elements untouched. Checkbox state edits
+  retain the original item's inline HTML and change the checkbox carrier's
+  `data-tag`, including spans inside bulleted or numbered lists. A simulated
+  application of the commands must match the merged document and preserve
+  unchanged element IDs and attributes before writing. Bare blank lines do
+  not disable granular updates. An unsupported edit or failed simulation
+  preserves the draft and reports an error; there is no page rebuild fallback.
 - A div can only be replaced by its **generated id**, never by its `data-id`
   (that one works for `insert`/`append`). Generated ids change on every write,
   so they must be read back with `?includeIDs=true` before each patch.
@@ -417,13 +434,17 @@ documentation disagrees with the service in three places.
   copy taken of a resource the service has not materialised yet is **empty
   forever** — its `$value` and `data-fullres-src` both serve 0 bytes, still
   empty 35 minutes later. Measured, twice. So a save must never mention an
-  unchanged image at all: text runs are replaced where they stand, a deleted
+  unchanged image at all: individual text elements are replaced where they stand, a deleted
   image is replaced with `<div></div>` (which OneNote then drops), a pasted
   one is uploaded as a part — and an image that did not change appears in no
-  command (`plan_commands` in onenote.py).
+  command (`onenote_patch.py`). Changed images are uploaded from their local
+  bytes. Each upload carries a unique `data-id`, so the returned resource is
+  associated with its local file independently of command or document order.
 - A `replace` may carry **several sibling elements** in one content string
   (`<div>…</div><img …/><div>…</div>`), which is what lets one command rewrite
   the whole gap between two images.
+- An uncertain `insert` or `append` must not automatically retry, even without
+  image parts: the first request may have inserted the item already.
 - A freshly written resource serves **200 with an empty body** until it
   materialises; never cache such a response (it used to poison the page — the
   cache then served the empty file forever).

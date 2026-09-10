@@ -94,7 +94,8 @@ def cmd_create():
     # class says so; PR_MESSAGE_CLASS is 0x001A.
     data = {"subject": "", "body": {"contentType": "text", "content": ""},
             "singleValueExtendedProperties": [{"id": "String 0x001A", "value": "IPM.StickyNote"}]}
-    status, res = graph("POST", "/me/mailFolders/notes/messages", data)
+    status, res = graph("POST", "/me/mailFolders/notes/messages", data,
+                        retry_policy=msgraph.RetryPolicy.NEVER)
     if status not in (200, 201) or "id" not in res:
         fail((res.get("error") or {}).get("message", "Graph error %s" % status) if isinstance(res.get("error"), dict)
              else str(res.get("error", status)))

@@ -6,7 +6,7 @@
 |---|---|
 | Host | `omarchy-shell` — one long-running [Quickshell](https://quickshell.org) (Qt 6 / QML) process; the plugin is loaded into it |
 | Language | QML + JavaScript (ES5-era engine, see [engine-notes](engine-notes.md)), plus Python 3 for backends |
-| Dependencies | **standard library only**; no `pip`, no system packages. Markdown parsing uses a *vendored* mistune (BSD-3, `services/markdown/mistune/`). One exception, and it is optional: the native text inspector (`cpp/`) is compiled locally against the system Qt (`sh cpp/build.sh`) — the editor falls back to script when it is absent, so nothing ever *requires* a build |
+| Dependencies | No runtime `pip` installation. Markdown parsing bundles mistune (BSD-3, `services/markdown/mistune/`); shared note merging bundles merge3 (GPL-2.0-or-later, `lib/notemerge/_vendor/merge3/`). The optional native text inspector (`cpp/`) is compiled locally against system Qt (`sh cpp/build.sh`); the editor has a script fallback |
 | External binaries | `python3`, `sh`, `rm`, `mkdir`, `inotifywait`, `wl-copy`, `wl-paste`, `xdg-open`; ImageMagick optional |
 | Privileges | none — no sudo, no pkexec, no services, no config files of other apps |
 | Sandbox | none: an Omarchy plugin runs unsandboxed inside the shell. Behave accordingly |
@@ -114,6 +114,7 @@ people write against: change it additively, never silently.
 | Microsoft tokens | `~/.local/state/omarchy/note-note-ms-<provider>.json`, 0600, one per provider |
 | Notion secret | `~/.local/state/omarchy/note-note-notion.json`, 0600 |
 | Caches | `~/.cache/omarchy/note-note-{sticky,onenote,notion}.json`, images in `note-note-onenote-img/` (0700, files 0600) |
+| Merge recovery | `~/.local/state/omarchy/note-note-merges/<identity-hash>/state.json` and `lock` (0700 directory, 0600 files); separate provider/account/document identities |
 | Rate state | `~/.cache/omarchy/note-note-rate/<key>.json` + `<key>.lock` (0700, files 0600); override with `NOTE_NOTE_RATE_DIR` |
 
 Nothing is written outside these paths, and nothing at all is written to a
@@ -130,6 +131,12 @@ shared temp directory (see [security.md](security.md)).
   must do the cheapest possible check: Sticky Notes one listing request;
   OneNote the open page and that page's section only, every third tick, plus a
   whole-account listing every fifteenth; Notion one search, every third tick.
+- OneNote also fetches page content before each save. The shared Python
+  `notemerge` library merges against the editor's saved baseline and stages a
+  private recovery draft before that fetch. Conflict choices are revalidated
+  against another fetch. The existing request lane paces these additional
+  reads; ordinary successful saves do not reload the editor or clear its undo
+  history. Merged remote changes reload only when no newer local edits remain.
 - Expensive listings are cached with an age (OneNote 10 min, Notion 5 min) and
   only bypassed by an explicit *Refresh* row. A OneNote re-listing diffs each
   section's `lastModifiedDateTime` and fetches pages only where it moved: one

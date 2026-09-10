@@ -10,9 +10,11 @@ import sys
 
 ROOT = Path(__file__).resolve().parents[1]
 SUITES = [
+    "lib/notemerge/selftest.py",
     "providers/local/selftest.py",
     "providers/notion/selftest.py",
     "providers/onenote/selftest.py",
+    "providers/onenote/merge_selftest.py",
     "services/microsoft/selftest.py",
     "lib/ratelimit_selftest.py",
     "services/requests/selftest.py",

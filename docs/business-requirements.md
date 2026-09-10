@@ -32,7 +32,8 @@ community marketplace at <https://omarchyplugins.com>.
 4. **One list for every source.** Local, Sticky Notes, OneNote, Notion — same
    sidebar, same editor, same shortcuts.
 5. **Online notes stay online.** Remote notes are read and written through
-   their API; nothing is mirrored to disk beyond a small cache.
+   their API. On-demand caches and private merge/recovery snapshots support
+   editing; the app does not mirror entire remote notebooks.
 6. **Extensible by other people.** A provider is a folder with a
    `Provider.qml`; a `git clone` into the providers directory is an install.
 7. **Honest about limits.** When something cannot be represented (an image, a
@@ -41,11 +42,15 @@ community marketplace at <https://omarchyplugins.com>.
 
 ## Non-goals
 
-- **Not a sync engine.** No offline queue, no conflict resolution, no merge.
-  If a save fails, the user is told; the note is not queued for later. The one
-  thing that is promised: a save the app has already accepted is finished — or
-  fails out loud — even if the window closes meanwhile. That lives in memory,
-  for this session only; quitting the shell ends it.
+- **Not an offline sync engine.** A save the app accepts finishes or fails
+  out loud, even if the window closes meanwhile. OneNote fetches the current
+  page before saving and uses the shared Python three-way merge library.
+  Overlapping edits pause saving for review, and its staged drafts survive
+  restarting the shell. Other providers can opt into the same library.
+  A draft is staged when its Python save job starts; typing still waiting
+  for autosave or the request queue remains in memory. There is no background
+  replay of offline notebooks. See [shared merging](../lib/notemerge/README.md)
+  for recovery and concurrency limits.
 - **Not an Obsidian/Notion replacement.** No backlinks, graph view, tags,
   databases, templates or plugins-inside-the-plugin.
 - **Not a rich-text word processor.** Fonts, colours, text size and

@@ -1,5 +1,13 @@
 # Third-party components
 
+- **merge3** 0.0.16 — `lib/notemerge/_vendor/merge3/` — Copyright (C)
+  2005–2010 Canonical Ltd; Copyright (C) 2021–2023 Jelmer Vernooĳ.
+  GPL-2.0-or-later (see the bundled `COPYING`). Vendored unmodified from
+  [the PyPI source release](https://pypi.org/project/merge3/0.0.16/), SHA-256
+  `0852de4381cb46be5ef4ed49e3ac20c5a4a0cd46a8ff4bbb870bc27aab543306`.
+  Used by the shared Python note-merge library. This component carries its
+  own GPL terms; the project's MIT license does not replace them.
+
 - **mistune** 3.3.4 — `services/markdown/mistune/` — Copyright (c) 2014, Hsiaoming Yang,
   BSD-3-Clause (see `services/markdown/mistune/LICENSE`). Vendored unmodified;
   used to parse Markdown into an AST that the providers render into OneNote

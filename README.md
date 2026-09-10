@@ -4,6 +4,10 @@ A notes sidebar for the Omarchy shell: notebooks on the left, the note on
 the right, always editable and autosaved. Local Markdown notes, your
 Microsoft Sticky Notes, OneNote and Notion pages all live in the same list.
 
+OneNote saves fetch the current page and merge independent edits made on
+other devices. Conflicts pause saving for review, with a private recovery
+draft kept on this device. See [merge behavior and limits](lib/notemerge/README.md).
+
 ![Note Note showing a OneNote checklist, with local notebooks, Sticky Notes and the OneNote tree down the left](preview.png)
 
 **[Install](#install)** · **[Update](#update)** · **[Shortcut](#shortcut)** ·
@@ -18,9 +22,12 @@ omarchy plugin enable io.github.andreivinca.note-note
 ```
 
 Plugins land disabled so you can read the code first. It's QML plus small
-Python scripts (standard library only); it talks to Microsoft Graph only
+Python scripts with bundled dependencies; it talks to Microsoft Graph only
 after you sign in, and like every Omarchy plugin it runs unsandboxed inside
 your shell.
+
+Project code is MIT-licensed; bundled components retain their own licenses,
+including GPL-2.0-or-later for `merge3`. See [third-party components](NOTICE.md).
 
 ## Update
 

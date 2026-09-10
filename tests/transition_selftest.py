@@ -49,6 +49,13 @@ def main():
         try:
             proc = subprocess.run(["qs", "-p", str(work / "shell.qml"), "--no-color"],
                                   env=env, capture_output=True, text=True, timeout=30)
+        except subprocess.TimeoutExpired as error:
+            print("FAILED:", error)
+            for captured in (error.stdout, error.stderr):
+                if captured:
+                    text = captured.decode(errors="replace") if isinstance(captured, bytes) else captured
+                    print(text[-8000:])
+            return 1
         except (OSError, subprocess.SubprocessError) as error:
             print("FAILED:", error)
             return 1

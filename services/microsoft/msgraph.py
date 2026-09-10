@@ -18,6 +18,7 @@ users only sign in to their account. An optional
 gives one provider a registration of the user's own instead.
 """
 import json, os, sys, time, urllib.request, urllib.parse, urllib.error
+from enum import Enum
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(HERE, "..", "..", "lib"))
@@ -107,7 +108,7 @@ def wait_asked_by(error):
     Graph's OneNote throttles usually carry no `Retry-After` at all, and a
     throttled account stays that way for tens of minutes — so a missing
     header on a 429 means a real cooldown, not a guess at a short one. A 503
-    is a blip and is worth one short retry in place.
+    defaults to a short wait; RetryPolicy determines whether to try again.
     """
     wait = ratelimit.retry_after_of(error.headers)
     if wait is not None:
@@ -115,8 +116,16 @@ def wait_asked_by(error):
     return ratelimit.SHORT_RETRY if error.code == 503 else ratelimit.DEFAULT_COOLDOWN
 
 
+class RetryPolicy(Enum):
+    """What may happen after a response leaves a request's outcome uncertain."""
+
+    REPLAY = "replay"       # Safe to send the identical request again (reads).
+    RESTART = "restart"     # Retry the job, including its fresh read and merge.
+    NEVER = "never"         # Return the failure; the caller retains recovery state.
+
+
 def http(method, url, data=None, headers=None, form=False, max_bytes=MAX_BODY,
-         transient_5xx=True):
+         retry_policy=None):
     """One Graph request, paced and retried.
 
     The retry loop is `ratelimit.attempt_loop`: short waits are slept here,
@@ -125,13 +134,9 @@ def http(method, url, data=None, headers=None, form=False, max_bytes=MAX_BODY,
     loop this replaced fell off its own end and returned None when all three
     attempts were throttled, which reached the caller as a TypeError.)
 
-    `transient_5xx` is the caller saying whether running this job twice is
-    the same as running it once. A 502 or a 504 is a gateway losing the
-    *answer*, not the far end refusing the request — the write may well have
-    landed — so "re-run it" is only safe for a request that is repeatable.
-    It is on by default because most requests here are reads or replaces;
-    the creates, the sign-in and anything carrying an upload turn it off, and
-    take the failure as it stands instead of risking a second copy.
+    Reads default to REPLAY; writes default to RESTART. Creates, uploads,
+    and callers handling partial writes use NEVER. An explicit 429 rejection
+    may be retried under any policy; a 503 leaves the outcome uncertain.
     """
     body = None
     hdrs = dict(headers or {})
@@ -143,7 +148,7 @@ def http(method, url, data=None, headers=None, form=False, max_bytes=MAX_BODY,
             body = json.dumps(data).encode()
             hdrs["Content-Type"] = "application/json"
     status, raw = request(method, url, body, hdrs, max_bytes=max_bytes,
-                          transient_5xx=transient_5xx)
+                          retry_policy=retry_policy)
     try:
         return status, json.loads(raw) if raw else {}
     except ValueError:
@@ -151,9 +156,14 @@ def http(method, url, data=None, headers=None, form=False, max_bytes=MAX_BODY,
 
 
 def request(method, url, body=None, headers=None, max_bytes=MAX_BODY,
-            timeout=30, transient_5xx=True):
+            timeout=30, retry_policy=None):
     """Shared bounded transport; response decoding belongs to the caller."""
+    if retry_policy is None:
+        retry_policy = RetryPolicy.REPLAY if method in ("GET", "HEAD") else RetryPolicy.RESTART
+    if not isinstance(retry_policy, RetryPolicy):
+        raise ValueError("retry_policy must be a RetryPolicy")
     req = urllib.request.Request(url, data=body, method=method, headers=headers or {})
+    rate_key = rate_key_for(url)
 
     def once():
         try:
@@ -165,14 +175,23 @@ def request(method, url, body=None, headers=None, max_bytes=MAX_BODY,
             with error:
                 raw = error.read(max_bytes + 1)[:max_bytes]
             if error.code in THROTTLED_STATUSES:
-                raise ratelimit.Retry(wait_asked_by(error))
-            if transient_5xx and error.code in TRANSIENT_STATUSES:
+                wait = wait_asked_by(error)
+                if error.code == 429 or retry_policy is RetryPolicy.REPLAY:
+                    raise ratelimit.Retry(wait)
+                # Recording the account cooldown does not authorize replay.
+                # NEVER must not raise Throttled: the host would interpret
+                # that exception as permission to run the job again.
+                if rate_key:
+                    ratelimit.report_throttle(rate_key, wait)
+                if retry_policy is RetryPolicy.RESTART:
+                    raise ratelimit.Throttled(wait)
+            if retry_policy is not RetryPolicy.NEVER and error.code in TRANSIENT_STATUSES:
                 fail_transient(error.code, raw)
             return error.code, raw
         except urllib.error.URLError as error:
             fail("network error: %s" % error.reason)
 
-    return ratelimit.attempt_loop(rate_key_for(url), RATE_WINDOWS, once)
+    return ratelimit.attempt_loop(rate_key, RATE_WINDOWS, once)
 
 
 # ---------------------------------------------------------------- tokens
@@ -244,11 +263,11 @@ def access_token(force=False):
     granted = grant.split() if isinstance(grant, str) else []
     optional = [scope for scope in OPTIONAL_SCOPES.split() if scope in granted and scope not in required]
 
-    def refresh(scopes, transient_5xx=True):
+    def refresh(scopes, retry_policy=None):
         status, result = http("POST", token_url(tenant), {
             "client_id": client_id, "grant_type": "refresh_token",
             "refresh_token": used, "scope": " ".join(scopes),
-        }, form=True, transient_5xx=transient_5xx)
+        }, form=True, retry_policy=retry_policy)
         if not isinstance(result, dict):
             result = {}
         if status == 200 and "access_token" in result:
@@ -261,7 +280,7 @@ def access_token(force=False):
         # Renew optional scopes only after consent. If they become unavailable,
         # retry the required grant before declaring the account unusable. An
         # optional-scope failure must never delete an otherwise valid sign-in.
-        status, res = refresh(required + optional, transient_5xx=False)
+        status, res = refresh(required + optional, retry_policy=RetryPolicy.NEVER)
         if status != 200 or "access_token" not in res:
             status, res = refresh(required)
     else:
@@ -285,7 +304,7 @@ def access_token(force=False):
     return tok["access_token"]
 
 
-def graph(method, path, data=None, extra_headers=None, max_bytes=MAX_BODY, transient_5xx=True):
+def graph(method, path, data=None, extra_headers=None, max_bytes=MAX_BODY, retry_policy=None):
     """One Graph request, signed — and signed again once if the 401 says the
     token was revoked rather than merely old. The second pass is the same one
     call with `force`, so there is no second copy of the request to keep in
@@ -295,7 +314,7 @@ def graph(method, path, data=None, extra_headers=None, max_bytes=MAX_BODY, trans
     def send(force):
         headers = {"Authorization": "Bearer " + access_token(force), "Accept": "application/json"}
         headers.update(extra_headers or {})
-        return http(method, url, data, headers, max_bytes=max_bytes, transient_5xx=transient_5xx)
+        return http(method, url, data, headers, max_bytes=max_bytes, retry_policy=retry_policy)
 
     status, res = send(False)
     if status == 401:
@@ -333,7 +352,7 @@ def cmd_login():
     # code off the screen, and a second run mints a different one — so a 5xx
     # anywhere here is delivered as it stands rather than as "transient".
     status, res = http("POST", "https://login.microsoftonline.com/%s/oauth2/v2.0/devicecode" % tenant,
-                       {"client_id": client_id, "scope": SCOPES}, form=True, transient_5xx=False)
+                       {"client_id": client_id, "scope": SCOPES}, form=True, retry_policy=RetryPolicy.NEVER)
     if status != 200 or "device_code" not in res:
         fail(res.get("error_description", res.get("error", "device code request failed")))
     out({"userCode": res["user_code"], "verificationUri": res["verification_uri"], "message": res.get("message", "")})
@@ -344,7 +363,7 @@ def cmd_login():
         status, tok = http("POST", token_url(tenant), {
             "client_id": client_id, "grant_type": "urn:ietf:params:oauth:grant-type:device_code",
             "device_code": res["device_code"],
-        }, form=True, transient_5xx=False)
+        }, form=True, retry_policy=RetryPolicy.NEVER)
         if status == 200 and "access_token" in tok:
             tok["expires_at"] = time.time() + int(tok.get("expires_in", 3600))
             tok["client_id"] = client_id
@@ -357,7 +376,7 @@ def cmd_login():
             # has this second completed.
             s, me = http("GET", GRAPH + "/me?$select=displayName,userPrincipalName,mail",
                          headers={"Authorization": "Bearer " + tok["access_token"],
-                                  "Accept": "application/json"}, transient_5xx=False)
+                                  "Accept": "application/json"}, retry_policy=RetryPolicy.NEVER)
             tok["account"] = (me.get("mail") or me.get("userPrincipalName") or me.get("displayName") or "") if s == 200 else ""
             save_private(TOKENS, tok)
             out({"ok": True, "account": tok["account"]})

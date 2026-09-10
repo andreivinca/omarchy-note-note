@@ -93,10 +93,9 @@ def read_payload(path):
 # ------------------------------------------------------- HTTP classification
 
 # A 429 or a 503 is the service telling this account to stop for a while, and
-# both carry a `Retry-After` saying how long. They become a `ratelimit.Retry`,
-# then a `Throttled`, then a "throttled" failure that parks the provider's
-# whole lane — which is right, because nothing else this provider asks for
-# will be answered either.
+# both may carry a `Retry-After` saying how long. The transport records the
+# cooldown independently of its retry policy: an uncertain mutation must
+# not become a Retry/Throttled signal that authorizes repeating the write.
 THROTTLED_STATUSES = (429, 503)
 # A 500, a 502 or a 504 is one request going wrong at the far end, not the
 # account being cut off, and it carries no `Retry-After` to park a lane on.

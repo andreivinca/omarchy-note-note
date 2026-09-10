@@ -91,7 +91,9 @@ Item {
 
   property var onSections: []    // [{ id, name, notebook, notebookId }]
   property var pages: []         // [{ id, sectionId, title, modified }]
-  property var bodies: ({})      // id -> { title, body, editable, originalTitle }
+  property var bodies: ({})      // id -> cached content and Python view token
+  property var loadVersions: ({})
+  property var saveVersions: ({})
   property var expanded: []      // notebook/section ids the user opened
   property var sections: []
   readonly property bool ready: ms && ms.signedIn && ms.hasScope("Notes.ReadWrite")
@@ -557,7 +559,11 @@ Item {
     target: root.ms
     function onUpdated() {
       if (!root.ms.signedIn) {
-        root.onSections = []; root.pages = []; root.bodies = ({}); clearProc.running = true
+        root.onSections = []
+        root.pages = []
+        root.bodies = ({})
+        root.loadVersions = ({})
+        clearProc.running = true
         // Nothing queued belongs to the account that just left. The rate
         // cooldown is deliberately *not* cleared: Microsoft throttles per
         // app+user, so signing back in does not lift it, and pretending
@@ -575,44 +581,38 @@ Item {
   // lane decides when it runs. The keys are what say which requests may not
   // overlap: a page's save, delete and load are three different intents about
   // one page, and only the first two must be ordered against each other.
+  function cacheBody(path, result) {
+    var id = root.idOf(path)
+    var page = root.pageAt(path)
+    var cached = Object.assign({}, result, { version: page ? page.modified || "" : "" })
+    root.bodies[id] = cached
+    return cached
+  }
+
   function load(path, cb) {
     var id = idOf(path), cached = root.bodies[id], pg = pageAt(path)
-    // A cached body is only good while the page's modified time matches.
-    if (cached && (!pg || cached.version === (pg.modified || ""))) {
-      cb({ title: cached.title, body: cached.body, editable: cached.editable, version: cached.version || "" })
+    if (cached && cached.view && (!pg || cached.version === (pg.modified || ""))) {
+      cb(cached)
       return
     }
     if (!root.rq) {
       cb({ error: "not ready" })
       return
     }
-    // dedupe: asking for the same page twice before it arrives is one read,
-    // and both askers are answered from it. The handle goes back to the
-    // caller: the host withdraws the load of a note the user has stepped
-    // past, so the one they stopped on is not stuck queueing behind it.
+    var version = (root.loadVersions[id] || 0) + 1
+    root.loadVersions[id] = version
+    var saveVersion = root.saveVersions[id] || 0
     return root.rq.enqueue({ key: "load:" + path, mode: "dedupe", priority: 0, owner: root, label: "page" },
       function(ctx) { root.runScript(["page", id], "", ctx) },
-      function(r) {
-        if (!r) {
-          if (cb) {
-            cb({ error: "not loaded — the window closed" })
-          }
+      function(result) {
+        if (!result || result.error) {
+          cb(result || { error: "not loaded — the window closed" })
           return
         }
-        if (r.error) {
-          if (cb) {
-            cb({ error: r.error })
-          }
-          return
+        if (root.loadVersions[id] === version && (root.saveVersions[id] || 0) === saveVersion) {
+          result = root.cacheBody(path, result)
         }
-        var page = root.pageAt(path), title = r.title || (page ? page.title : "")
-        var ver = page ? page.modified || "" : ""
-        var b = root.bodies
-        b[root.idOf(path)] = { title: title, body: r.body || "", editable: r.editable === true, originalTitle: title, version: ver }
-        root.bodies = b
-        if (cb) {
-          cb({ title: title, body: r.body || "", editable: r.editable === true, version: ver })
-        }
+        cb(result)
       })
   }
 
@@ -625,51 +625,45 @@ Item {
     return (info && info.cancelled) ? { error: "not saved — the request was cancelled" } : {}
   }
 
-  function save(path, title, body, cb) {
-    var id = idOf(path), b = root.bodies
-    var original = b[id] && b[id].originalTitle !== undefined ? b[id].originalTitle : title
-    b[id] = { title: title, body: body, editable: true, originalTitle: original, version: "" }
-    root.bodies = b
-    var pgs = root.pages.slice()
-    for (var i = 0; i < pgs.length; i++) {
-      if (pgs[i].id === id) {
-        pgs[i] = { id: id, sectionId: pgs[i].sectionId, title: title, modified: pgs[i].modified }
-      }
-    }
-    root.pages = pgs
-    rebuild()
+  function save(path, title, body, cb, options) {
+    var id = idOf(path)
     if (!root.rq) {
-      if (cb) {
-        cb({ error: "not ready" })
-      }
+      cb({ error: "not ready" })
       return
     }
-    // replace: a newer save of one page strictly contains the older one's
-    // intent, so a queued one is dropped rather than sent. flush: a save the
-    // app has accepted is finished even if the window closes over it.
-    var payload = JSON.stringify({ title: title, originalTitle: original, body: body })
+    // The session captures this token with the displayed document. Provider
+    // cache changes and discarded load callbacks cannot change a save's base.
+    var payload = JSON.stringify({ title: title, body: body, view: options ? options.view : "",
+                                   resolution: options ? options.resolution : undefined })
+    var version = (root.saveVersions[id] || 0) + 1
+    root.saveVersions[id] = version
+    root.bodies[id] = { title: title, body: body, editable: true, version: "" }
     root.rq.enqueue({ key: "page:" + id, mode: "replace", priority: 0, owner: root, flush: true, label: "save" },
       function(ctx) { root.runScript(["update", id, "-"], payload, ctx) },
-      function(r, info) {
-        if (!r) {
-          if (cb) {
-            cb(root.unsentSave(info))
-          }
+      function(result, info) {
+        if (!result) {
+          cb(root.unsentSave(info))
           return
         }
-        if (r.error) {
-          if (cb) {
-            cb({ error: r.error })
-          }
+        if (result.error) {
+          cb(result)
           return
         }
-        var bodiesNow = root.bodies, k = root.idOf(path)
-        if (!r.warning && bodiesNow[k]) {
-          bodiesNow[k].originalTitle = bodiesNow[k].title
-          root.bodies = bodiesNow
+        var latest = root.saveVersions[id] === version
+        if (latest) {
+          var page = root.pageAt(path)
+          root.bodies[id] = Object.assign({}, result, { editable: true,
+              version: page ? page.modified || "" : "" })
+          root.pages = root.pages.map(function(row) {
+            return row.id === id ? Object.assign({}, row, { title: result.title }) : row
+          })
+          root.rebuild()
         }
-        if (cb) {
-          cb(r.warning ? { warning: r.warning } : {})
+        cb(result)
+        // The host reloads only after all saves finish and while the editor
+        // has no newer edits. A later save keeps using its original view.
+        if (latest && result.merged) {
+          root.noteChanged(path)
         }
       })
   }
@@ -703,7 +697,7 @@ Item {
           return
         }
         root.pages = [r.page].concat(root.pages)
-        var b = root.bodies; b[r.page.id] = { title: "", body: "", editable: true, originalTitle: "" }; root.bodies = b
+        root.bodies[r.page.id] = Object.assign({}, r.note, { editable: true, version: r.page.modified || "" })
         var sec = root.sectionAt(r.page.sectionId), exp = root.expanded.slice()
         if (sec && exp.indexOf(sec.notebookId) < 0) {
           exp.push(sec.notebookId)
@@ -770,7 +764,7 @@ Item {
     var mine = currentPath && currentPath.indexOf(root.id + ":") === 0
     if (mine) {
       root.rq.enqueue({ key: "check:" + currentPath, mode: "dedupe", priority: 1, owner: root, label: "check" },
-        function(ctx) { root.runScript(["page", root.idOf(currentPath)], "", ctx) },
+        function(ctx) { root.runScript(["page", root.idOf(currentPath), "--check"], "", ctx) },
         function(r) {
           if (r && !r.error) {
             root.applyCheck(currentPath, r)
@@ -800,14 +794,12 @@ Item {
   // page is compared by its text instead.
   function applyCheck(path, r) {
     var id = root.idOf(path), old = root.bodies[id]
-    if (old && old.body === (r.body || "") && old.title === (r.title || old.title)) {
+    if (old && old.body === r.body && old.title === r.title && old.editable === r.editable) {
       return
     }
-    var pg = root.pageAt(path)
-    var b = root.bodies
-    b[id] = { title: r.title || (pg ? pg.title : ""), body: r.body || "", editable: r.editable === true,
-              originalTitle: r.title || (pg ? pg.title : ""), version: pg ? pg.modified || "" : "" }
-    root.bodies = b
+    // A poll never changes the active editor's baseline. A subsequent load
+    // asks Python for a new view, or restores the persisted recovery draft.
+    delete root.bodies[id]
     root.noteChanged(path)
   }
 

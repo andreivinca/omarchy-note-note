@@ -114,12 +114,20 @@ ShellRoot {
     property string documentBase: ""
     property bool readOnly: false
     property var conversions: []
+    property var viewProps: null
     function cursorPosition() { return 0 }
     function setCursorPosition(position) {}
     function viewState() { return { cursor: 0, scroll: 0 } }
     function restoreViewState(state) {}
-    function clearNotice() {}
-    function setNote(t, b, shown) { title = t; body = b; if (shown) { shown(true) } }
+    function clearNotice() { viewProps = null }
+    function showView(component, props) { viewProps = props }
+    function setNote(t, b, shown) {
+      title = t
+      body = b
+      if (shown) {
+        shown(true)
+      }
+    }
     function snapshotDocument() { return { title: title, body: body, base: documentBase } }
     function restoreDocument(snapshot) { title = snapshot.title; body = snapshot.body; documentBase = snapshot.base }
     function requestMarkdown(callback) { document.conversions.push(callback) }
@@ -133,8 +141,83 @@ ShellRoot {
     property var deletions: []
     function remove(path, callback) { deletions.push(callback) }
     function load(path, callback) { loads.push(callback); return { cancel: function() {} } }
-    function save(path, title, body, callback) { saves.push({ path: path, body: body, callback: callback }) }
+    function save(path, title, body, callback, options) {
+      saves.push({ path: path, body: body, callback: callback, options: options })
+    }
     function noteEdited(path) {}
+  }
+
+  Ui.MergeConflict {
+    id: conflictPane
+    width: 700
+    height: 500
+    conflict: ({ id: "conflict", parts: [
+      { id: "body:0", field: "body", base: "original", local: "ours", remote: "theirs" }
+    ] })
+  }
+  Notes.NoteSession {
+    id: mergeSession
+    editor: document
+    providerFor: function(path) { return provider }
+    versionFor: function(path) { return "1" }
+    report: function(message) {}
+  }
+  function mergeCases() {
+    provider.loads = []
+    provider.saves = []
+    mergeSession.selectPath("test:merge")
+    provider.loads.shift()({ body: "original" })
+    document.body = "ours"
+    mergeSession.onEdited()
+    mergeSession.flushSave()
+    document.conversions.shift()("ours", true)
+    provider.saves.shift().callback({ error: "conflict", conflict: conflictPane.conflict })
+    check("conflict holds the draft and pauses saving", mergeSession.dirty && document.readOnly && !!document.viewProps)
+    conflictPane.choose("body:0", "both")
+    check("conflict view enables save after each choice", conflictPane.complete)
+    document.viewProps.resolve(conflictPane.choices)
+    document.conversions.shift()("ours", true)
+    var save = provider.saves.shift()
+    check("resolution travels with the save snapshot", save.options.resolution.id === "conflict" &&
+          save.options.resolution.choices["body:0"] === "both")
+    save.callback({})
+    check("resolved save releases the draft", !mergeSession.dirty && !document.readOnly && !document.viewProps)
+
+    document.body = "older edit"
+    mergeSession.onEdited()
+    mergeSession.flushSave()
+    document.conversions.shift()("older edit", true)
+    document.body = "newer edit"
+    mergeSession.onEdited()
+    provider.saves.shift().callback({ error: "conflict", conflict: conflictPane.conflict })
+    check("older conflict cannot decide text typed during a save", document.body === "newer edit" &&
+          !document.viewProps && !document.readOnly && mergeSession.dirty)
+    mergeSession.flushSave()
+    document.conversions.shift()("newer edit", true)
+    provider.saves.shift().callback({})
+
+    document.body = "edit before leaving"
+    mergeSession.onEdited()
+    mergeSession.selectPath("test:away")
+    document.conversions.shift()("edit before leaving", true)
+    provider.loads.shift()({ body: "another note" })
+    provider.saves.shift().callback({ error: "conflict", conflict: conflictPane.conflict })
+    check("late conflict preserves the selected note", document.body === "another note" && !document.viewProps)
+    mergeSession.selectPath("test:merge")
+    check("returning to a conflicted draft opens its review", document.body === "edit before leaving" &&
+          !!document.viewProps && document.readOnly)
+    mergeSession.cancelPendingSave("test:merge")
+    mergeSession.dirty = false
+    mergeSession.selectPath("test:recovery")
+    provider.loads.shift()({ body: "recovered draft", recovered: true, conflict: conflictPane.conflict })
+    check("recovery loads as unsaved and opens its conflict", mergeSession.dirty &&
+          document.body === "recovered draft" && !!document.viewProps)
+    document.viewProps.continueEditing()
+    check("conflict can return to editable draft", !document.readOnly && !document.viewProps)
+    mergeSession.cancelPendingSave("test:recovery")
+    mergeSession.dirty = false
+    mergeSession.currentPath = ""
+    document.body = "B"
   }
   Notes.NoteSession {
     id: session
@@ -147,19 +230,22 @@ ShellRoot {
     session.selectPath("test:A")
     session.selectPath("test:B")
     session.selectPath("test:A")
-    provider.loads[2]({ body: "new A" })
-    provider.loads[0]({ body: "old A" })
-    provider.loads[1]({ body: "B" })
-    check("A to B to A rejects both older load generations", document.body === "new A")
+    provider.loads[2]({ body: "new A", view: "accepted-A" })
+    provider.loads[0]({ body: "old A", view: "discarded-A" })
+    provider.loads[1]({ body: "B", view: "discarded-B" })
+    check("A to B to A rejects older documents and baseline tokens",
+          document.body === "new A" && session.editingView === "accepted-A")
     session.onEdited()
     document.body = "unsaved A"
     session.selectPath("test:B")
-    provider.loads[3]({ body: "B" })
+    provider.loads[3]({ body: "B", view: "accepted-B" })
     document.conversions.shift()("unsaved A", true)
     check("a save retains its original note and body", provider.saves[0].path === "test:A" && provider.saves[0].body === "unsaved A")
+    check("delayed conversion retains the captured editing baseline", provider.saves[0].options.view === "accepted-A")
     provider.saves.shift().callback({ error: "disk full" })
     session.selectPath("test:A")
-    check("failed save draft survives switching away and back", document.body === "unsaved A" && session.dirty)
+    check("failed save draft and baseline survive switching away and back",
+          document.body === "unsaved A" && session.dirty && session.editingView === "accepted-A")
     session.flushSave()
     document.conversions.shift()("unsaved A", true)
     provider.saves.shift().callback({ version: "2" })
@@ -368,6 +454,22 @@ ShellRoot {
     function relogin() { destructiveLogins++ }
   }
   OneNote.Provider { id: oneNote; ms: oneNoteAccount }
+  Notes.NoteSession {
+    id: oneNoteSession
+    editor: document
+    providerFor: function(path) { return oneNote }
+    versionFor: function(path) { return "1" }
+    report: function(message) {}
+  }
+  QtObject {
+    id: mergeLane
+    property var jobs: []
+    property int depth: 0
+    function enqueue(options, start, settled) {
+      jobs.push({ options: options, start: start, settled: settled })
+      return { cancel: function() {} }
+    }
+  }
   Microsoft.Account {
     id: scopeAccount
     scopes: "offline_access User.Read Notes.ReadWrite"
@@ -392,11 +494,60 @@ ShellRoot {
     check("losing Files.Read does not hide notes", oneNote.ready && oneNote.sections[0].notes.length === 1)
     check("normal sign-in excludes optional scopes", scopeAccount.env.NOTE_NOTE_MS_SCOPES.indexOf("Files.Read") < 0 &&
           scopeAccount.env.NOTE_NOTE_MS_OPTIONAL_SCOPES === "Files.Read")
+
+    var changed = 0
+    var onChanged = function(path) { changed++ }
+    oneNote.noteChanged.connect(onChanged)
+    oneNote.rq = mergeLane
+    oneNote.cacheBody("onenote:page", { title: "Title", body: "original", view: "editor-base", editable: true })
+    oneNoteSession.selectPath("onenote:page")
+    var baseline = { view: oneNoteSession.editingView }
+    oneNote.save("onenote:page", "Title", "first edit", function(r) {}, baseline)
+    oneNote.save("onenote:page", "Title", "second edit", function(r) {}, baseline)
+    oneNote.applyCheck("onenote:page", { title: "Title", body: "phone edit", editable: true })
+    check("poll leaves an active OneNote editing baseline intact", oneNoteSession.editingView === "editor-base")
+    changed = 0
+    mergeLane.jobs.shift().settled({ title: "Title", body: "older merge", view: "old-result", merged: true })
+    check("older save result cannot reload over a newer save", changed === 0)
+    mergeLane.jobs.shift().settled({ title: "Title", body: "newer merge", view: "new-result", merged: true })
+    check("successful merge has a separate future editing view", changed === 1 &&
+          oneNote.bodies.page.view === "new-result" && oneNoteSession.editingView === "editor-base")
+    oneNoteSession.reloadCurrent()
+    check("baseline switches when the merged note is displayed", oneNoteSession.editingView === "new-result")
+    changed = 0
+    oneNote.save("onenote:page", "Title", "ordinary edit", function(r) {}, { view: oneNoteSession.editingView })
+    mergeLane.jobs.shift().settled({ title: "Title", body: "ordinary edit", view: "ordinary-result", merged: false })
+    check("ordinary autosave does not reload and clear undo", changed === 0)
+    var conflictResult = null
+    oneNote.save("onenote:page", "Title", "overlap", function(r) { conflictResult = r }, { view: oneNoteSession.editingView })
+    mergeLane.jobs.shift().settled({ error: "conflict", conflict: conflictPane.conflict })
+    check("OneNote passes structured conflicts to the host", conflictResult.conflict.id === "conflict")
+    oneNoteSession.selectPath("onenote:race")
+    oneNoteSession.selectPath("onenote:away")
+    oneNoteSession.selectPath("onenote:race")
+    var abandoned = mergeLane.jobs.shift()
+    var away = mergeLane.jobs.shift()
+    mergeLane.jobs.shift().settled({ title: "Title", body: "Displayed body", view: "displayed-view", editable: true })
+    abandoned.settled({ title: "Title", body: "Unseen cloud body", view: "abandoned-view", editable: true })
+    away.settled({ title: "Other", body: "Other body", view: "other-view", editable: true })
+    check("discarded OneNote loads cannot replace the accepted document, baseline, or cache",
+          document.body === "Displayed body" && oneNoteSession.editingView === "displayed-view" &&
+          oneNote.bodies.race.view === "displayed-view")
+    document.title = "Only a title edit"
+    oneNoteSession.onEdited()
+    oneNoteSession.flushSave()
+    document.conversions.shift()("Displayed body", true)
+    check("a title edit captures the displayed OneNote baseline", oneNoteSession.drafts["onenote:race"].view === "displayed-view")
+    mergeLane.jobs.shift().settled({ title: document.title, body: "Displayed body", view: "saved-view", merged: false })
+    oneNoteSession.currentPath = ""
+    oneNote.noteChanged.disconnect(onChanged)
+    oneNote.rq = null
   }
   Component.onCompleted: {
     try {
       editorCases()
       sessionCases()
+      mergeCases()
       lifecycleCases()
       pureCases()
       oneNoteCases()
@@ -434,6 +585,15 @@ ShellRoot {
   Timer {
     interval: 20000
     running: true
-    onTriggered: { test.check("all asynchronous scenarios finished", false); test.report() }
+    onTriggered: {
+      test.check("all asynchronous scenarios finished", false, JSON.stringify({
+        local: test.localFinished,
+        watcher: test.watchFinished,
+        editor: test.editorFinished,
+        processes: test.processes,
+        host: !test.appHost || test.appHost.providersLoaded
+      }))
+      test.report()
+    }
   }
 }

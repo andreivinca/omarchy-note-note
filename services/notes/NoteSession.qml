@@ -1,4 +1,5 @@
 import QtQuick
+import "../../ui" as Ui
 
 // Owns document identity, load generations, drafts and save completion.
 // UI, provider lookup and status presentation are injected, so transitions
@@ -18,6 +19,8 @@ Item {
   property string loadingPath: ""
   property var loadHandle: null
   property string loadedVersion: ""
+  // Opaque provider baseline belonging to the document actually displayed.
+  property var editingView: null
   property int noteLoadSeq: 0
   property var saveEpoch: ({})
   property var savesPending: ({})
@@ -25,6 +28,46 @@ Item {
   property int saveRevision: 0
   readonly property bool busy: Object.keys(session.savesPending).length > 0
   readonly property string notDisplayable: "This note could not be displayed — it has not been changed"
+
+  Component {
+    id: conflictView
+    Ui.MergeConflict {}
+  }
+
+  function showConflict(path, conflict) {
+    if (path !== session.currentPath || session.saveInFlight(path)) {
+      return
+    }
+    var provider = session.providerFor(path)
+    editor.readOnly = true
+    editor.showView(conflictView, {
+      conflict: conflict,
+      remoteName: provider ? provider.name : "Elsewhere",
+      retry: function() {
+        if (path !== session.currentPath) {
+          return
+        }
+        editor.clearNotice()
+        editor.readOnly = false
+        session.flushSave()
+      },
+      continueEditing: function() {
+        if (path !== session.currentPath) {
+          return
+        }
+        editor.clearNotice()
+        editor.readOnly = false
+      },
+      resolve: function(choices) {
+        if (path !== session.currentPath) {
+          return
+        }
+        editor.clearNotice()
+        editor.readOnly = false
+        session.flushSave({ id: conflict.id, choices: choices })
+      }
+    })
+  }
 
   function cancelLoad() {
     var handle = session.loadHandle
@@ -57,6 +100,7 @@ Item {
     session.loadFailed = false
     session.loadingPath = path
     session.dirty = false
+    session.editingView = null
     // A note opens at its top (NoteEditor.showBody); a reload in place
     // keeps the caret and the scroll where the reader had them.
     var view = reload ? editor.viewState() : null
@@ -76,8 +120,12 @@ Item {
     var draft = session.drafts[path]
     if (draft) {
       editor.restoreDocument(draft.document)
+      session.editingView = draft.view || null
       session.noteReady(false)
       session.dirty = !!draft.error
+      if (draft.conflict) {
+        session.showConflict(path, draft.conflict)
+      }
       return
     }
     var provider = session.providerFor(path)
@@ -107,8 +155,24 @@ Item {
         if (view) {
           editor.restoreViewState(view)
         }
+        session.editingView = result.view || null
         session.noteReady(result.editable === false)
-        if (reload) {
+        if (result.recovered) {
+          session.dirty = true
+          session.drafts[path] = { document: editor.snapshotDocument(),
+              view: session.editingView, epoch: session.saveEpoch[path] || 0,
+              error: "Recovered unsaved changes", conflict: result.conflict }
+          session.report("Recovered unsaved changes")
+          if (result.conflict) {
+            session.showConflict(path, result.conflict)
+          } else if (result.retry) {
+            Qt.callLater(function() {
+              if (session.ownsLoad(path, generation) && !session.saveInFlight(path)) {
+                session.flushSave()
+              }
+            })
+          }
+        } else if (reload) {
           session.report(provider.name + ": reloaded, changed elsewhere")
         }
       })
@@ -200,6 +264,7 @@ Item {
     }
     var current = path === session.currentPath
     var recovery = current ? editor.snapshotDocument() : (session.drafts[path] || {}).document
+    var recoveryView = current ? session.editingView : (session.drafts[path] || {}).view
     var unsaved = current ? session.dirty || session.saveInFlight(path) : !!session.drafts[path]
     var readOnly = editor.readOnly
     session.cancelPendingSave(path)
@@ -207,7 +272,8 @@ Item {
     editor.readOnly = true
     provider.remove(path, function(result) {
       if (result.error && recovery && unsaved) {
-        session.drafts[path] = { document: recovery, error: result.error, epoch: session.saveEpoch[path] }
+        session.drafts[path] = { document: recovery, view: recoveryView,
+            error: result.error, epoch: session.saveEpoch[path] }
       }
       if (current) {
         session.dirty = !!result.error && unsaved
@@ -218,7 +284,7 @@ Item {
     })
   }
 
-  function flushSave() {
+  function flushSave(resolution) {
     var path = session.currentPath
     if (!session.dirty || !path || editor.readOnly) {
       return
@@ -229,7 +295,7 @@ Item {
     }
     var epoch = (session.saveEpoch[path] || 0) + 1
     session.saveEpoch[path] = epoch
-    var draft = { document: editor.snapshotDocument(), epoch: epoch, error: "" }
+    var draft = { document: editor.snapshotDocument(), view: session.editingView, epoch: epoch, error: "" }
     session.drafts[path] = draft
     session.dirty = false
     session.loadedVersion = ""
@@ -245,13 +311,18 @@ Item {
       }
       provider.save(path, draft.document.title, body, function(result) {
         session.finishSave(path, draft, result || {})
-      })
+      }, { view: draft.view, resolution: resolution })
     })
   }
 
   function finishSave(path, draft, result) {
+    var showConflict = false
     if (session.drafts[path] === draft) {
       if (result.error) {
+        // A conflict computed for an older edit cannot decide newer text.
+        var newerEdits = path === session.currentPath && session.dirty
+        draft.conflict = newerEdits ? null : result.conflict
+        showConflict = !!draft.conflict && path === session.currentPath
         draft.error = result.error
         if (path === session.currentPath) {
           session.dirty = true
@@ -269,6 +340,9 @@ Item {
     // Release last: observers checking whether retirement is safe see the
     // final draft/error state, never a gap before a failed draft is restored.
     session.countSave(path, -1)
+    if (showConflict) {
+      session.showConflict(path, result.conflict)
+    }
   }
 
   function reconcile(exists, version) {

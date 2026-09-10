@@ -1,31 +1,9 @@
 #!/usr/bin/env python3
-"""Tests for providers/onenote/onenote.py — which failures may be run again.
+"""OneNote authentication and mutation retry contracts.
 
-`graph_raw` is a second implementation of the two decisions `msgraph.http`
-makes, and it holds the only `transient_5xx=False` calls in the tree. That
-combination is what this file exists for: `services/microsoft/selftest.py`
-covers the shared classification and would stay green while this copy drifted
-away from it, or while the one flag that matters was wired backwards.
-
-Two properties.
-
-**A 401 is a revoked grant until a refresh says otherwise** — one forced
-refresh, one repeat of the request, carrying the new token.
-
-**A job is re-run only when running it twice is the same as running it once.**
-`kind="transient"` re-runs the whole job three times, so it belongs to a page
-fetch or a body replace and to nothing that creates. The gates are read off
-the calls themselves rather than inferred from behaviour, because the failure
-being guarded against is somebody adding a create without one:
-
-- the title replace, whose 500 arrives *every* time on some pages and whose
-  body has already been saved by the time it happens;
-- a page create and a section create, where a 502 is the gateway losing the
-  answer to a page Graph may already have made;
-- a save carrying image uploads, which would put the same pictures up twice.
-
-No network and no real state: `urlopen` is scripted and every directory these
-modules read is redirected into a temporary one before they are imported.
+The merge integration suite covers document behavior. These tests exercise
+Graph response handling through the real shared transport with scripted HTTP
+responses and temporary account state. No live account is contacted.
 
     python3 providers/onenote/selftest.py [-v]
 """
@@ -41,6 +19,7 @@ import tempfile
 import time
 import urllib.error
 import urllib.request
+from unittest.mock import patch
 
 # Both modules read these into constants at import, so they are set first: a
 # test that ran against the real ones would sign the user out.
@@ -151,8 +130,8 @@ def recorded_graph_raw():
     real, seen = onenote.graph_raw, []
 
     def fake(method, path, data=None, content_type=None, extra_headers=None,
-             max_bytes=onenote.MAX_PAGE_HTML, transient_5xx=True):
-        seen.append({"method": method, "path": path, "transient_5xx": transient_5xx})
+             max_bytes=onenote.MAX_PAGE_HTML, retry_policy=None):
+        seen.append({"method": method, "path": path, "retry_policy": retry_policy})
         if method == "POST":
             # A create reads the answer back as the page resource it made.
             return 201, json.dumps({"id": "1-made", "title": "New page",
@@ -210,7 +189,7 @@ def test_the_transient_gate(verbose):
         sign_in()
         endpoint = Endpoint(graph=[(status, b"Transient error", headers())])
         with scripted(endpoint):
-            got, body = onenote.graph_raw("GET", PAGE, transient_5xx=False)
+            got, body = onenote.graph_raw("GET", PAGE, retry_policy=msgraph.RetryPolicy.NEVER)
         failures += check("%d is the caller's when the gate is shut" % status,
                           got == status and "Transient error" in body, "%r %r" % (got, body))
     if verbose:
@@ -225,26 +204,25 @@ def test_writes_that_must_not_repeat(verbose):
     failures = 0
 
     with recorded_graph_raw() as seen:
-        onenote.patch_page("/me/onenote/pages/x/content", [{"target": "body"}], [])
-        onenote.patch_page("/me/onenote/pages/x/content", [{"target": "body"}],
+        onenote.patch_page("/me/onenote/pages/x/content",
+                           [{"target": "p:old", "action": "replace", "content": "<p>updated</p>"}], [])
+        onenote.patch_page("/me/onenote/pages/x/content",
+                           [{"target": "img:old", "action": "replace", "content": '<img src="name:img"/>'}],
                            [("img", "image/png", b"bytes")])
-    failures += check("a text-only save may be re-run", seen[0]["transient_5xx"] is True,
+    failures += check("a text replacement may be re-run", seen[0]["retry_policy"] is msgraph.RetryPolicy.RESTART,
                       "%r" % (seen[0],))
-    failures += check("a save carrying an upload may not", seen[1]["transient_5xx"] is False,
+    failures += check("a save carrying an upload may not", seen[1]["retry_policy"] is msgraph.RetryPolicy.NEVER,
                       "%r" % (seen[1],))
 
     payload = os.path.join(WORK, "note.json")
     with open(payload, "w") as f:
         json.dump({"title": "New page", "body": "hello\n"}, f)
-    with recorded_graph_raw() as seen:
+    with recorded_graph_raw() as seen, patch.object(onenote, "merge_account", return_value="selftest"):
         with contextlib.redirect_stdout(io.StringIO()):
-            try:
-                onenote.cmd_onenote_create("section-1", payload)
-            except (SystemExit, KeyError, TypeError, ValueError):
-                pass          # the recorder answers a create only loosely
+            onenote.cmd_onenote_create("section-1", payload)
     creates = [c for c in seen if c["method"] == "POST"]
     failures += check("a page create may not be re-run",
-                      creates and all(c["transient_5xx"] is False for c in creates),
+                      creates and all(c["retry_policy"] is msgraph.RetryPolicy.NEVER for c in creates),
                       "%r" % (creates,))
 
     if verbose:
@@ -254,24 +232,55 @@ def test_writes_that_must_not_repeat(verbose):
     return failures
 
 
-def test_the_title_replace_keeps_its_warning(verbose):
-    """The one call the write-up got backwards.
+def test_title_failure_does_not_repeat_the_body(verbose):
+    """A failed title returns partial completion without replaying body writes."""
+    failures = 0
+    for status in (500, 503):
+        sign_in()
+        endpoint = Endpoint(graph=[(status, b"title refused", headers(Retry_After="0"))])
+        with scripted(endpoint), patch.object(msgraph, "RATE_KEY", None):
+            warning = onenote.write_page("page", {"title": "Edited", "body": ""},
+                                         {"title": "Original", "body": ""}, "")
+        failures += check("%d title failure is returned" % status, warning.startswith("title not saved"), warning)
+        failures += check("%d title is sent once" % status, len(endpoint.calls) == 1)
+    print("a failed title is returned without repeating the save")
+    return failures
 
-    Its 500 arrives every time on the affected pages and the body has already
-    been saved when it does, so `cmd_onenote_update` puts it in a `warning`
-    and still answers `{"ok": true}`. Turning the gate on here would re-run a
-    save that had already succeeded, three times, and then fail it — which is
-    why the flag is asserted rather than left to a comment.
-    """
-    source = open(os.path.join(HERE, "onenote.py")).read()
-    marker = ('graph_raw("PATCH", url, json.dumps(ops).encode(), "application/json",\n'
-              '                                transient_5xx=False)')
-    failures = check("the title replace shuts the gate", marker in source,
-                     "the call no longer reads as it did")
-    if verbose:
-        print("  gated title replace %s" % ("found" if not failures else "NOT found"))
-    print("the title replace stays a warning, not a re-run")
-    print("  %d checks failed" % failures if failures else "  all green")
+
+def test_uncertain_mutations_are_sent_once(verbose):
+    """Exercise the real PATCH transport, including its in-process retry loop."""
+    failures = 0
+    commands = [
+        ({"target": "p:anchor", "action": "insert", "position": "after", "content": "<p>new</p>"}, []),
+        ({"target": "body", "action": "append", "content": "<p>new</p>"}, []),
+        ({"target": "img:old", "action": "replace", "content": '<img src="name:image"/>'},
+         [("image", "image/png", b"synthetic image")]),
+    ]
+    for operation, parts in commands:
+        for status in (500, 502, 503, 504):
+            for wait in ("0", "999"):
+                sign_in()
+                endpoint = Endpoint(graph=[(status, b"uncertain", headers(Retry_After=wait))])
+                with scripted(endpoint), patch.object(msgraph, "RATE_KEY", None):
+                    result = onenote.patch_page(PAGE, [operation], parts)
+                label = "%s/%s after %s" % (operation["action"], status, wait)
+                failures += check(label + " returns the uncertain response", result == (status, "uncertain"))
+                failures += check(label + " sends once", len(endpoint.calls) == 1)
+    print("uncertain inserts, appends and uploads never replay or restart automatically")
+    return failures
+
+
+def test_replacement_requires_a_fresh_job_after_503(verbose):
+    sign_in()
+    endpoint = Endpoint(graph=[(503, b"uncertain", headers(Retry_After="0"))])
+    restart = False
+    with scripted(endpoint), patch.object(msgraph, "RATE_KEY", None):
+        try:
+            onenote.patch_page(PAGE, [{"target": "p:old", "action": "replace", "content": "<p>new</p>"}], [])
+        except msgraph.ratelimit.Throttled:
+            restart = True
+    failures = check("a replacement requires a new fetch and merge", restart and len(endpoint.calls) == 1)
+    print("a 503 replacement restarts its job without replaying stale targets")
     return failures
 
 
@@ -285,7 +294,9 @@ def main():
         total += test_revoked_grant_refreshes_once(args.verbose)
         total += test_the_transient_gate(args.verbose)
         total += test_writes_that_must_not_repeat(args.verbose)
-        total += test_the_title_replace_keeps_its_warning(args.verbose)
+        total += test_title_failure_does_not_repeat_the_body(args.verbose)
+        total += test_uncertain_mutations_are_sent_once(args.verbose)
+        total += test_replacement_requires_a_fresh_job_after_503(args.verbose)
         total += check("remote section-order suite", order_selftest.run())
     finally:
         shutil.rmtree(WORK, ignore_errors=True)

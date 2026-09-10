@@ -126,7 +126,11 @@ Item {
   readonly property int titleSize: Math.round(root.bodyFontSize * 2)
   readonly property bool showingNotice: noticeText.length > 0 || customView !== null
   function showView(component, props) {
-    customView = component; customViewProps = props || ({})
+    // Loading a Component can finish synchronously. Supply its properties
+    // first, and recreate even the same view so no previous state survives.
+    customView = null
+    customViewProps = props || ({})
+    customView = component
     // Focus the view once it is in the scene (a forceActiveFocus() from the
     // component's own Component.onCompleted runs too early).
     Qt.callLater(function() {
@@ -135,7 +139,10 @@ Item {
       }
     })
   }
-  function clearView() { customView = null; customViewProps = ({}) }
+  function clearView() {
+    customView = null
+    customViewProps = ({})
+  }
   readonly property bool viewHasFocus: customLoader.item ? customLoader.item.activeFocus : false
   function showNotice(title, text, code, actions) {
     clearView()
