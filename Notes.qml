@@ -749,6 +749,7 @@ Item {
 
   // ── sidebar rows ────────────────────────────────────────────────────
   property var rows: []
+  property var footerActions: []
   property int revision: 0
   // Assignments to `rows`, each of which destroys and rebuilds every delegate.
   // Read beside `revision` (rebuildRows calls) it says how many rebuilds
@@ -1120,6 +1121,9 @@ Item {
       root.tabs = newTabs
     }
     root.tabMatches = hits
+    if (JSON.stringify(model.footerActions) !== JSON.stringify(root.footerActions)) {
+      root.footerActions = model.footerActions
+    }
     // The same rule as the tabs above, and for a stronger reason: `rows` is a
     // plain JS array handed to the view as a value, so assigning one is not
     // an update to a list but a different list, and every delegate is
@@ -1334,7 +1338,7 @@ Item {
                             loadFailed: root.loadFailed, queues: lanes,
                             providers: root.providers.map(function(p) { return p.id }) })
   }
-  // The provider whose section holds a row of this kind and id. The open
+  // The provider whose section holds a row or footer action with this id. The open
   // tab's answers first: row ids are bare strings ("logout", "refresh") that
   // several providers use, and a click always lands on the open tab — load
   // order must never pick a same-named row of another provider. Rows of
@@ -1342,7 +1346,9 @@ Item {
   function providerWithRow(kind, id) {
     var active = activeKey(), onActive = null, anywhere = null
     eachSection(function(prov, s, key) {
-      if (!(s.rows || []).some(function(r) { return r.kind === kind && r.path === id })) {
+      var matchesRow = (s.rows || []).some(function(r) { return r.kind === kind && r.path === id })
+      var matchesFooter = kind === "action" && (s.footerActions || []).some(function(action) { return action.path === id })
+      if (!matchesRow && !matchesFooter) {
         return
       }
       if (key === active && !onActive) {
@@ -1868,6 +1874,7 @@ Item {
           }
           height: parent.height
           model: root.rows
+          footerActions: root.footerActions
           currentPath: root.currentPath
           treeCursor: root.treeCursor
           filtering: root.filterText.length > 0

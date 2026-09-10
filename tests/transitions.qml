@@ -44,6 +44,29 @@ ShellRoot {
     app.providers = []
     app.setFilter("")
   }
+  function hostFooterCases() {
+    var app = test.appHost
+    var calls = []
+    var first = { id: "first", name: "First", sections: [{ key: "s", name: "First", rows: [],
+      footerActions: [{ path: "logout", title: "Sign out of first" }] }],
+      action: function(id) { calls.push("first:" + id) } }
+    var second = { id: "second", name: "Second", sections: [{ key: "s", name: "Second", rows: [],
+      footerActions: [{ path: "logout", title: "Sign out of second" }] }],
+      action: function(id) { calls.push("second:" + id) } }
+    app.providers = [first, second]
+    app.activeSection = "second/s"
+    app.rebuildRows()
+    check("host publishes the active provider footer", app.footerActions[0].title === "Sign out of second")
+    check("footer clicks reach the active provider despite duplicate action ids",
+          app.runAction("logout") && calls.join(",") === "second:logout")
+    app.activeSection = "first/s"
+    app.rebuildRows()
+    app.runAction("logout")
+    check("switching tabs switches footer action ownership", calls.join(",") === "second:logout,first:logout")
+    app.providers = []
+    app.rebuildRows()
+    check("removing providers clears footer actions", app.footerActions.length === 0 && !app.runAction("logout"))
+  }
   function check(name, ok, detail) {
     test.results.push({ name: name, ok: !!ok, detail: detail || "" })
   }
@@ -366,10 +389,16 @@ ShellRoot {
 
   function pureCases() {
     var source = [{ id: "test", canReorder: true, sections: [{ key: "s", name: "Section", rows: [],
+      footerActions: [{ path: "logout", title: "Sign out" }],
       notes: [{ kind: "note", path: "test:A", title: "Hidden note" }] }] }]
     var before = JSON.stringify(source)
     var model = Sidebar.build(source, "test/s", "hidden", {})
     check("sidebar search includes notes inside folded trees", model.rows.length === 1 && model.hits["test/s"] === 1)
+    check("sidebar footer survives search without becoming a result", model.footerActions.length === 1 &&
+          model.footerActions[0].path === "logout" && model.tabs[0].count === 1)
+    var logoutSearch = Sidebar.build(source, "test/s", "sign out", {})
+    check("footer labels do not count as matching notes", logoutSearch.rows.length === 0 && logoutSearch.hits["test/s"] === 0)
+    check("leaving a provider clears its footer", Sidebar.build(source, "other/s", "", {}).footerActions.length === 0)
     check("sidebar builder does not mutate provider input", JSON.stringify(source) === before)
     check("provider setting order does not cause replacement", Settings.plan(
       { providers: { a: { path: "x", enabled: true } } },
@@ -517,13 +546,21 @@ ShellRoot {
     check("OneNote stays ready without Files.Read", oneNote.ready && oneNote.accountRows() === null)
     check("OneNote notes remain visible without Files.Read", oneNote.sections[0].notes.length === 1)
     check("optional consent is offered without replacing notebook rows",
-          oneNote.sections[0].rows.some(function(row) { return row.path === "enableorder" }) &&
+          oneNote.sections[0].footerActions.some(function(action) { return action.path === "enableorder" }) &&
           oneNote.sections[0].rows.some(function(row) { return row.path === "book" }))
+    check("OneNote keeps sign-out out of the scrolling tree",
+          oneNote.sections[0].footerActions.some(function(action) { return action.path === "logout" }) &&
+          !oneNote.sections[0].rows.some(function(row) { return row.path === "logout" }))
+    oneNote.notebookTabs = true
+    oneNote.rebuild()
+    check("OneNote notebook tabs retain the account footer",
+          oneNote.sections[0].key === "book" && oneNote.sections[0].footerActions.some(function(action) { return action.path === "logout" }))
+    oneNote.notebookTabs = false
     oneNote.action("enableorder")
     check("optional consent does not sign out first", oneNoteAccount.optionalLogins === 1 && oneNoteAccount.destructiveLogins === 0)
     oneNoteAccount.filesRead = true
     oneNote.rebuild()
-    check("consented ordering removes the optional action", !oneNote.sections[0].rows.some(function(row) { return row.path === "enableorder" }))
+    check("consented ordering removes the optional action", !oneNote.sections[0].footerActions.some(function(action) { return action.path === "enableorder" }))
     oneNoteAccount.filesRead = false
     oneNote.rebuild()
     check("losing Files.Read does not hide notes", oneNote.ready && oneNote.sections[0].notes.length === 1)
@@ -602,6 +639,7 @@ ShellRoot {
         if (test.appHost) {
           test.check("host reads framed configuration at startup", test.appHost.configReady && test.appHost.providers.length === 0)
           test.hostSearchCases()
+          test.hostFooterCases()
         }
         test.completionChecks.forEach(function(check) { check() })
         test.check("runner releases every process", runner.active === 0)

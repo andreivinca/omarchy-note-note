@@ -24,6 +24,7 @@ Item {
   // the main list goes empty — not merely invisible, or every match would be
   // built twice, once with drag areas and buttons nobody can see.
   property var model: []
+  property var footerActions: []
   property string currentPath: ""
   // The keyboard cursor when it rests on a section row instead of the open
   // note: that tree row's path, "" otherwise (see the host's treeCursor).
@@ -146,9 +147,7 @@ Item {
   }
 
   function startNewNotebook() {
-    newNotebookRow.editing = true
-    notebookField.text = ""
-    notebookField.forceActiveFocus()
+    newNotebookRow.startEditing()
   }
 
   Item {
@@ -165,45 +164,46 @@ Item {
         color: panel.fill
       }
 
-    // Searching swaps the whole page for its own panel rather than bending this
-    // one into a results list: no headings to keep, no rows to drag, nothing to
-    // create. See SearchResults.qml.
-    SearchResults {
-      id: searchPanel
+    Item {
+      id: contentArea
       anchors.fill: parent
       anchors.margins: root.pagePadding
-      visible: root.filtering
-      model: root.filtering ? root.model : []
-      loading: root.searchBusy
-      status: root.searchStatus
-      currentPath: root.currentPath
-      notebook: root.activeName
-      foreground: root.foreground
-      accent: root.accent
-      selectionAccent: root.activeBase
-      selectedBackground: root.selectionFill
-      selectedText: root.foreground
-      fontFamily: root.fontFamily
-      noteFontSize: root.noteFontSize
-      titleFor: root.titleFor
-      rowHeight: root.rowHeight
-      rowGap: root.rowGap
-      rowRadius: root.rowRadius
-      textInset: root.textInset
-      onActivated: function(path) { root.activated(path) }
-    }
 
-    Column {
-      id: listColumn
-      anchors.fill: parent
-      anchors.margins: root.pagePadding
-      visible: !root.filtering
-      spacing: 0
+      // Search and the note tree share the area above the fixed footer.
+      SearchResults {
+        id: searchPanel
+        anchors.top: parent.top
+        anchors.left: parent.left
+        anchors.right: parent.right
+        anchors.bottom: footer.top
+        visible: root.filtering
+        model: root.filtering ? root.model : []
+        loading: root.searchBusy
+        status: root.searchStatus
+        currentPath: root.currentPath
+        notebook: root.activeName
+        foreground: root.foreground
+        accent: root.accent
+        selectionAccent: root.activeBase
+        selectedBackground: root.selectionFill
+        selectedText: root.foreground
+        fontFamily: root.fontFamily
+        noteFontSize: root.noteFontSize
+        titleFor: root.titleFor
+        rowHeight: root.rowHeight
+        rowGap: root.rowGap
+        rowRadius: root.rowRadius
+        textInset: root.textInset
+        onActivated: function(path) { root.activated(path) }
+      }
 
       Item {
         id: listArea
-        width: parent.width
-        height: parent.height - newNotebookRow.height
+        anchors.top: parent.top
+        anchors.left: parent.left
+        anchors.right: parent.right
+        anchors.bottom: footer.top
+        visible: !root.filtering
 
         // The rows live behind a DelegateModel so a drag can reorder them
         // without touching the model: a model write mid-drag rebuilds every
@@ -428,79 +428,49 @@ Item {
         }
       }
 
-      // ---- "New notebook…" row; becomes a name field when clicked
-      Rectangle {
-        id: newNotebookRow
-        property bool editing: false
-        visible: root.canCreateNotebook
-        width: parent.width
-        // A Column skips an invisible child, but the list above sizes itself
-        // off this height — leave it at 0 or the panel keeps the empty row.
-        height: visible ? root.rowHeight : 0
-        color: !editing && newHover.hovered ? Style.hoverFill : "transparent"
+      // Notebook creation and provider actions use one footer and row component.
+      Column {
+        id: footer
+        anchors.left: parent.left
+        anchors.right: parent.right
+        anchors.bottom: parent.bottom
 
-        HoverHandler { id: newHover }
-
-        Row {
-          anchors.fill: parent
-          anchors.leftMargin: root.textInset
-          anchors.rightMargin: Style.spacing.sm
-          spacing: Style.spacing.md
-
-          Text {
-            textFormat: Text.PlainText
-            anchors.verticalCenter: parent.verticalCenter
-            width: Style.font.icon + Style.space(2)
-            text: newNotebookRow.editing ? "󰉋" : "+"
-            color: root.accentInk
-            font.family: Style.fontFamily
-            font.pixelSize: Style.font.iconSmall
-            horizontalAlignment: Text.AlignHCenter
-          }
-
-          Text {
-            textFormat: Text.PlainText
-            visible: !newNotebookRow.editing
-            anchors.verticalCenter: parent.verticalCenter
-            text: "New notebook…"
-            color: root.foreground
-            font.family: root.fontFamily
-            font.pixelSize: Style.font.bodySmall
-          }
-
-          TextField {
-            id: notebookField
-            visible: newNotebookRow.editing
-            anchors.verticalCenter: parent.verticalCenter
-            width: parent.width - Style.font.icon - Style.space(2) - Style.spacing.md
-            placeholderText: "Notebook name"
-            foreground: root.foreground
-            accent: root.accent
-            font.family: root.fontFamily
-            verticalPadding: Style.spacing.xxs
-            Keys.onPressed: function(event) {
-              if (event.key === Qt.Key_Escape) {
-                newNotebookRow.editing = false; event.accepted = true
-              } else if (event.key === Qt.Key_Return || event.key === Qt.Key_Enter) {
-                var name = text.trim()
-                newNotebookRow.editing = false
-                if (name) {
-                  root.newNotebookRequested(name)
-                }
-                event.accepted = true
-              }
-            }
-            onActiveFocusChanged: if (!activeFocus) {
-              newNotebookRow.editing = false
-            }
-          }
+        SidebarAction {
+          id: newNotebookRow
+          visible: root.canCreateNotebook && !root.filtering
+          width: parent.width
+          height: root.rowHeight
+          text: "New notebook…"
+          iconText: editing ? "󰉋" : "+"
+          editable: true
+          placeholderText: "Notebook name"
+          foreground: root.foreground
+          accent: root.accent
+          iconColor: root.accentInk
+          fontFamily: root.fontFamily
+          textInset: root.textInset
+          rowGap: root.rowGap
+          rowRadius: root.rowRadius
+          onSubmitted: function(name) { root.newNotebookRequested(name) }
         }
 
-        MouseArea {
-          anchors.fill: parent
-          visible: !newNotebookRow.editing
-          cursorShape: Qt.PointingHandCursor
-          onClicked: root.startNewNotebook()
+        Repeater {
+          model: root.footerActions
+          delegate: SidebarAction {
+            required property var modelData
+            width: footer.width
+            height: root.rowHeight
+            text: modelData.title
+            iconText: modelData.icon || "󰊻"
+            foreground: root.foreground
+            accent: root.accent
+            iconColor: root.accentInk
+            fontFamily: root.fontFamily
+            textInset: root.textInset
+            rowGap: root.rowGap
+            rowRadius: root.rowRadius
+            onClicked: root.actionRequested(modelData.path)
+          }
         }
       }
     }
@@ -509,17 +479,16 @@ Item {
     // margin's width inside the edge reads as a stray line beside the list
     // rather than as the list's end. It keeps a hair of clearance so it does
     // not touch the separator beyond it. It still spans only the rows it
-    // scrolls, so it takes its top and bottom from the column that holds them
-    // — the rows' area is that column less the "New notebook…" row beneath it.
+    // scrolls, excluding the shared footer below them.
     Rectangle {
       id: scrollTrack
       anchors.right: parent.right
       anchors.rightMargin: Style.spacing.xs
-      anchors.top: listColumn.top
-      anchors.bottom: listColumn.bottom
-      anchors.bottomMargin: newNotebookRow.height
+      anchors.top: contentArea.top
+      anchors.bottom: contentArea.bottom
+      anchors.bottomMargin: footer.height
       width: Style.space(3)
-      visible: listArea.scrollable
+      visible: !root.filtering && listArea.scrollable
       color: "transparent"
 
       Rectangle {

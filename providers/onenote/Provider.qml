@@ -178,14 +178,13 @@ Item {
     return rows
   }
   function noteList(pgs) { return pgs.map(function(p) { return { path: pathOf(p.id), title: p.title, preview: "" } }) }
-  function logoutRow() { return { kind: "action", path: "logout", title: "Sign out" + (ms.account ? " (" + ms.account + ")" : ""), icon: "󰍃" } }
   function accountActions() {
-    var rows = []
+    var actions = []
     if (!ms.hasScope("Files.Read")) {
-      rows.push({ kind: "action", path: "enableorder", title: ms.loggingIn ? "Cancel signing in…" : "Enable custom section order…", icon: "󰒓" })
+      actions.push({ path: "enableorder", title: ms.loggingIn ? "Cancel signing in…" : "Enable custom section order…", icon: "󰒓" })
     }
-    rows.push(logoutRow())
-    return rows
+    actions.push({ path: "logout", title: "Sign out" + (ms.account ? " (" + ms.account + ")" : ""), icon: "󰍃" })
+    return actions
   }
 
   // `notes` on a section is its searchable whole, fold state ignored: rows
@@ -196,12 +195,12 @@ Item {
     if (root.notebookTabs && books.length > 0) {
       // A tab per notebook. No colour: each takes a pastel from its own
       // name, which is what tells Work from Personal apart (the logo keeps
-      // them OneNote's); the sign-out row rides on every tab, since any of
+      // them OneNote's); the account footer appears on every tab, since any of
       // them is equally the account's.
       root.sections = books.map(function(b) {
         var pgs = root.pages.filter(function(p) { var sec = root.sectionAt(p.sectionId); return sec && sec.notebookId === b.id })
         return { key: b.id, name: b.name, count: pgs.length, notes: noteList(pgs),
-                 rows: bookRows(b.id, 0).concat(accountActions()) }
+                 rows: bookRows(b.id, 0), footerActions: accountActions() }
       })
       root.updated()
       return
@@ -225,9 +224,9 @@ Item {
           ? { kind: "action", path: "refresh", title: "Loading notebooks…", icon: "󰑐" }
           : { kind: "action", path: "refresh", title: "No notebooks found — refresh", icon: "󰑐" })
       }
-      rows = rows.concat(accountActions())
     }
-    root.sections = [{ key: "onenote", name: "OneNote", color: "#7719AA", count: root.pages.length, notes: noteList(root.pages), rows: rows }]
+    root.sections = [{ key: "onenote", name: "OneNote", color: "#7719AA", count: root.pages.length,
+                       notes: noteList(root.pages), rows: rows, footerActions: account ? [] : accountActions() }]
     root.updated()
   }
 

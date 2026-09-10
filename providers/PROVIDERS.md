@@ -25,7 +25,7 @@ host's config (see "Settings from the host's config").
 | `microsoftScopes`   | list   | Graph scopes the provider asks for when it creates its own Microsoft account |
 | `microsoftClientId` | string | the provider's own Microsoft app registration — the application (client) id of an Entra public client that allows personal and work accounts — that its Microsoft account signs in through. Every provider brings its own; none is shared |
 | `logo`              | url    | optional: a mark shown at the head of every one of this provider's tabs, and beside the header title while one of them is open |
-| `sections`          | list   | `[{ key, name, rows, color?, count?, notes? }]` — one binder tab each; `count` overrides the tab's note count. `notes` (`[{ path, title, preview }]`) is every note the section holds, for search: give it when `rows` can hide notes (a folded tree); left out, the note rows are taken to be all of them |
+| `sections`          | list   | `[{ key, name, rows, color?, count?, notes?, footerActions? }]` — one binder tab each; `count` overrides the tab's note count. `notes` (`[{ path, title, preview }]`) is every note the section holds, for search: give it when `rows` can hide notes (a folded tree); left out, the note rows are taken to be all of them |
 
 `name` is the tab's label, turned a quarter turn and elided if it is long, so
 keep it short. `color` is your brand's, given raw as `#rrggbb`: the rail softens
@@ -53,6 +53,14 @@ id), `tree` (path = tree id, `expanded`).
 Action and tree ids are plain strings and several providers use the same ones
 (`login`, `logout`, `refresh`): the host resolves a click against the open
 tab first, so a shared name never reaches another provider's row.
+
+`footerActions` is an optional list of `{ path, title, icon? }` actions pinned
+to the bottom of the sidebar, alongside the host's "New notebook…" control.
+They use the same row component and call `action(path)` just like inline
+action rows. Keep them out of `rows`: footer actions do not scroll, contribute
+to note counts, or appear as search matches. They remain available during
+search; notebook creation remains hidden until search ends. Providers without
+footer actions can omit the list. OneNote and Sticky Notes put Sign out here.
 
 `version` (optional) is an opaque change marker for a note — a file mtime,
 a `lastModifiedDateTime`, an etag. The host compares it with the `version`

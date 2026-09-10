@@ -97,6 +97,7 @@ Item {
 
   function rebuild() {
     var rows = []
+    var footerActions = []
     if (!ms || !ms.configured) {
       rows.push({ kind: "action", path: "unavailable", title: "Not available in this build", icon: "󰒓" })
     } else if (!ms.signedIn) {
@@ -108,11 +109,11 @@ Item {
         rows.push({ kind: "note", path: pathOf(root.notes[i].id), title: "", preview: previewOf(root.notes[i].body), fixed: true, version: root.notes[i].modified || "" })
       }
       rows.push({ kind: "new", path: "new" })
-      rows.push({ kind: "action", path: "logout", title: "Sign out" + (ms.account ? " (" + ms.account + ")" : ""), icon: "󰍃" })
+      footerActions.push({ path: "logout", title: "Sign out" + (ms.account ? " (" + ms.account + ")" : ""), icon: "󰍃" })
     }
     // The sticky-note yellow, which is recognisable where Microsoft's
     // corporate purple is not. "Sticky Notes" because a tab is narrow.
-    root.sections = [{ key: "sticky", name: "Sticky Notes", color: "#F5D33F", rows: rows }]
+    root.sections = [{ key: "sticky", name: "Sticky Notes", color: "#F5D33F", rows: rows, footerActions: footerActions }]
     root.updated()
   }
 

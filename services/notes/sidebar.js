@@ -14,7 +14,7 @@ function row(provider, key, source) {
 
 // Reads provider snapshots; never selects, loads, saves, or mutates a provider.
 function build(providers, active, query, contentHits) {
-  var rows = [], tabs = [], hits = {}, content = {}
+  var rows = [], footerActions = [], tabs = [], hits = {}, content = {}
   var q = query.toLowerCase()
   for (var id in contentHits) {
     for (var path in contentHits[id]) {
@@ -34,8 +34,11 @@ function build(providers, active, query, contentHits) {
       hits[key] = found.length
       if (key === active) {
         rows = (q ? found : all).map(function(item) { return row(provider, key, item) })
+        footerActions = (section.footerActions || []).map(function(action) {
+          return { path: action.path, title: action.title, icon: action.icon || "" }
+        })
       }
     })
   })
-  return { rows: rows, tabs: tabs, hits: hits }
+  return { rows: rows, footerActions: footerActions, tabs: tabs, hits: hits }
 }
