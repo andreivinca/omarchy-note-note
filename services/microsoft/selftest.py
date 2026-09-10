@@ -438,6 +438,60 @@ def test_optional_refresh_with_malformed_reply_or_omitted_scope(verbose):
     return failures
 
 
+def test_cache_session_and_inflight_refresh(verbose):
+    sign_in(expires_in=-1)
+    with patch.object(msgraph, "out") as output:
+        msgraph.cmd_status()
+        session = output.call_args.args[0]["cacheSession"]
+        msgraph.cmd_status()
+        failures = check("status assigns one stable cache session",
+                         bool(session) and output.call_args.args[0]["cacheSession"] == session)
+    with patch.object(msgraph, "http", return_value=(200, {
+            "access_token": "renewed", "refresh_token": "renewed-refresh", "expires_in": 3600})):
+        msgraph.access_token()
+    failures += check("refresh retains the cache session",
+                      msgraph.signed_in(CLIENT_ID).get("cacheSession") == session)
+
+    def identified_during_refresh(*args, **kwargs):
+        current = msgraph.signed_in(CLIENT_ID)
+        current["userId"] = "stable-recovery-account"
+        msgraph.save_private(msgraph.TOKENS, current)
+        return 200, {"access_token": "new-access", "refresh_token": "new-refresh", "expires_in": 3600}
+
+    with patch.object(msgraph, "http", side_effect=identified_during_refresh):
+        msgraph.access_token(force=True)
+    failures += check("refresh preserves a concurrent recovery identity lookup",
+                      msgraph.signed_in(CLIENT_ID).get("userId") == "stable-recovery-account")
+
+    for action, status in (("logout", 200), ("other account", 200), ("other account", 400)):
+        def reply(*args, **kwargs):
+            if action == "logout":
+                msgraph.forget_token()
+            else:
+                token = msgraph.signed_in(CLIENT_ID)
+                token.update(cacheSession="other", access_token="other-access", refresh_token="other-refresh")
+                msgraph.save_private(msgraph.TOKENS, token)
+            return status, {"access_token": "late", "refresh_token": "late-refresh", "expires_in": 3600}
+
+        sign_in()
+        with patch.object(msgraph, "out") as output:
+            msgraph.cmd_status()
+            printed = io.StringIO()
+            with patch.object(msgraph, "http", side_effect=reply), contextlib.redirect_stdout(printed):
+                try:
+                    msgraph.access_token(force=True)
+                    failures += check("late refresh must fail after " + action, False)
+                except SystemExit:
+                    failures += check("late refresh reports account change",
+                                      answered(printed).get("error") == "the signed-in account changed")
+        current = msgraph.signed_in(CLIENT_ID)
+        failures += check("late refresh cannot undo " + action,
+                          current is None if action == "logout" else current.get("access_token") == "other-access")
+    print("cache sessions survive refresh and reject late account responses")
+    print("  %d checks failed" % failures if failures else "  all green")
+    return failures
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("-v", "--verbose", action="store_true")
@@ -455,6 +509,7 @@ def main():
         total += test_a_blip_during_a_forced_refresh_keeps_the_token(args.verbose)
         total += test_optional_scopes_cannot_break_required_refresh(args.verbose)
         total += test_optional_refresh_with_malformed_reply_or_omitted_scope(args.verbose)
+        total += test_cache_session_and_inflight_refresh(args.verbose)
     finally:
         shutil.rmtree(WORK, ignore_errors=True)
 

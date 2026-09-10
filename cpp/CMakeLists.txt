@@ -14,7 +14,7 @@ qt_add_qml_module(notenotetext
     VERSION 1.0
     PLUGIN_TARGET notenotetext
     OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/NoteNoteText
-    SOURCES textblocks.h textblocks.cpp
+    SOURCES textblocks.h textblocks.cpp textlinks.h textlinks.cpp
 )
 
 target_link_libraries(notenotetext PRIVATE Qt6::Quick)

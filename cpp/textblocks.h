@@ -14,6 +14,8 @@
 // inside a code block).
 // Removing an empty paragraph also lives here: it must keep the following
 // block's list membership and character format, which QML cannot set.
+// TextLinks colours and locates URLs without changing the document, and
+// clears inherited anchors from empty paragraphs.
 // The edit-block brackets (beginEditBlock/
 // endEditBlock) write nothing at all: they fence the editor's own strokes
 // into one undo step.
@@ -24,6 +26,8 @@
 // (ui/QuoteBars.js) and images simply have no resize handle.
 // cpp/selftest.py asserts the fallback and the inspector agree.
 #pragma once
+
+#include "textlinks.h"
 
 #include <QImage>
 #include <QObject>
@@ -47,16 +51,27 @@ class TextBlocks : public QObject
     Q_OBJECT
     QML_ELEMENT
     Q_PROPERTY(QQuickTextDocument *document READ document WRITE setDocument NOTIFY documentChanged)
+    Q_PROPERTY(int linkRevision READ linkRevision NOTIFY linksChanged)
 
 public:
-    explicit TextBlocks(QObject *parent = nullptr) : QObject(parent) { }
+    explicit TextBlocks(QObject *parent = nullptr) : QObject(parent), m_links(new TextLinks(this))
+    {
+        connect(m_links, &TextLinks::linksChanged, this, [this]() {
+            ++m_linkRevision;
+            emit linksChanged();
+        });
+    }
+
+    int linkRevision() const { return m_linkRevision; }
 
     QQuickTextDocument *document() const { return m_document; }
     void setDocument(QQuickTextDocument *document)
     {
-        if (document == m_document)
+        if (document == m_document) {
             return;
+        }
         m_document = document;
+        m_links->setDocument(document ? document->textDocument() : nullptr);
         // A depth carried across documents would end blocks the new
         // document never began.
         m_editDepth = 0;
@@ -287,6 +302,21 @@ public:
         return cursor.position();
     }
 
+    Q_INVOKABLE void normalizeLinks()
+    {
+        TextLinks::normalizeAnchors(m_document ? m_document->textDocument() : nullptr);
+    }
+
+    Q_INVOKABLE void configureLinks(const QColor &colour, bool plainText)
+    {
+        m_links->configure(colour, plainText);
+    }
+
+    Q_INVOKABLE QString linkAt(qreal x, qreal y) const
+    {
+        return m_links->linkAt(QPointF(x, y));
+    }
+
     // Qt reads a list into canonical margins — 12 above the first item, 12
     // below the last, 0 between — but an item made by pressing Enter
     // inherits the split item's margins instead, so a growing list drifts
@@ -416,8 +446,11 @@ public:
 
 signals:
     void documentChanged();
+    void linksChanged();
 
 private:
+    TextLinks *m_links;
+    int m_linkRevision = 0;
     static bool isCodeBlock(const QTextBlock &block)
     {
         if (!block.isValid()) {

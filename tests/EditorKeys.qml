@@ -9,6 +9,8 @@ import "../services/notes" as Notes
 Window {
   id: test
   property bool runKeys: true
+  property var openedLinks: []
+  property int editSignals: 0
   signal checked(string name, bool ok, string detail)
   signal finished()
   visible: runKeys
@@ -16,6 +18,7 @@ Window {
   height: 700
 
   Markdown.Markdown { id: converter }
+  FontLoader { id: noteFont; source: "../assets/fonts/ia-writer-mono-s/iAWriterMonoS-Regular.ttf" }
   // The clipboard as the editor asks it (services/clipboard/Clipboard.qml):
   // a text and an HTML flavour each case sets, never an image.
   QtObject {
@@ -29,10 +32,26 @@ Window {
   }
   Ui.NoteEditor {
     id: editor
-    anchors.fill: parent
+    width: parent.width
+    height: parent.height - viewBar.height
     hasNote: true
     markdown: converter
     clipboard: clip
+    noteFontFamily: noteFont.name
+    onLinkOpenRequested: function(url) { test.openedLinks.push(url) }
+    onEdited: test.editSignals++
+  }
+  Ui.ViewBar {
+    id: viewBar
+    anchors.bottom: parent.bottom
+    width: parent.width
+    sourceName: "Local"
+    crumb: "Test notebook"
+    storage: "links.md"
+    statusText: "Saved"
+    wordCount: editor.wordCount
+    countVisible: true
+    hoveredLink: editor.hoveredLink
   }
   TestCase { id: keys; name: "editor keys"; when: false }
 
@@ -425,7 +444,260 @@ Window {
     }
   }
 
+  function links() {
+    var destination = "https://example.com/path?q=notes&lang=en#section"
+    load({ source: "Before [Example link](" + destination + ") after\n" })
+    test.openedLinks = []
+    var body = keys.findChild(editor, "noteBody")
+    var preview = keys.findChild(viewBar, "linkPreview")
+    var start = body.positionToRectangle(9)
+    var x = start.x + 2, y = start.y + start.height / 2
+    var original = editor.documentHtml()
+    keys.mouseMove(body, x, y)
+    keys.wait(50)
+    require(editor.hoveredLink === destination, "hover did not find the link: " + editor.hoveredLink)
+    require(preview.visible && preview.text === destination, "the view bar did not show the hovered URL")
+    require(test.openedLinks.length === 0, "hovering opened the link")
+    keys.mouseClick(body, x, y)
+    require(test.openedLinks.length === 1 && test.openedLinks[0] === destination, "a click did not request the exact URL once")
+    require(editor.documentHtml() === original, "opening the link changed the note")
+
+    keys.mouseMove(viewBar, 5, 5)
+    keys.wait(50)
+    require(editor.hoveredLink === "", "leaving the link kept the hovered URL")
+    require(!preview.visible, "the view bar did not restore its note details after leaving the link")
+    body.deselect()
+    var end = body.positionToRectangle(17)
+    keys.mouseDrag(body, x, y, end.x - x, 0, Qt.LeftButton)
+    require(body.selectedText.length > 0 && test.openedLinks.length === 1, "dragging text opened the link or failed to select")
+    require(editor.documentHtml() === original, "selecting the link changed the note")
+
+    editor.readOnly = true
+    keys.wait(50)
+    keys.mouseClick(body, x, y)
+    require(test.openedLinks.length === 2, "a read-only link could not be opened")
+    editor.readOnly = false
+    load({ source: "No links here\n" })
+    keys.wait(50)
+    require(editor.hoveredLink === "", "changing notes kept the hovered URL: " + editor.hoveredLink)
+    require(!preview.visible, "changing notes left a stale URL in the view bar")
+  }
+
+  function typeText(text) {
+    for (var i = 0; i < text.length; i++) {
+      keys.keyClick(text.charAt(i))
+    }
+  }
+
+  function linkInheritance() {
+    load({ source: "- [First item](https://example.com/first)\n" })
+    editor.setCursorPosition(editor.plainText().length)
+    keys.keyClick(Qt.Key_Return)
+    typeText("Next item")
+    require(read() === "- [First item](https://example.com/first)\n- Next item\n",
+            "the new list item inherited the previous link: " + read())
+  }
+
+  function typedLinks() {
+    load({ source: "- [First item](https://example.com/first)\n" })
+    editor.setCursorPosition(editor.plainText().length)
+    keys.keyClick(Qt.Key_Return)
+    var url = "https://example.org/second?q=one&n=2"
+    typeText(url)
+    var expected = "- [First item](https://example.com/first)\n- " + url + "\n"
+    require(read() === expected, "a typed URL did not acquire its own target: " + read())
+    var body = keys.findChild(editor, "noteBody")
+    var position = body.positionToRectangle(body.length - 4)
+    test.openedLinks = []
+    keys.mouseMove(body, position.x + 2, position.y + position.height / 2)
+    keys.wait(50)
+    require(editor.hoveredLink === url, "the typed link's preview used an old target")
+    var start = body.positionToRectangle(body.length - url.length + 2)
+    keys.mouseDrag(body, start.x + 2, start.y + start.height / 2, position.x - start.x, 0, Qt.LeftButton)
+    require(body.selectedText.length > 0 && test.openedLinks.length === 0,
+            "selecting an automatic URL opened it or failed to select text")
+    body.deselect()
+    keys.mouseClick(body, position.x + 2, position.y + position.height / 2)
+    require(test.openedLinks.length === 1 && test.openedLinks[0] === url, "the typed URL opened an old target")
+    require(editor.bodyFocused, "clicking the URL took keyboard focus away from the editor")
+    editor.setCursorPosition(body.length)
+    typeText(" extra")
+    require(read() === expected.replace(/\n$/, "") + " extra\n", "text after the URL stayed linked: " + read())
+    keys.keyClick(Qt.Key_Return)
+    typeText("www.example.net")
+    position = body.positionToRectangle(body.length - 3)
+    keys.mouseMove(body, position.x + 2, position.y + position.height / 2)
+    keys.wait(50)
+    require(editor.hoveredLink === "https://www.example.net", "a www address was not linked")
+
+    load({ source: "https://example.com/path\n" })
+    require(!body.canUndo, "loading URL formatting created an undo step")
+    editor.setCursorPosition(body.length)
+    typeText("x")
+    require(read() === "https://example.com/pathx\n", "extending a loaded URL changed its text: " + read())
+    position = body.positionToRectangle(body.length - 3)
+    keys.mouseMove(body, position.x + 2, position.y + position.height / 2)
+    keys.wait(50)
+    require(editor.hoveredLink === "https://example.com/pathx", "extending a loaded URL kept its old target")
+    editor.undo()
+    require(read() === "https://example.com/path\n" && editor.hoveredLink === "https://example.com/path",
+            "undo did not restore URL text and target together: " + read())
+    editor.redo()
+    require(read() === "https://example.com/pathx\n" && editor.hoveredLink === "https://example.com/pathx",
+            "redo did not restore URL text and target together")
+    keys.keyClick(Qt.Key_Home)
+    keys.keyClick(Qt.Key_Delete)
+    require(read() === "ttps://example.com/pathx\n", "an invalidated URL remained linked: " + read())
+    require(editor.hoveredLink === "", "an invalidated URL kept its destination")
+  }
+
+  function linkBoundaries() {
+    load({ source: "" })
+    typeText("See (https://example.com/a(b)). Next")
+    var body = keys.findChild(editor, "noteBody")
+    var position = body.positionToRectangle(15)
+    keys.mouseMove(body, position.x + 2, position.y + position.height / 2)
+    keys.wait(50)
+    require(editor.hoveredLink === "https://example.com/a(b)", "URL punctuation was included in the destination")
+    require(read() === "See (https://example.com/a(b)). Next\n", "URL detection rewrote punctuation: " + read())
+    load({ source: "```\n\n```\n" })
+    editor.setCursorPosition(editor.plainText().length)
+    typeText("https://example.com")
+    require(read() === "```\nhttps://example.com\n```\n", "code block URLs became links")
+    position = body.positionToRectangle(body.length - 3)
+    keys.mouseMove(body, position.x + 2, position.y + position.height / 2)
+    keys.wait(50)
+    require(editor.hoveredLink === "", "a code block URL was made clickable")
+    load({ source: "`https://example.com`\n" })
+    require(read() === "`https://example.com`\n", "inline code URLs became links")
+    position = body.positionToRectangle(5)
+    keys.mouseMove(body, position.x + 2, position.y + position.height / 2)
+    keys.wait(50)
+    require(editor.hoveredLink === "", "an inline code URL was made clickable")
+    load({ source: "[Different label](https://example.com)\n" })
+    editor.setCursorPosition(5)
+    typeText("x")
+    require(read() === "[Diffexrent label](https://example.com)\n", "editing a named link changed its destination")
+  }
+
+  function plainLinks() {
+    editor.plain = true
+    try {
+      editor.setNote("", "https://example.com")
+      editor.focusEditor()
+      editor.setCursorPosition(editor.plainText().length)
+      typeText("/new")
+      var body = keys.findChild(editor, "noteBody")
+      var position = body.positionToRectangle(10)
+      keys.mouseMove(body, position.x + 2, position.y + position.height / 2)
+      keys.wait(50)
+      require(editor.hoveredLink === "https://example.com/new",
+              "a plain-text URL was not detected: " + editor.hoveredLink)
+      require(editor.plainText() === "https://example.com/new", "URL detection added markup to a plain note")
+    } finally {
+      editor.plain = false
+    }
+  }
+
+  function linkCaretEditing() {
+    load({ source: "google.com\n" })
+    var body = keys.findChild(editor, "noteBody")
+    var before = body.positionToRectangle(body.length - 1)
+    var after = body.positionToRectangle(body.length)
+    var lastCharacterWidth = after.x - before.x
+
+    var url = "http://google.com"
+    load({ source: url + "\n" })
+    keys.wait(50)
+    before = body.positionToRectangle(body.length - 1)
+    after = body.positionToRectangle(body.length)
+    require(Math.abs(after.x - before.x - lastCharacterWidth) < 0.1,
+            "URL highlighting enlarged the last character's cursor step")
+    keys.mouseClick(body, after.x, after.y + after.height / 2)
+    require(editor.cursorPosition() === url.length, "the caret could not be placed directly after the URL")
+    keys.keyClick(Qt.Key_Delete)
+    require(editor.plainText() === url, "Delete after the URL removed its last character")
+    keys.keyClick(Qt.Key_Backspace)
+    require(editor.plainText() === "http://google.co", "Backspace after the URL did not remove just the last character")
+    editor.undo()
+    require(editor.plainText() === url, "undo did not restore the last URL character")
+    typeText("/path")
+    require(editor.plainText() === url + "/path", "typing at the URL's end did not extend it normally")
+    typeText(" more")
+    require(read() === url + "/path more\n", "typing a space after the URL did not start ordinary text")
+  }
+
+  function linkPresentation() {
+    var url = "https://example.com/path"
+    var source = "See " + url + ", then carry on.\n"
+    test.editSignals = 0
+    load({ source: source })
+    var body = keys.findChild(editor, "noteBody")
+    keys.wait(50)
+    require(test.editSignals === 0, "displaying a URL marked the note as edited")
+    require(read() === source, "URL highlighting changed Markdown")
+    body.select(4, 4 + url.length)
+    require(body.selectedText === url, "URL highlighting changed selected text")
+    keys.keyClick(Qt.Key_Delete)
+    keys.wait(50)
+    require(read() === "See , then carry on.\n", "deleting a URL removed surrounding text")
+    editor.undo()
+    require(read() === source, "undo did not restore the URL as plain Markdown text")
+
+    var longUrl = "https://example.com/" + "path/".repeat(40)
+    load({ source: longUrl + "\n" })
+    keys.mouseMove(viewBar, 5, 5)
+    editor.setCursorPosition(body.length)
+    var point = body.positionToRectangle(body.length - 3)
+    test.openedLinks = []
+    keys.mouseClick(body, point.x + 2, point.y + point.height / 2)
+    require(test.openedLinks.length === 1 && test.openedLinks[0] === longUrl,
+            "clicking a wrapped URL did not open its complete destination")
+    require(read() === longUrl + "\n", "highlighting a wrapped URL changed its text")
+
+    var linked = "[https://example.com](https://example.com)\n"
+    load({ source: linked })
+    require(read() === linked, "an existing Markdown link was rewritten")
+
+    var table = "| first | second |\n|---|---|\n| cell | " + url + " |\n"
+    load({ source: table })
+    point = body.positionToRectangle(body.getText(0, body.length).indexOf(url) + 10)
+    test.openedLinks = []
+    keys.mouseClick(body, point.x + 2, point.y + point.height / 2)
+    require(test.openedLinks.length === 1 && test.openedLinks[0] === url,
+            "clicking a URL in a table did not open its destination")
+    require(read() === table, "highlighting a table URL changed the Markdown")
+  }
+
   function run() {
+    var linkCases = [
+      { name: "typed URLs track their own destination and undo together", run: typedLinks },
+      { name: "URL detection respects punctuation, code and named links", run: linkBoundaries },
+      { name: "plain-text notes detect URLs without adding markup", run: plainLinks },
+      { name: "URL highlighting leaves cursor movement and editing unchanged", run: linkCaretEditing },
+      { name: "URLs open in wrapped lines and tables without changing Markdown", run: linkPresentation }
+    ]
+    for (var l = 0; l < linkCases.length; l++) {
+      try {
+        linkCases[l].run()
+        test.checked(linkCases[l].name, true, "")
+      } catch (error) {
+        test.checked(linkCases[l].name, false, error.message)
+      }
+    }
+    try {
+      linkInheritance()
+      test.checked("new list items do not inherit a link", true, "")
+    } catch (error) {
+      test.checked("new list items do not inherit a link", false, error.message)
+    }
+    try {
+      links()
+      test.checked("links preview and open without editing or intercepting selection", true, "")
+    } catch (error) {
+      editor.readOnly = false
+      test.checked("links preview and open without editing or intercepting selection", false, error.message)
+    }
     var table = "| a | b |\n|---|---|\n| 1 | 2 |\n"
     var blank = "|  |  |\n"
     var cases = [

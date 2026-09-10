@@ -18,6 +18,8 @@
 //             background job never takes the lane's last slot.
 //   flush     a write. It keeps draining while the window is hidden; a read
 //             does not.
+//   runWhenPaused  explicit background work that continues while hidden.
+//             It remains a read: cancellation and write-draining are separate.
 //
 // ES5 only: this is the QML engine (docs/engine-notes.md).
 
@@ -82,6 +84,7 @@ function enqueue(state, opts) {
     owner: opts.owner === undefined ? null : opts.owner,
     ownerId: ownerIndex(state, opts.owner),
     flush: opts.flush === true,
+    runWhenPaused: opts.runWhenPaused === true,
     label: opts.label || opts.key || "",
     start: opts.start || null,
     settled: opts.settled ? [opts.settled] : [],
@@ -145,7 +148,7 @@ function nextRunnable(state, nowMs, opts) {
     if (busy[job.key]) {
       continue
     }
-    if (state.paused && !job.flush) {
+    if (state.paused && !job.flush && !job.runWhenPaused) {
       continue
     }
     if (job.notBefore > nowMs) {
@@ -218,8 +221,8 @@ function onResult(state, job, result, nowMs) {
 }
 
 // Hiding the window: reads and polls are dropped (they are re-requested by
-// the next open()), writes keep draining. Returns the jobs dropped, for their
-// callers to be told.
+// the next open()), writes keep draining and explicit background work continues.
+// Returns the jobs dropped, for their callers to be told.
 function setPaused(state, paused) {
   state.paused = paused === true
   if (!state.paused) {
@@ -227,7 +230,7 @@ function setPaused(state, paused) {
   }
   var kept = [], dropped = []
   for (var i = 0; i < state.jobs.length; i++) {
-    if (state.jobs[i].flush) {
+    if (state.jobs[i].flush || state.jobs[i].runWhenPaused) {
       kept.push(state.jobs[i])
     } else {
       dropped.push(state.jobs[i])

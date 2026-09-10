@@ -1,6 +1,6 @@
 # Testing and development
 
-The aggregate runner exercises all twelve suites without real accounts or note
+The aggregate runner exercises all thirteen suites without real accounts or note
 contents:
 
 ```bash
@@ -31,7 +31,7 @@ omarchy plugin enable io.github.andreivinca.note-note
 - **Python changed** → nothing; the next call picks it up. That includes the
   editor's converters, which run as a process per conversion.
 - Always lint first: `qmllint -I /usr/share/omarchy/shell Notes.qml ui/*.qml
-  providers/*/Provider.qml services/*/*.qml`, and `python3 -m py_compile` the
+  providers/*/Provider.qml providers/onenote/SearchCache.qml services/*/*.qml`, and `python3 -m py_compile` the
   scripts. For Python there is also `uvx ruff check .`, configured in
   `pyproject.toml` — it needs nothing installed and it is narrowed to the
   rules that catch defects (a stale import, an unused local) rather than to
@@ -122,6 +122,20 @@ compare the full document HTML through repeated keyboard and API Undo/Redo,
 including ordinary paragraph joins that trigger list-margin normalization.
 Conflict-panel checks use the real editor loader and click every action,
 including replacing an already-open conflict with fresh data.
+Pointer events check link previews in the view bar, directly opening editable
+and read-only links, selecting link text without opening it, and clearing the
+preview when the pointer leaves or the note changes. These checks capture
+open requests without launching a browser.
+URL cases type new addresses after a linked list item, check their destinations
+as they grow and through undo/redo, and cover punctuation, code spans, named
+links and plain-text notes. These run with the actual iA Writer Mono S note font
+to distinguish prose from inline code. Direct-click checks cover wrapped URLs
+and table cells. Deletion, undo, selection and Markdown checks ensure the
+display styling stays outside the saved document.
+The `http://google.com` cursor regression compares the last character's advance
+with ordinary text and checks mouse placement after `m`, Delete, Backspace,
+extending the URL, and continuing with a space. Existing explicit Markdown links
+stay unchanged.
 Process cases cover startup failure, stdin delivery, malformed output, nonzero
 exit, cancellation, deadlines and exactly one callback.
 
@@ -236,6 +250,22 @@ about a tenth of a second; `providers/local/selftest.py` takes around four,
 and is meant to — a birth time cannot be forged, so it really does wait a
 second between creating its notes. They are the only tests that cover what a
 script does when the far end misbehaves.
+
+## Testing OneNote content search
+
+```bash
+python3 providers/onenote/search_selftest.py
+```
+
+OneNote search tests use temporary private caches and stubbed Graph replies.
+They check restart/resume, Unicode and visible-text extraction, skipped image
+resources, concurrent cache writers, deletion, stale read/save ordering,
+sign-out isolation, periodic refresh, failure backoff, bounds and atomic
+write failures. A real QML controller and request queue verify local search
+during an API cooldown, parallel indexing while hidden, interactive capacity,
+account changes and callback delivery. Real processes verify distinct page
+claims and recovery after a worker exits. `tests/transition_selftest.py --host` also checks that background
+updates re-query only their provider and discard older search responses.
 
 ## Testing the provider converters
 
@@ -439,7 +469,7 @@ inotifywait -m -e close_write,moved_to --format '%e %f' ~/Notes   # writes are a
 1. `qmllint` clean, `py_compile` clean, `ruff` silent, `qthtml/selftest.py`
    green — and, if anything touched requests, `ratelimit_selftest.py` and
    `services/requests/selftest.py` too; if it touched a provider script, the
-   three suites under "Testing the provider scripts".
+   relevant suites under "Testing the provider scripts" and "Testing OneNote content search".
 2. Restart the shell; log clean.
 3. Screenshot the window (`grim -o <output>` then crop with `magick`) and
    actually look at it.

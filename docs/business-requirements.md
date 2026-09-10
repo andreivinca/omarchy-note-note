@@ -72,7 +72,7 @@ community marketplace at <https://omarchyplugins.com>.
 | One notebook open at a time, picked from a tab rail; the user's own files open first | a flat list of every source is unreadable past a few hundred rows, and a tab is a place you go to, not a fold you undo |
 | Highlight is shown as `==text==` markers | the editor cannot round-trip a background colour; markers survive editing, colour would not |
 | Every provider signs in separately | signing out of OneNote must not sign out of Sticky Notes |
-| The app is silent while hidden, except a write still draining | no timers, no watchers, no reads unless the window is open — but a save already accepted keeps trying until it lands, because losing it is worse |
+| Ordinary reads and watchers pause while hidden; writes and content indexing continue | accepted saves finish, and OneNote search indexing runs in the background so its initial download does not require keeping the window open. Indexing yields to interactive work and obeys the request budget |
 
 ## Success criteria
 

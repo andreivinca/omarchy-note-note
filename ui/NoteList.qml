@@ -32,6 +32,7 @@ Item {
   // Providers are still answering the content search; the search panel says
   // so instead of a premature "No match" (see the host's searchBusy).
   property bool searchBusy: false
+  property string searchStatus: ""
   // The binder's tabs, as the host builds them: { key, name, color, logo,
   // count }. The strip in the title bar renders them; this panel reads only
   // the open one — its colour for the page wash, its name for the search
@@ -174,6 +175,7 @@ Item {
       visible: root.filtering
       model: root.filtering ? root.model : []
       loading: root.searchBusy
+      status: root.searchStatus
       currentPath: root.currentPath
       notebook: root.activeName
       foreground: root.foreground

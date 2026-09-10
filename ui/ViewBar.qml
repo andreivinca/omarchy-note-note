@@ -47,6 +47,8 @@ Item {
   // The note holds edits not yet confirmed saved: dirty, or a save in flight.
   property bool unsaved: false
   property string statusText: ""
+  property string hoveredLink: ""
+  readonly property bool previewingLink: hoveredLink.length > 0
   property int wordCount: 0
   property bool countVisible: false
   // The sidebar is folded away: the toggle then points the way back.
@@ -169,6 +171,7 @@ Item {
 
   Row {
     id: contextRow
+    visible: !root.previewingLink
     anchors.left: sourceBlock.visible ? sourceBlock.right : toggle.right
     anchors.leftMargin: Style.spacing.lg
     y: sourceLabel.y
@@ -228,7 +231,7 @@ Item {
   // countdown; it sits empty otherwise.
   Text {
     textFormat: Text.PlainText
-    visible: root.statusText.length > 0
+    visible: root.statusText.length > 0 && !root.previewingLink
     anchors.left: contextRow.right
     anchors.leftMargin: Style.spacing.lg
     anchors.right: counter.visible ? counter.left : parent.right
@@ -245,11 +248,42 @@ Item {
   Text {
     id: counter
     textFormat: Text.PlainText
-    visible: root.countVisible
+    visible: root.countVisible && !root.previewingLink
     anchors.right: parent.right
     anchors.rightMargin: Style.spacing.lg
     y: sourceLabel.y
     text: root.wordCount + (root.wordCount === 1 ? " word" : " words")
+    color: Util.alpha(root.foreground, 0.55)
+    font.family: root.fontFamily
+    font.pixelSize: root.fontSize
+  }
+
+  // A hovered destination gets the space normally used by note details.
+  // Keep the action separate so a long URL cannot elide the hint away.
+  Text {
+    objectName: "linkPreview"
+    visible: root.previewingLink
+    textFormat: Text.PlainText
+    anchors.left: sourceBlock.visible ? sourceBlock.right : toggle.right
+    anchors.leftMargin: Style.spacing.lg
+    anchors.right: linkHint.left
+    anchors.rightMargin: Style.spacing.lg
+    y: sourceLabel.y
+    text: root.hoveredLink
+    color: Qt.tint(root.foreground, Util.alpha(root.accent, 0.6))
+    font.family: root.fontFamily
+    font.pixelSize: root.fontSize
+    elide: Text.ElideMiddle
+  }
+
+  Text {
+    id: linkHint
+    visible: root.previewingLink
+    textFormat: Text.PlainText
+    anchors.right: parent.right
+    anchors.rightMargin: Style.spacing.lg
+    y: sourceLabel.y
+    text: "Click to open"
     color: Util.alpha(root.foreground, 0.55)
     font.family: root.fontFamily
     font.pixelSize: root.fontSize

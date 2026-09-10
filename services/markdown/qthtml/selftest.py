@@ -80,6 +80,8 @@ CASES = {
     "link with text": "see [the docs](https://example.com/a%29b)\n",
     "link in bold": "**see [the docs](https://example.com)**\n",
     "link in a list": "- see [docs](https://example.com)\n- plain\n",
+    "bare URL after a linked item": "- [First](https://example.com/first)\n- https://example.org/second?q=one&n=2\n",
+    "bare URL punctuation": "See (https://example.com/a(b)). Next\n",
     "formatting in a cell": "| a | b |\n|---|---|\n| **bold** | ==hi== |\n",
     "formatting in an item": "- **bold** item\n- [x] ==done== well\n",
     "highlight in an unchecked item": "- [ ] Build an ==Omarchy== plugin\n- [ ] Ship it\n",

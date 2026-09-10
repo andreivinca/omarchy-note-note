@@ -337,6 +337,19 @@ def cooldown_remaining(key, now=time.time):
         return max(0.0, st["cooldownUntil"] - now())
 
 
+def background_delay(key, windows, reserve=20, now=time.time):
+    """Advisory delay for optional work, leaving budget for interactive calls.
+
+    This does not reserve a slot or impose a cooldown. The eventual request
+    still uses slot() and the ordinary limits. Only the background caller
+    waits when its smaller budget is full.
+    """
+    with _locked(key) as st:
+        t = now()
+        limits = [(span, max(1, budget - reserve)) for span, budget in windows]
+        return max(0.0, st["cooldownUntil"] - t, window_wait(st["stamps"], limits, t))
+
+
 def retry_after_of(headers):
     """`Retry-After` as seconds — a count or an HTTP date — or None.
 

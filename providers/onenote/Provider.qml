@@ -88,6 +88,7 @@ Item {
   // Graph does not reliably bump a page's lastModifiedDateTime, so the open
   // page is re-read on poll and reported when its text differs.
   signal noteChanged(string path)
+  signal searchChanged()
 
   property var onSections: []    // [{ id, name, notebook, notebookId }]
   property var pages: []         // [{ id, sectionId, title, modified }]
@@ -96,6 +97,8 @@ Item {
   property var saveVersions: ({})
   property var expanded: []      // notebook/section ids the user opened
   property var sections: []
+  property bool searchInventoryReady: false
+  property bool searchInventoryComplete: false
   readonly property bool ready: ms && ms.signedIn && ms.hasScope("Notes.ReadWrite")
 
   function idOf(path) { return path.substring(root.id.length + 1) }
@@ -493,13 +496,25 @@ Item {
   // single `saveCb`-shaped slot that the next save would overwrite. (That
   // slot is where a second save used to drop the first one's answer.)
   ProcessRunner { id: scriptRunner }
+  ProcessRunner { id: searchRunner }
   readonly property bool busy: scriptRunner.active > 0
 
   function runScript(args, payload, ctx) {
-    scriptRunner.run({ command: ["python3", root.script].concat(args),
+    root.runProcess(scriptRunner, args, payload || undefined, function(result) { ctx.done(result) })
+  }
+
+  function runLocal(args, payload, callback) {
+    return root.runProcess(searchRunner, args, payload, callback)
+  }
+
+  function runProcess(runner, args, payload, callback) {
+    var session = root.ms ? root.ms.cacheSession : ""
+    return runner.run({ command: ["python3", root.script].concat(args),
                        environment: root.ms ? root.ms.env : ({}),
-                       payload: payload || undefined,
-                       timeoutMs: 600000 }, function(result) { ctx.done(result) })
+                       payload: payload,
+                       timeoutMs: 600000 }, function(result) {
+      callback(session === (root.ms ? root.ms.cacheSession : "") ? result : { error: "the signed-in account changed" })
+    })
   }
 
   function refresh() {
@@ -537,6 +552,8 @@ Item {
           }
           if (Array.isArray(r.pages)) {
             root.pages = r.pages
+            root.searchInventoryReady = true
+            root.searchInventoryComplete = r.inventoryComplete === true
           }
           if (Array.isArray(r.sectionOrderWarnings) && r.sectionOrderWarnings.length) {
             root.statusRequested("OneNote section order: " + r.sectionOrderWarnings.join("; "))
@@ -546,17 +563,55 @@ Item {
       })
   }
 
-  // No `search()` here, deliberately: Microsoft Graph's OneNote pages
-  // endpoint has no content-search parameter at all — `search=` and
-  // `$search=` both come back 400 "unsupported OData query parameters" for
-  // every account type, verified against a live personal account (the one
-  // case older docs implied it might work for). The endpoint's own
-  // documented query options are filter/orderby/select/expand/top/skip/
-  // count/pagelevel, search among them nowhere. Titles are already in the
-  // listing, where the host matches them itself — the same shape as Notion.
+  SearchCache {
+    id: searchCache
+    ready: root.ready
+    inventoryReady: root.searchInventoryReady
+    inventoryComplete: root.searchInventoryComplete
+    session: root.ms ? root.ms.cacheSession : ""
+    pages: root.pages
+    queue: root.rq
+    run: root.runLocal
+    preferredSections: {
+      if (!root.searchInventoryReady) {
+        return []
+      }
+      var page = root.host ? root.pageAt(root.host.currentPath) : null
+      var section = page ? root.sectionAt(page.sectionId) : null
+      return root.searchSections(section ? section.notebookId : "")
+    }
+    onChanged: root.searchChanged()
+  }
+
+  function searchSections(notebookId) {
+    if (!root.searchInventoryReady) {
+      return []
+    }
+    return root.onSections.filter(function(section) {
+      return !notebookId || section.notebookId === notebookId
+    }).map(function(section) { return section.id })
+  }
+
+  function search(query, callback) { searchCache.search(query, callback) }
+  function searchDiagnostics() { return searchCache.diagnostics() }
+
+  function searchStatus(sectionKey) {
+    // A single OneNote tab contains every notebook; notebook tabs use their
+    // notebook identity as the provider's section key.
+    return searchCache.status(root.searchSections(root.notebookTabs ? sectionKey : ""))
+  }
 
   Connections {
     target: root.ms
+    function onCacheSessionChanged() {
+      root.searchInventoryReady = false
+      root.searchInventoryComplete = false
+      root.onSections = []
+      root.pages = []
+      root.bodies = ({})
+      root.loadVersions = ({})
+      root.saveVersions = ({})
+    }
     function onUpdated() {
       if (!root.ms.signedIn) {
         root.onSections = []
@@ -609,6 +664,7 @@ Item {
           cb(result || { error: "not loaded — the window closed" })
           return
         }
+        searchCache.refresh()
         if (root.loadVersions[id] === version && (root.saveVersions[id] || 0) === saveVersion) {
           result = root.cacheBody(path, result)
         }
@@ -649,6 +705,7 @@ Item {
           cb(result)
           return
         }
+        searchCache.refresh()
         var latest = root.saveVersions[id] === version
         if (latest) {
           var page = root.pageAt(path)
@@ -716,8 +773,6 @@ Item {
 
   function remove(path, cb) {
     var id = idOf(path)
-    root.pages = root.pages.filter(function(p) { return p.id !== id })
-    rebuild()
     if (!root.rq) {
       if (cb) {
         cb({ error: "not ready" })
@@ -731,8 +786,17 @@ Item {
     root.rq.enqueue({ key: "page:" + id, mode: "replace", priority: 0, owner: root, flush: true, label: "delete" },
       function(ctx) { root.runScript(["delete", id], "", ctx) },
       function(r) {
+        if (!r || r.error) {
+          if (cb) {
+            cb({ error: r ? r.error : "the delete was cancelled" })
+          }
+          return
+        }
+        root.pages = root.pages.filter(function(p) { return p.id !== id })
+        delete root.bodies[id]
+        root.rebuild()
         if (cb) {
-          cb(r && r.error ? { error: r.error } : {})
+          cb({})
         }
       })
   }
@@ -793,6 +857,7 @@ Item {
   // Graph does not reliably bump a page's lastModifiedDateTime, so the open
   // page is compared by its text instead.
   function applyCheck(path, r) {
+    searchCache.refresh()
     var id = root.idOf(path), old = root.bodies[id]
     if (old && old.body === r.body && old.title === r.title && old.editable === r.editable) {
       return
@@ -811,10 +876,15 @@ Item {
   readonly property bool listing: cachedProc.running || (root.rq ? root.rq.depth > 0 : false)
   Process {
     id: cachedProc
+    property string session: ""
+    onStarted: session = root.ms ? root.ms.cacheSession : ""
     environment: root.ms ? root.ms.env : ({})
     command: ["python3", root.script, "list", "--cached"]
     stdout: StdioCollector {
       onStreamFinished: {
+        if (cachedProc.session !== (root.ms ? root.ms.cacheSession : "")) {
+          return
+        }
         var res = root.parse(this.text)
         if (!res.error) {
           if (Array.isArray(res.sections)) {
@@ -822,6 +892,8 @@ Item {
           }
           if (Array.isArray(res.pages)) {
             root.pages = res.pages
+            root.searchInventoryReady = res.inventoryReady === true
+            root.searchInventoryComplete = res.inventoryComplete === true
           }
         }
         root.rebuild()

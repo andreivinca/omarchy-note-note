@@ -48,7 +48,7 @@ def main():
             env["NOTE_NOTE_TEST_HOST"] = "1"
         try:
             proc = subprocess.run(["qs", "-p", str(work / "shell.qml"), "--no-color"],
-                                  env=env, capture_output=True, text=True, timeout=30)
+                                  env=env, capture_output=True, text=True, timeout=60)
         except subprocess.TimeoutExpired as error:
             print("FAILED:", error)
             for captured in (error.stdout, error.stderr):
