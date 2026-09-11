@@ -790,9 +790,11 @@ Window {
     require(!editor.tool("bold"), "disabled tool ran through command dispatch")
     keys.keyClick(Qt.Key_B, Qt.ControlModifier)
     require(editor.documentHtml() === before, "disabled shortcut reached native formatting")
-    require(editor.tools.toolbarTools.filter(function(tool) {
-      return /^h[123]$/.test(tool.toolId)
-    }).map(function(tool) { return tool.toolId }).join(",") === "h2", "provider heading restrictions were lost: " + editor.tools.toolbarTools.map(function(tool) { return tool.toolId }))
+    require(editor.tools.menuTools("heading").map(function(tool) {
+      return tool.toolId
+    }).join(",") === "h2", "provider heading restrictions were lost")
+    require(!editor.tool("h1") && !editor.tool("h3") && !editor.tool("p"),
+            "disabled heading options ran through command dispatch")
     var button = keys.findChild(editor, "editingTool-bold")
     require(!button || !button.visible, "disabled toolbar button remained visible")
     keys.keyClick(Qt.Key_I, Qt.ControlModifier)
@@ -887,19 +889,44 @@ Window {
 
   function toolMenuAndTyping() {
     load({ source: "word\n" })
-    editor.enabledTools = ["h2", "bold"]
-    editor.toolbarLayout = [[{ dropdown: "insert", items: ["h1", "h2", "h3"] }], ["bold"]]
-    require(editor.tools.menuTools("insert").map(function(tool) {
+    require(editor.tools.menuTools("heading").map(function(tool) {
       return tool.toolId
-    }).join(",") === "h2", "menu ignored provider capabilities")
-    var button = keys.findChild(editor, "editingTool-insert")
+    }).join(",") === "h1,h2,h3,p", "Heading must contain all four styles in order")
+    var button = keys.findChild(editor, "editingTool-heading")
+    require(button && button.visible && button.enabled, "Heading dropdown is missing")
     keys.waitForRendering(button)
-    keys.mouseClick(button, button.width / 2, button.height / 2)
-    keys.wait(20)
     var popup = Array.from(button.data).find(function(object) {
-      return object.objectName === "editingPopup-insert"
+      return object.objectName === "editingPopup-heading"
     })
-    require(popup && popup.opened, "Insert menu did not open")
+    var choices = [
+      { id: "h1", expected: "# word\n", scale: 2.0 },
+      { id: "h2", expected: "## word\n", scale: 1.5 },
+      { id: "h3", expected: "### word\n", scale: 1.17 },
+      { id: "p", expected: "word\n", scale: 1.0 }
+    ]
+    for (var i = 0; i < choices.length; i++) {
+      var choice = choices[i]
+      require(!keys.findChild(editor, "editingTool-" + choice.id), "heading choice has a separate toolbar button")
+      load({ source: choice.id === "p" ? "## word\n" : "word\n" })
+      selectText("word")
+      keys.mouseClick(button, button.width / 2, button.height / 2)
+      keys.tryVerify(function() { return popup && popup.opened }, 3000)
+      var option = keys.findChild(popup.contentItem, "editingMenu-" + choice.id)
+      require(option && option.visible && option.width > 50, "heading option has no usable menu row")
+      keys.waitForRendering(option)
+      require(option.font.pixelSize === Math.round(editor.bodyFontSize * choice.scale)
+              && option.font.bold === (choice.id !== "p"), "heading preview does not match its style")
+      var original = editor.documentHtml()
+      keys.mouseClick(option, option.width / 2, option.height / 2)
+      keys.tryVerify(function() { return editor.documentHtml() !== original }, 3000)
+      require(read() === choice.expected && !popup.opened, choice.id + " did not apply and dismiss")
+      editor.undo()
+      require(read() === (choice.id === "p" ? "## word\n" : "word\n"), "heading choice was not one undo step")
+    }
+    load({ source: "word\n" })
+    editor.enabledTools = ["h2", "bold"]
+    keys.mouseClick(button, button.width / 2, button.height / 2)
+    keys.tryVerify(function() { return popup.opened }, 3000)
     var row = keys.findChild(popup.contentItem, "editingMenu-h2")
     require(row && row.visible && row.width > 50, "discovered menu action has no usable row: "
             + (row ? JSON.stringify({ visible: row.visible, width: row.width }) : "missing"))
@@ -910,7 +937,13 @@ Window {
     keys.mouseClick(button, button.width / 2, button.height / 2)
     keys.tryVerify(function() { return popup.opened }, 3000)
     editor.enabledTools = ["bold"]
-    require(!button.enabled && !popup.opened, "dropdown remained open after losing all supported members")
+    require(!button.visible && !popup.opened, "dropdown remained visible after losing all supported members")
+    editor.enabledTools = null
+    load({ source: "- item\n" })
+    editor.setCursorPosition(editor.plainText().indexOf("item") + 2)
+    keys.tryVerify(function() { return editor.inList }, 3000)
+    require(!button.visible && !editor.tool("h1"), "heading dropdown was available inside a list")
+    editor.enabledTools = ["bold"]
     load({ source: "word\n" })
     editor.setCursorPosition(4)
     keys.keyClick(Qt.Key_B, Qt.ControlModifier)
@@ -937,12 +970,15 @@ Window {
     require(insert && insert.visible && !insert.enabled, "empty Insert should be visible and disabled")
     var originalBold = editor.tools.find("bold")
     var before = editor.documentHtml()
-    editor.toolbarLayout = [["italic", "bold"], [{ dropdown: "insert", items: ["greeting", "table", "link"] }], ["h2"]]
+    editor.toolbarLayout = [["italic", "bold"], [{ dropdown: "insert", items: ["greeting", "table", "link"] }], ["h1", "h2", "h3", "p"]]
     require(editor.tools.find("bold") === originalBold, "layout change recreated action instances")
     require(editor.documentHtml() === before, "layout change altered the document")
     require(editor.tools.topLevelTools.slice(0, 4).map(function(tool) {
       return tool.toolId
-    }).join(",") === "italic,bold,insert,h2", "configured order did not reach the toolbar")
+    }).join(",") === "italic,bold,insert,heading", "configured order did not reach the toolbar")
+    require(editor.tools.topLevelTools.filter(function(tool) {
+      return tool.toolId === "heading"
+    }).length === 1, "legacy heading entries produced duplicate dropdowns")
     require(editor.tools.groupFor("italic") === editor.tools.groupFor("bold")
             && editor.tools.groupFor("bold") !== editor.tools.groupFor("insert"), "configured grouping was lost")
     require(editor.tools.menuTools("insert").map(function(tool) {
@@ -973,6 +1009,19 @@ Window {
     require(ids.length === editor.tools.tools.length
             && ids.join(",") === ids.slice().sort(function(a, b) { return a.localeCompare(b) }).join(","),
             "omitted tools did not all appear at the end in ID order")
+    editor.toolbarLayout = [[{ dropdown: "insert", items: ["h2", "h1", "h3", "p"] }], ["heading"]]
+    require(editor.tools.menuTools("insert").map(function(tool) {
+      return tool.toolId
+    }).join(",") === "heading", "legacy heading choices did not stay together inside Insert")
+    require(!keys.findChild(editor, "editingTool-heading"), "nested Heading also appeared on the toolbar")
+    var popup = openInsertMenu()
+    var heading = keys.findChild(popup.contentItem, "editingMenu-heading")
+    require(heading && heading.subMenu, "Heading did not render as a submenu")
+    keys.mouseClick(heading, heading.width / 2, heading.height / 2)
+    keys.tryVerify(function() { return heading.subMenu.opened }, 3000)
+    var normal = keys.findChild(heading.subMenu.contentItem, "editingMenu-p")
+    require(normal && normal.visible, "nested Heading lost its fixed choices")
+    popup.dismiss()
   }
 
   function openInsertMenu() {
@@ -1445,7 +1494,7 @@ Window {
       { name: "one added file supplies its action, toolbar button, shortcut and help", run: toolDiscovery },
       { name: "tool-owned link panel preserves context and undo", run: toolLinkPanel },
       { name: "invalid tools are isolated and cannot take app shortcuts", run: toolRegistryValidation },
-      { name: "configured dropdown actions and pending font styles work", run: toolMenuAndTyping },
+      { name: "one heading dropdown previews and applies all four styles and respects provider and list restrictions", run: toolMenuAndTyping },
       { name: "settings rearrange groups and dropdowns without changing actions or documents", run: toolLayout },
       { name: "nested menus support pointer and keyboard navigation and dismiss with editor changes", run: toolSubmenus },
       { name: "calendar dates follow locale, leap years and month boundaries", run: calendarDates },

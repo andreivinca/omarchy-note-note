@@ -5,7 +5,7 @@
 function defaults() {
   return [
     ["bold", "italic", "underline", "strikeout"],
-    ["textColor", "highlight", "code", "h1", "h2", "h3", "p"],
+    ["textColor", "highlight", "code", "heading"],
     ["ul", "ol", "todo", "outdent", "indent"],
     ["quote", "codeblock", "rule", "link"],
     ["table", "addRow", "delRow", "addCol", "delCol"],
@@ -85,15 +85,23 @@ function resolve(layout, tools) {
   var menus = Object.create(null)
   var toolbar = []
   for (var t = 0; t < tools.length; t++) {
-    byId[tools[t].toolId] = tools[t]
+    var installed = tools[t]
+    byId[installed.toolId] = installed
+    // Old layouts may name individual choices. Keep the combined tool at
+    // the first such position, including when it lives inside another menu.
+    for (var o = 0; o < (installed.options || []).length; o++) {
+      byId[installed.options[o].toolId] = installed
+    }
   }
   function resolveEntry(entry) {
     var isDropdown = typeof entry === "object"
     var id = isDropdown ? entry.dropdown : entry
     var tool = byId[id]
-    if (!tool || tool.isMenu !== isDropdown) {
+    var configurableMenu = tool && tool.isMenu && (tool.options || []).length === 0
+    if (!tool || configurableMenu !== isDropdown || placed[tool.toolId]) {
       return null
     }
+    id = tool.toolId
     placed[id] = true
     if (isDropdown) {
       menus[id] = []

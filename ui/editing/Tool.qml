@@ -16,8 +16,10 @@ QtObject {
   property string shortcutLabel: ""
   readonly property string tooltip: label + (shortcutLabel ? " (" + shortcutLabel + ")" : "")
 
-  // Dropdown membership and order are supplied by the toolbar settings.
-  property bool isMenu: false
+  // A tool can own a fixed set of choices. Other menus take their members
+  // and order from toolbar settings.
+  property list<Tool> options
+  property bool isMenu: options.length > 0
   property real previewScale: 1.0
   property bool previewBold: false
 

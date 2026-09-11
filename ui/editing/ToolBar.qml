@@ -8,7 +8,7 @@ Item {
   required property var registry
   property color background: Color.menu.background
   readonly property var editor: registry.editor
-  readonly property bool panelOpen: registry.tools.some(function(tool) {
+  readonly property bool panelOpen: registry.actions.some(function(tool) {
     return tool.panelOpen
   })
   height: visible ? strip.implicitHeight + Style.spacing.hairline : 0
@@ -112,7 +112,7 @@ Item {
     }
 
     Repeater {
-      model: bar.registry.tools
+      model: bar.registry.actions
       delegate: Loader {
         required property var modelData
         width: strip.width - strip.leftPadding - strip.rightPadding
@@ -136,7 +136,7 @@ Item {
   }
 
   Repeater {
-    model: bar.registry.tools
+    model: bar.registry.actions
     delegate: Loader {
       required property var modelData
       active: !!modelData.panel && modelData.panelPopup

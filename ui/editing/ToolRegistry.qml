@@ -11,6 +11,9 @@ Item {
   readonly property alias ready: registryState.ready
   readonly property alias errors: registryState.errors
   readonly property alias tools: registryState.tools
+  readonly property var actions: tools.reduce(function(result, tool) {
+    return result.concat(registry.definitions(tool))
+  }, [])
   readonly property var placement: ToolbarSettings.resolve(layout, tools)
   readonly property var topLevelTools: placement.toolbar.map(function(entry) {
     return entry.tool
@@ -18,7 +21,7 @@ Item {
   readonly property var toolbarTools: topLevelTools.filter(function(tool) {
     return registry.isVisible(tool)
   })
-  readonly property var shortcutActions: tools.filter(function(tool) {
+  readonly property var shortcutActions: actions.filter(function(tool) {
     return !!tool.shortcutKey
   }).map(function(tool) {
     return { group: "Editing", label: tool.shortcutLabel, description: tool.label }
@@ -62,6 +65,33 @@ Item {
     }
   }
 
+  function definitions(tool) {
+    return [tool].concat(Array.from(tool.options))
+  }
+
+  function definitionError(tool, counts, shortcuts) {
+    if (tool.apiVersion !== 1 || !tool.toolId || !tool.label || typeof tool.execute !== "function") {
+      return "expected an editing Tool with an id and label"
+    }
+    if (counts[tool.toolId] > 1) {
+      return "duplicate tool id"
+    }
+    if (!tool.shortcutKey) {
+      return ""
+    }
+    if (!tool.shortcutLabel || tool.isMenu) {
+      return "shortcuts need a label and an executable tool"
+    }
+    var shortcut = tool.shortcutKey + ":" + tool.shortcutModifiers
+    if (shortcuts[shortcut] || KeyBindings.ACTIONS.concat(KeyBindings.EDITOR_KEYS).some(function(action) {
+      return action.key === tool.shortcutKey && (action.modifiers || 0) === tool.shortcutModifiers
+    })) {
+      return "shortcut already assigned"
+    }
+    shortcuts[shortcut] = true
+    return ""
+  }
+
   function loadTools() {
     // Discover once per directory. Updating source files takes effect on app
     // restart; do not destroy tool instances underneath pending conversions.
@@ -84,7 +114,7 @@ Item {
         continue
       }
       var tool = component.createObject(registry, { editor: registry.editor })
-      if (!tool || tool.apiVersion !== 1 || !tool.toolId || !tool.label
+      if (!tool || tool.apiVersion !== 1 || !tool.toolId || !tool.label || !tool.options
           || typeof tool.execute !== "function") {
         diagnostics.push(String(url) + ": expected an editing Tool with an id and label")
         if (tool) {
@@ -95,7 +125,10 @@ Item {
       }
       component.destroy()
       candidates.push(tool)
-      counts[tool.toolId] = (counts[tool.toolId] || 0) + 1
+      var entries = definitions(tool)
+      for (var e = 0; e < entries.length; e++) {
+        counts[entries[e].toolId] = (counts[entries[e].toolId] || 0) + 1
+      }
     }
     candidates.sort(function(a, b) {
       return a.toolId.localeCompare(b.toolId)
@@ -105,24 +138,19 @@ Item {
     for (var j = 0; j < candidates.length; j++) {
       var candidate = candidates[j]
       var reason = ""
-      var shortcut = candidate.shortcutKey + ":" + candidate.shortcutModifiers
-      if (counts[candidate.toolId] > 1) {
-        reason = "duplicate tool id"
-      } else if (candidate.shortcutKey && (!candidate.shortcutLabel || candidate.isMenu)) {
-        reason = "shortcuts need a label and an executable tool"
-      } else if (candidate.shortcutKey && (shortcuts[shortcut] || KeyBindings.ACTIONS.concat(KeyBindings.EDITOR_KEYS).some(function(action) {
-        return action.key === candidate.shortcutKey && (action.modifiers || 0) === candidate.shortcutModifiers
-      }))) {
-        reason = "shortcut already assigned"
+      var candidateShortcuts = Object.assign(Object.create(null), shortcuts)
+      var candidateEntries = definitions(candidate)
+      for (var c = 0; !reason && c < candidateEntries.length; c++) {
+        var definition = candidateEntries[c]
+        reason = c > 0 && definition.isMenu ? "tool options must be executable"
+          : definitionError(definition, counts, candidateShortcuts)
       }
       if (reason) {
         diagnostics.push(candidate.toolId + ": " + reason)
         candidate.destroy()
         continue
       }
-      if (candidate.shortcutKey) {
-        shortcuts[shortcut] = true
-      }
+      shortcuts = candidateShortcuts
       accepted.push(candidate)
     }
     registryState.errors = diagnostics
@@ -138,16 +166,18 @@ Item {
   }
 
   function find(id) {
-    for (var i = 0; i < tools.length; i++) {
-      if (tools[i].toolId === id) {
-        return tools[i]
+    for (var i = 0; i < actions.length; i++) {
+      if (actions[i].toolId === id) {
+        return actions[i]
       }
     }
     return null
   }
 
   function menuTools(id) {
-    return (placement.menus[id] || []).filter(function(tool) {
+    var menu = find(id)
+    var rows = menu && menu.options.length > 0 ? Array.from(menu.options) : (placement.menus[id] || [])
+    return rows.filter(function(tool) {
       return registry.isVisible(tool) && (!tool.isMenu || registry.menuTools(tool.toolId).length > 0)
     })
   }
@@ -164,6 +194,11 @@ Item {
   function isVisible(tool) {
     if (!tool || !tool.available) {
       return false
+    }
+    if (tool.options.length > 0) {
+      return Array.from(tool.options).some(function(option) {
+        return registry.isVisible(option)
+      })
     }
     return tool.isMenu || editor.supports(tool.capability)
   }
@@ -188,8 +223,8 @@ Item {
 
   function handleShortcut(event) {
     var modifiers = event.modifiers & (Qt.ControlModifier | Qt.ShiftModifier | Qt.AltModifier | Qt.MetaModifier)
-    for (var i = 0; i < tools.length; i++) {
-      var tool = tools[i]
+    for (var i = 0; i < actions.length; i++) {
+      var tool = actions[i]
       if (tool.shortcutKey && tool.shortcutKey === event.key && tool.shortcutModifiers === modifiers) {
         execute(tool.toolId)
         // Consume disabled actions too, so TextEdit's native shortcut cannot
@@ -201,9 +236,9 @@ Item {
   }
 
   function closePanels(except) {
-    for (var i = 0; i < tools.length; i++) {
-      if (tools[i] !== except) {
-        tools[i].panelOpen = false
+    for (var i = 0; i < actions.length; i++) {
+      if (actions[i] !== except) {
+        actions[i].panelOpen = false
       }
     }
   }

@@ -25,7 +25,7 @@ the calendar tools under **Insert → Insert month**:
 "editor": {
   "toolbar": [
     ["bold", "italic", "underline", "strikeout"],
-    ["textColor", "highlight", "code", "h1", "h2", "h3", "p"],
+    ["textColor", "highlight", "code", "heading"],
     ["ul", "ol", "todo", "outdent", "indent"],
     ["quote", "codeblock", "rule", "link"],
     ["table", "addRow", "delRow", "addCol", "delCol"],
@@ -69,14 +69,26 @@ action does not change its shortcut or behavior. Duplicate IDs (including
 across menu levels) and malformed entries are rejected on Save.
 If a hand-edited file contains an invalid toolbar, startup uses the default
 toolbar while preserving provider settings and leaving the file untouched.
-Dropdown objects name a tool whose `isMenu` is true; strings name executable
-tools at any level. Incorrectly placed installed tools fall back to
-the final group so they stay accessible.
+Dropdown objects name a configurable menu tool; strings name executable
+tools or tools with their own fixed choices at any level. Incorrectly placed
+installed tools fall back to the final group so they stay accessible.
 
-No tool file contains an order, group or parent menu. A new insertion action
+No tool file contains a toolbar order, group or parent menu. A new insertion action
 can be implemented as one tool file and then placed inside Insert through
 settings. The Insert tool only provides the dropdown; each item generates
 its own content.
+
+## Heading
+
+`Heading.qml` provides one dropdown with **Heading 1**, **Heading 2**,
+**Heading 3**, and **Normal**, each previewed at its document size. Use
+`"heading"` in toolbar settings to move the dropdown as one tool, including
+inside another menu. Older layouts naming `h1`, `h2`, `h3`, or `p` display
+one Heading dropdown at the first of those positions.
+
+The choices retain their `h1`, `h2`, `h3`, and `p` action IDs for IPC and
+provider capabilities. Only supported choices appear; the dropdown hides
+when none are supported or the caret is inside a list.
 
 ## Text color
 
@@ -176,7 +188,8 @@ applicable, provider support so its content survives saving and reloading.
 | `capability` | Provider capability required; defaults to `toolId`. All four table alteration tools require `table`. |
 | `available` | Reactive context condition, such as `editor.inTable`. Controls both presentation and execution. |
 | `shortcutKey`, `shortcutModifiers`, `shortcutLabel` | Optional key, modifiers and human-readable shortcut. Used for dispatch, tooltips and help. |
-| `isMenu` | This entry opens a menu of other tools. |
+| `isMenu` | This entry opens a menu; automatically true when `options` are provided. |
+| `options` | Fixed executable `Tool` choices owned by this file, as in `Heading.qml`. They retain individual action IDs and capabilities but move together in the toolbar. Bind their `editor` and availability to the owning tool. |
 | `previewScale`, `previewBold` | Optional menu-label styling, used by headings. |
 | `panelPopup` | Render the tool panel as a dropdown anchored to its toolbar button. |
 | `panel`, `panelOpen` | Optional QML component rendered below the toolbar and whether it is open. |
