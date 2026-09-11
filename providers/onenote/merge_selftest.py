@@ -82,6 +82,35 @@ class SaveTests(unittest.TestCase):
                     self.assertEqual(table.get("border"), "1")
                     self.assertNotIn("border:", table.get("style", ""))
 
+    def test_literal_pipes_in_table_cells_survive_save_and_reload(self):
+        self.remote = ('<html><head><title>Title</title></head><body><div><table id="table:pipes">'
+                       '<tr><td><p id="p:head1"></p></td><td><p id="p:head2"></p></td></tr>'
+                       '<tr><td><p id="p:cell1"></p></td><td><p id="p:cell2"></p></td></tr>'
+                       '</table></div></body></html>')
+        loaded = self.load()
+        cases = [
+            ("|", r"\|"),
+            ("left|right", r"left\|right"),
+            (r"\|", r"\\\|"),
+            (r"\\|", r"\\\\\|"),
+            ("bold|pipe", r"**bold\|pipe**"),
+        ]
+        for text, markdown in cases:
+            with self.subTest(text=text):
+                row = "| " + markdown + " | " + markdown + " |"
+                desired = row + "\n|---|---|\n" + row
+                result = self.save(note(desired), loaded["view"])
+                self.assertTrue(result.get("ok"), result)
+                current = ET.fromstring(self.remote)
+                tables = list(current.iter("table"))
+                self.assertEqual(len(tables), 1)
+                rows = list(tables[0].iter("tr"))
+                self.assertEqual(len(rows), 2)
+                for row in rows:
+                    self.assertEqual(["".join(cell.itertext()) for cell in row], [text, text])
+                loaded = self.load()
+                self.assertEqual(loaded["body"], desired)
+
     def test_appending_calendar_with_repeated_heading_preserves_existing_page(self):
         self.remote = ('<html><head><title>Title</title></head><body><div id="div:main">'
                        '<p id="p:item" data-tag="to-do">Apples</p><br/>'

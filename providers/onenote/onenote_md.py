@@ -12,7 +12,7 @@ from html.parser import HTMLParser
 import os as _os
 import sys as _sys
 _sys.path.insert(0, _os.path.join(_os.path.dirname(_os.path.abspath(__file__)), "..", "..", "services", "markdown"))
-from mdtext import escape_text, escape_line_start  # noqa: E402
+from mdtext import escape_text, escape_line_start, escape_table_cell  # noqa: E402
 from parse import parse as _parse  # noqa: E402
 import htmltables  # noqa: E402
 import textcolor  # noqa: E402
@@ -307,7 +307,7 @@ class Converter:
             cells = []
             for td in tr.children:
                 if td.tag in ("td", "th"):
-                    cells.append(self.inline(td).replace("\n", " ").replace("|", "\\|").strip())
+                    cells.append(escape_table_cell(self.inline(td)).strip())
             rows.append(cells)
         if not rows:
             return

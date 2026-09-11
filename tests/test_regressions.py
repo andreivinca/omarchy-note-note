@@ -156,6 +156,15 @@ class Content(unittest.TestCase):
     def test_literal_highlight_markers_are_escaped_on_fallback(self):
         self.assertEqual(walk_text(parse(to_markdown("<p>==literal==</p>"))), "==literal==")
 
+    def test_strict_escaping_preserves_table_pipes_and_structure(self):
+        source = ("<p>==literal==</p><table><tr><td><p>|</p></td><td><p>|</p></td></tr>"
+                  "<tr><td><p>left|right</p></td><td><p>|</p></td></tr></table>")
+        saved = to_markdown(source)
+        tokens = [token for token in parse(saved) if token["type"] != "blank_line"]
+        self.assertEqual([token["type"] for token in tokens], ["paragraph", "table"])
+        self.assertEqual(walk_text(tokens), "==literal==||left|right|")
+        self.assertEqual(to_markdown(to_html(saved)), saved)
+
     def test_classic_markdown_keeps_shell_code_in_ordered_items(self):
         markdown = ("1. **Install:**\n\n   ```bash\n   install-driver --needed\n   enable-service\n   ```\n\n"
                     "2. **Configure:**\n\n   ```bash\n   name=Token\n   slotListIndex=0\n   ```\n")

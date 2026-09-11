@@ -19,7 +19,7 @@ from itertools import groupby
 from . import dialect
 from ._vendor import parse, walk_text, htmltree, htmltables, textcolor
 from .imagesize import local_path, width_of
-from .mdtext import escape_inline, escape_line_start, code_span, code_fence
+from .mdtext import escape_inline, escape_line_start, escape_table_cell, code_span, code_fence
 
 # Four non-breaking spaces per level: Markdown has no paragraph indent, and
 # this is the form the providers already translate into a real one.
@@ -390,7 +390,7 @@ class _Reader:
     def cell(self, node):
         paragraphs = [self.inline(p.children).strip() for p in node.children if p.tag == "p"]
         text = " ".join(p for p in paragraphs if p) or self.inline(node.children).strip()
-        return text.replace("|", "\\|").replace("\n", " ")
+        return escape_table_cell(text)
 
     # ---- inline ---------------------------------------------------------
     #
