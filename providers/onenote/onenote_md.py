@@ -594,9 +594,11 @@ def _render_table(t, out, image_ref=None):
         elif part["type"] == "table_body":
             for r in part.get("children") or []:
                 rows.append([_render_cell(c, image_ref) for c in r.get("children") or []])
-    out.append('<table style="border:1px solid;border-collapse:collapse">')
+    # Graph emits CSS borders on reads, but accepts only the HTML border
+    # attribute on writes. Reusing its output style creates borderless tables.
+    out.append('<table border="1">')
     for r in rows:
-        out.append("<tr>" + "".join('<td style="border:1px solid">%s</td>' % (c or "<br/>") for c in r) + "</tr>")
+        out.append("<tr>" + "".join('<td>%s</td>' % (c or "<br/>") for c in r) + "</tr>")
     out.append("</table>")
 
 

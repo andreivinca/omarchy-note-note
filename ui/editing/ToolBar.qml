@@ -40,6 +40,15 @@ Item {
       id: toolFlow
       width: parent.width - parent.leftPadding - parent.rightPadding
       spacing: Style.spacing.sm
+      // Flow aligns entries at the top. A shared height keeps text-only
+      // buttons centered with buttons that have taller icon glyphs.
+      readonly property real buttonHeight: {
+        var tallest = 0
+        for (var i = 0; i < children.length; i++) {
+          tallest = Math.max(tallest, children[i].implicitHeight)
+        }
+        return tallest
+      }
       Repeater {
         id: buttons
         // Keep controls alive when capabilities/caret context change. Hiding
@@ -54,13 +63,15 @@ Item {
                !== bar.registry.groupFor(modelData.toolId)
           visible: visibleIndex >= 0
           width: actionButton.width + (startsGroup ? Style.spacing.md + Style.spacing.sm : 0)
-          height: actionButton.height
+          implicitHeight: actionButton.implicitHeight
+          height: toolFlow.buttonHeight
 
           Button {
             id: actionButton
             objectName: "editingTool-" + entry.modelData.toolId
             enabled: bar.editor.writable && (!entry.modelData.isMenu || menu.rows.length > 0)
             anchors.right: parent.right
+            height: parent.height
             property bool hovering: false
             bordered: hovering || menu.opened || entry.modelData.panelOpen
             foreground: bar.editor.foreground
@@ -71,7 +82,12 @@ Item {
             iconSize: Style.font.icon
             horizontalPadding: Style.spacing.sm
             verticalPadding: Style.spacing.xxs
-            text: entry.modelData.isMenu ? entry.modelData.label + " 󰅀" : (entry.modelData.panelPopup ? "󰅀" : "")
+            text: {
+              if (entry.modelData.isMenu && entry.modelData.toolbarLabelVisible) {
+                return entry.modelData.label + " 󰅀"
+              }
+              return entry.modelData.isMenu || entry.modelData.panelPopup ? "󰅀" : ""
+            }
             opacity: enabled ? 1 : 0.45
             fontSize: Style.font.caption
             onHovered: function(over) {

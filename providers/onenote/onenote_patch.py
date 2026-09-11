@@ -74,6 +74,23 @@ def elements(root):
     return result
 
 
+def document_elements(root):
+    """Match the converter's omission of boundary line breaks.
+
+    OneNote clients leave bare breaks around page content, sometimes in a
+    separate empty layout div. They have no update target and the editor
+    does not keep them. Exclude them from alignment, leaving the original
+    tree intact; breaks between document blocks still belong to the note.
+    """
+    result = elements(root)
+    start, end = 0, len(result)
+    while start < end and result[start].tag == "br":
+        start += 1
+    while end > start and result[end - 1].tag == "br":
+        end -= 1
+    return result[start:end]
+
+
 def text(node):
     converter = Converter(lambda src, width: src)
     converter.block(node)
@@ -131,6 +148,14 @@ class _Planner:
                 self.retained[identifier] = (original.tag, dict(original.attrs), content)
 
     def sequence(self, before, after, container):
+        # An unchanged prefix has no identities to disambiguate, even when
+        # appended content repeats an existing heading or checklist label.
+        # Preserve every original node and use the last one as the anchor.
+        if len(after) > len(before) and all(text(old) == text(new) for old, new in zip(before, after)):
+            for original in before:
+                self.retain(original)
+            self.insert(after[len(before):], before, len(before), container)
+            return
         for span in align(before, after, identity):
             old = before[span.before_start:span.before_end]
             new = after[span.after_start:span.after_end]
@@ -138,6 +163,14 @@ class _Planner:
             for original, desired in zip(old, new):
                 self.update(original, desired)
             for original in old[shared:]:
+                # Deleting the first/last content can turn an internal break
+                # into a boundary break. Like the breaks already excluded by
+                # document_elements(), it can stay in OneNote without changing
+                # the saved document. Internal gaps still require a target.
+                boundary = container.tag in LAYOUT | {"root"} and span.after_end in (0, len(after))
+                if original.tag == "br" and boundary:
+                    self.retain(original)
+                    continue
                 # Graph deletions use empty replacements. A cell needs an
                 # editable paragraph left behind for subsequent typing.
                 empty = "<p><br/></p>" if container.tag in {"td", "th"} else "<div></div>"
@@ -278,7 +311,7 @@ def plan(current, desired):
     body = bodies[0] if bodies else tree
     planner = _Planner(tree)
     try:
-        planner.sequence(elements(body), elements(desired_tree), body)
+        planner.sequence(document_elements(body), document_elements(desired_tree), body)
     except AmbiguousAlignment as error:
         raise UnsupportedEdit(str(error)) from error
     return planner.finish()

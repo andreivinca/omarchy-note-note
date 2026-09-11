@@ -1147,10 +1147,9 @@ Item {
   // when that line is an empty paragraph: an empty line is the author
   // pointing at the spot. (Never inside a fence, where an empty line is
   // code.) When nothing follows, a blank landing paragraph goes in behind
-  // the snippet and the caret takes it, its filler selected so typing
-  // starts clean — a rule or table that ends the note would otherwise
-  // leave the caret nowhere to stand. escapeForward is the same promise
-  // for a note that arrives already ending in one.
+  // the snippet and its filler is removed before the caret takes it.
+  // A trailing rule or table would otherwise leave no place for the caret.
+  // escapeForward does the same for a note loaded with a trailing block.
   function insertSnippet(md, insideCell) {
     root.updateInTable()
     if (insideCell && root.inTable) {
@@ -1180,7 +1179,7 @@ Item {
                          : lines.slice(0, at + 1).concat([""], md.split("\n"))
       if (atEnd) {
         replaceDoc(head.concat(["", " "]).join("\n"), -1,
-                   function() { selectBlock(blockAt(area.length)) })
+                   function() { finishLanding(area.length - 1) })
         return
       }
       replaceDoc(head.concat([""], rest).join("\n"), area.cursorPosition)
@@ -1424,24 +1423,28 @@ Item {
     })
   }
 
+  function landOn(out, target, seed) {
+    replaceDoc(out.join("\n"), area.cursorPosition, function() {
+      finishLanding(blockStart(target), seed)
+    })
+  }
+
   // The filler keeps the landing paragraph alive through the HTML import.
   // Once it exists, remove the filler: leaving it selected lets another
   // Right press walk past it and adds a space to whatever the user types.
   // A seed — typing on a rule — replaces it with literal text instead.
-  function landOn(out, target, seed) {
-    replaceDoc(out.join("\n"), area.cursorPosition, function() {
-      var from = blockStart(target)
-      var filler = area.getText(0, area.length).charAt(from) === root.imageLead
-      var to = from + (filler ? 1 : 0)
-      if (seed) {
-        // Insert first to keep the landing paragraph's format.
-        area.insert(to, seed.replace(/&/g, "&amp;").replace(/</g, "&lt;"))
-      }
-      if (filler) {
-        area.remove(from, to)
-      }
-      area.cursorPosition = Math.min(from + (seed ? seed.length : 0), area.length)
-    })
+  // Called inside the document replacement's undo transaction.
+  function finishLanding(from, seed) {
+    var filler = area.getText(0, area.length).charAt(from) === root.imageLead
+    var to = from + (filler ? 1 : 0)
+    if (seed) {
+      // Insert first to keep the landing paragraph's format.
+      area.insert(to, seed.replace(/&/g, "&amp;").replace(/</g, "&lt;"))
+    }
+    if (filler) {
+      area.remove(from, to)
+    }
+    area.cursorPosition = Math.min(from + (seed ? seed.length : 0), area.length)
   }
 
   // ── tables ──────────────────────────────────────────────────────────

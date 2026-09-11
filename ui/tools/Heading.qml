@@ -6,6 +6,7 @@ Tool {
   toolId: "heading"
   label: "Heading"
   icon: "󰉿"
+  toolbarLabelVisible: false
   available: !editor.inList
 
   function apply(level) {

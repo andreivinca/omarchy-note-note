@@ -8,6 +8,6 @@ Tool {
   icon: "󰓫"
 
   function execute() {
-    editor.insertTable("| Column 1 | Column 2 |\n|---|---|\n|  |  |")
+    editor.insertTable("|  |  |\n|---|---|\n|  |  |")
   }
 }

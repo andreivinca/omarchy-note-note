@@ -7,10 +7,11 @@ function defaults() {
     ["bold", "italic", "underline", "strikeout"],
     ["textColor", "highlight", "code", "heading"],
     ["ul", "ol", "todo", "outdent", "indent"],
-    ["quote", "codeblock", "rule", "link"],
+    ["quote", "codeblock", "link"],
     ["table", "addRow", "delRow", "addCol", "delCol"],
     [{ dropdown: "insert", items: [
-      { dropdown: "insertMonth", items: ["currentMonth", "nextMonth", "customMonth"] }
+      { dropdown: "insertMonth", items: ["currentMonth", "nextMonth", "customMonth"] },
+      "rule"
     ] }]
   ]
 }

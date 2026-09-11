@@ -206,20 +206,22 @@ class _Renderer:
             elif part["type"] == "table_body":
                 rows.extend([self.table_cell(c) for c in row.get("children") or []]
                             for row in part.get("children") or [])
-        # An empty cell holds one non-breaking space, not a <br />: the break
-        # opens a second line inside the cell (same trap as BLANK), and the
-        # reader strips the space with the cell's edges either way.
-        cells = "".join("<tr>%s</tr>" % "".join('<td>%s</td>' % c for c in row)
+        # Qt preserves empty cells without filler text or a line break.
+        cells = "".join("<tr>%s</tr>" % "".join('<td style="padding-top:6px;padding-bottom:6px">%s</td>' % c for c in row)
                         for row in rows)
         # cellspacing 0 or every cell's border sits beside the table's own and
         # the grid reads doubled; the padding is what keeps text off the rules.
+        # Horizontal padding keeps empty cells at least 20px wide while
+        # columns grow with content. Cells retain the original 6px vertically.
         style = "margin-top:%dpx; margin-bottom:%dpx;" % (dialect.TABLE_MARGIN_PX, dialect.TABLE_MARGIN_PX)
-        return '<table border="1" cellspacing="0" cellpadding="6" style="%s">%s</table>' % (style, cells)
+        return '<table border="1" cellspacing="0" cellpadding="10" style="%s">%s</table>' % (style, cells)
 
     def table_cell(self, cell):
         if cell.get("attrs", {}).get("block"):
-            return self.document(cell.get("children")) or BLANK
-        return '<p style="%s">%s</p>' % (LINE_HEIGHT, self.inline(cell.get("children")) or dialect.BLANK_PARAGRAPH)
+            body = self.document(cell.get("children"))
+            return "" if body == BLANK else body
+        body = self.inline(cell.get("children"))
+        return '<p style="%s">%s</p>' % (LINE_HEIGHT, body) if body else ""
 
     # ---- inline ---------------------------------------------------------
 

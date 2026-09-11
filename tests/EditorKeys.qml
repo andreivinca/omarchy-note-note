@@ -260,6 +260,50 @@ Window {
     require(editor.plainText() === after + "x", "redo typing changed the paragraph")
   }
 
+  function insertedBlockLanding() {
+    var ids = ["table", "currentMonth", "nextMonth", "rule", "codeblock"]
+    for (var i = 0; i < ids.length; i++) {
+      var id = ids[i]
+      load({ source: "Before\n" })
+      var original = editor.documentHtml()
+      require(editor.tool(id), id + " could not be inserted")
+      keys.tryVerify(function() { return editor.documentHtml() !== original }, 3000)
+      var inserted = savedMarkdown()
+      var text = editor.plainText()
+      var separator = id === "rule" || id === "codeblock" ? "\u2029" : "\uFDD1"
+      var boundary = id === "codeblock" ? text.length : text.lastIndexOf(separator)
+      require(boundary >= 0, id + " has no block boundary")
+      editor.setCursorPosition(boundary)
+      keys.keyClick(Qt.Key_Right)
+      keys.tryVerify(function() { return editor.cursorPosition() > boundary }, 3000)
+      var after = editor.plainText()
+      require(after.charAt(after.length - 1) === separator, id + " left a space on the new line")
+      var context = editor.editContext()
+      require(context.start === context.end && context.cursor === after.length,
+              id + " did not leave the caret in the empty paragraph")
+      keys.keyClick(Qt.Key_Right)
+      keys.keyClick(Qt.Key_Right)
+      require(editor.plainText() === after, id + " changed the new line on repeated Right")
+      keys.keyClick(Qt.Key_X)
+      require(editor.plainText() === after + "x", id + " added whitespace before typing")
+      require(savedMarkdown() === inserted.replace(/\n+$/, "") + "\n\nx\n",
+              id + " changed the saved block or the new paragraph's formatting")
+      editor.undo()
+      require(editor.plainText() === after, id + " undo restored a space")
+      editor.undo()
+      if (id === "codeblock") {
+        require(editor.plainText() === text, "undo did not restore the code block before Right")
+        editor.undo()
+      }
+      require(savedMarkdown() === "Before\n", id + " insertion did not undo in one step")
+      editor.redo()
+      if (id === "codeblock") {
+        editor.redo()
+      }
+      require(editor.plainText() === after, id + " redo restored a space")
+    }
+  }
+
   // A paste inside a code block is the plain paste, whichever flavour the
   // clipboard offers: the text as it is, a line per block in the block's
   // monospace, the caret after it, one undo taking it back; `leave` then
@@ -698,11 +742,18 @@ Window {
     var markdown = savedMarkdown()
     require(editor.tool(data.id), "tool was not executable")
     keys.tryVerify(function() { return editor.documentHtml() !== before }, 3000)
+    if (data.plainText) {
+      require(editor.plainText().indexOf(data.plainText) >= 0, "inserted cell contents contain extra characters")
+    }
     require(savedMarkdown() === data.expected, "unexpected Markdown: " + JSON.stringify(savedMarkdown()))
     editor.undo()
     require(savedMarkdown() === markdown, "one undo did not restore the original note: " + JSON.stringify(savedMarkdown()))
     editor.redo()
     require(savedMarkdown() === data.expected, "redo changed the tool result")
+    if (data.plainText) {
+      load({ source: data.expected })
+      require(editor.plainText().indexOf(data.plainText) >= 0, "reloading added characters to empty cells")
+    }
   }
 
   function savedMarkdown() {
@@ -959,11 +1010,11 @@ Window {
     load({ source: "word\n" })
     require(editor.tools.menuTools("insert").map(function(tool) {
       return tool.toolId
-    }).join(",") === "insertMonth", "default Insert menu does not group the month tools")
+    }).join(",") === "insertMonth,rule", "default Insert menu does not put the month group before the separator")
     require(editor.tools.menuTools("insertMonth").map(function(tool) {
       return tool.toolId
     }).join(",") === "currentMonth,nextMonth,customMonth", "Insert month does not contain the calendar tools in order")
-    require(editor.tools.topLevelTools.length === editor.tools.tools.length - 4,
+    require(editor.tools.topLevelTools.length === editor.tools.tools.length - 5,
             "default layout should keep other tools directly on the toolbar")
     editor.toolbarLayout = [[{ dropdown: "insert", items: [] }]]
     var insert = keys.findChild(editor, "editingTool-insert")
@@ -1041,7 +1092,6 @@ Window {
     var popup = openInsertMenu()
     var row = keys.findChild(popup.contentItem, "editingMenu-insertMonth")
     require(row && row.visible && row.arrow.visible, "Insert month has no submenu arrow")
-    require(popup.count === 1, "Insert should contain only the month group by default")
     keys.mouseClick(row, row.width / 2, row.height / 2)
     keys.tryVerify(function() { return row.subMenu.opened }, 3000)
     require(popup.opened && row.subMenu.opened, "month submenu did not open beside Insert")
@@ -1052,7 +1102,7 @@ Window {
     load({ source: "word\n" })
     var before = editor.documentHtml()
     var popup = openInsertMenu()
-    var group = popup.itemAt(0)
+    var group = keys.findChild(popup.contentItem, "editingMenu-insertMonth")
     keys.mouseMove(group, group.width / 2, group.height / 2)
     keys.tryVerify(function() { return group.subMenu.opened }, 3000)
     require(popup.opened && group.subMenu.opened, "hover did not open the child menu")
@@ -1199,8 +1249,14 @@ Window {
     require(savedMarkdown() === saved, "nested insertion redo changed its structure")
     load({ source: saved })
     require(savedMarkdown() === saved, "nested table did not survive saving and reloading")
-    var marker = id === "currentMonth" ? "15" : "Column 1"
-    editor.setCursorPosition(editor.plainText().indexOf(marker))
+    if (id === "table") {
+      require(editor.plainText().indexOf("\uFDD0\uFDD0\uFDD0\uFDD0\uFDD1") >= 0,
+              "nested table's empty cells contain extra characters after reloading: " + JSON.stringify(editor.plainText()))
+    }
+    var marker = id === "currentMonth" ? "15" : "\uFDD0\uFDD0\uFDD0\uFDD0\uFDD1"
+    // An empty table's first cell starts immediately after its opening marker.
+    var markerOffset = id === "currentMonth" ? 0 : 1
+    editor.setCursorPosition(editor.plainText().indexOf(marker) + markerOffset)
     editor.updateInTable()
     var inner = editor.tableContext()
     require(inner && inner.columns === (id === "currentMonth" ? 7 : 2), "caret is not in the inserted table")
@@ -1208,7 +1264,7 @@ Window {
     require(editor.tableContext().rows === inner.rows + 1, "row was not added to the innermost table")
     editor.undo()
     require(savedMarkdown() === saved, "inner row undo changed the outer table")
-    editor.setCursorPosition(editor.plainText().indexOf(marker))
+    editor.setCursorPosition(editor.plainText().indexOf(marker) + markerOffset)
     editor.updateInTable()
     require(editor.tool("addCol"), "inner column tool is unavailable")
     require(editor.tableContext().columns === inner.columns + 1, "column was not added to the innermost table")
@@ -1218,7 +1274,7 @@ Window {
             "editing an inner table resized the outer table")
     editor.undo()
     require(savedMarkdown() === saved, "inner column undo changed the outer table")
-    editor.setCursorPosition(editor.plainText().indexOf(marker))
+    editor.setCursorPosition(editor.plainText().indexOf(marker) + markerOffset)
     editor.updateInTable()
     require(editor.tool("delCol"), "inner column deletion is unavailable")
     require(editor.tableContext().columns === inner.columns - 1, "column was deleted from the wrong table")
@@ -1238,7 +1294,7 @@ Window {
     require(editor.tableContext().columns === 3, "outer table cannot be edited around a nested table")
     require((savedMarkdown().match(/<table>/g) || []).length === 2, "editing the outer table lost its child")
     load({ source: saved })
-    editor.setCursorPosition(editor.plainText().indexOf(marker))
+    editor.setCursorPosition(editor.plainText().indexOf(marker) + markerOffset)
     editor.updateInTable()
     before = editor.documentHtml()
     editor.tool("table")
@@ -1474,7 +1530,8 @@ Window {
       { id: "codeblock", expected: "word\n\n```\n\n```\n" },
       { id: "codeblock", source: "```\nword\n```\n", expected: "word\n" },
       { id: "rule", expected: "word\n\n---\n\n" },
-      { id: "table", expected: "word\n\n| Column 1 | Column 2 |\n|---|---|\n|  |  |\n\n" },
+      { id: "table", expected: "word\n\n|  |  |\n|---|---|\n|  |  |\n",
+        plainText: "\uFDD0\uFDD0\uFDD0\uFDD0\uFDD1" },
       { id: "addRow", source: table, cursorText: "one", expected: table + "|  |  |\n" },
       { id: "delRow", source: table, cursorText: "one", expected: "| A | B |\n|---|---|\n" },
       { id: "addCol", source: table, cursorText: "one", expected: "| A | B |  |\n|---|---|---|\n| one | two |  |\n" },
@@ -1489,6 +1546,7 @@ Window {
       }
     }
     var behavior = [
+      { name: "Right after inserting blocks leaves an empty line through typing and undo", run: insertedBlockLanding },
       { name: "text color palette applies, resets, saves, undoes and rejects stale contexts", run: textColorTool },
       { name: "tools enforce provider and document permissions on every entry point", run: toolPermissions },
       { name: "one added file supplies its action, toolbar button, shortcut and help", run: toolDiscovery },
@@ -1564,6 +1622,7 @@ Window {
     }
     var table = "| a | b |\n|---|---|\n| 1 | 2 |\n"
     var blank = "|  |  |\n"
+    var legacyEmptyCell = "<table><tr><td>a</td><td>b</td></tr><tr><td>1</td><td>\u00a0</td></tr></table><p>After</p>"
     var cases = [
       { name: "table ends the note", source: table, expected: table + blank, columns: 2 },
       { name: "paragraph follows the table", source: table + "\nAfter\n",
@@ -1578,9 +1637,11 @@ Window {
         expected: "| a | b |\n|---|---|\n" + blank + "\nAfter\n", columns: 2 },
       { name: "one column", source: "| a |\n|---|\n| 1 |\n\nAfter\n",
         expected: "| a |\n|---|\n| 1 |\n|  |\n\nAfter\n", columns: 1 },
-      { name: "empty cell before its filler", source: "| a | b |\n|---|---|\n| 1 |  |\n\nAfter\n",
+      { name: "empty cell", source: "| a | b |\n|---|---|\n| 1 |  |\n\nAfter\n",
+        expected: "| a | b |\n|---|---|\n| 1 |  |\n" + blank + "\nAfter\n", columns: 2 },
+      { name: "legacy empty cell before its filler", html: legacyEmptyCell,
         expected: "| a | b |\n|---|---|\n| 1 |  |\n" + blank + "\nAfter\n", columns: 2, beforeFiller: true },
-      { name: "empty cell after its filler", source: "| a | b |\n|---|---|\n| 1 |  |\n\nAfter\n",
+      { name: "legacy empty cell after its filler", html: legacyEmptyCell,
         expected: "| a | b |\n|---|---|\n| 1 |  |\n" + blank + "\nAfter\n", columns: 2 },
       { name: "table-shaped code before the table", source: "```\n" + table + "```\n\n" + table + "\nAfter\n",
         expected: "```\n" + table + "```\n\n" + table + blank + "\nAfter\n", columns: 2 },
