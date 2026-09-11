@@ -5,7 +5,7 @@ Tool {
   id: tool
   toolId: "todo"
   label: "Checkbox"
-  icon: "󰥪"
+  icon: "󰄵"
 
   function execute() {
     editor.transformBlocks(function(line) {
