@@ -10,6 +10,7 @@ import html
 
 from notemerge import AmbiguousAlignment, align, text_key
 from onenote_md import Converter, Node, TreeBuilder
+import htmltables
 
 REPLACEABLE = {"p", "li", "h1", "h2", "h3", "h4", "h5", "h6", "ul", "ol", "table", "img"}
 LISTS = {"ul", "ol"}
@@ -137,7 +138,10 @@ class _Planner:
             for original, desired in zip(old, new):
                 self.update(original, desired)
             for original in old[shared:]:
-                self.replacements.append({"target": target(original), "action": "replace", "content": "<div></div>"})
+                # Graph deletions use empty replacements. A cell needs an
+                # editable paragraph left behind for subsequent typing.
+                empty = "<p><br/></p>" if container.tag in {"td", "th"} else "<div></div>"
+                self.replacements.append({"target": target(original), "action": "replace", "content": empty})
             if new[shared:]:
                 self.insert(new[shared:], before, span.before_end, container)
 
@@ -190,8 +194,8 @@ class _Planner:
     def table(self, old, new):
         # Graph cannot replace rows or cells. A cell's existing paragraph can
         # be edited without destroying the identities of the other cells.
-        old_rows = [node for node in walk(old) if node.tag == "tr"]
-        new_rows = [node for node in walk(new) if node.tag == "tr"]
+        old_rows = list(htmltables.rows(old))
+        new_rows = list(htmltables.rows(new))
         if len(old_rows) != len(new_rows):
             raise UnsupportedEdit("OneNote cannot change this table's rows without rebuilding it")
         self.retain(old, subtree=False)
@@ -203,16 +207,24 @@ class _Planner:
                 raise UnsupportedEdit("OneNote cannot change this table's columns without rebuilding it")
             self.retain(old_row, subtree=False)
             for old_cell, new_cell in zip(old_cells, new_cells):
-                if converter.inline(old_cell) == converter.inline(new_cell):
+                desired = converter.rich_cell(new_cell)
+                if converter.rich_cell(old_cell) == desired:
                     self.retain(old_cell)
                     continue
                 content = children(old_cell)
-                if len(content) != 1 or content[0].tag != "p":
+                if not content or any(node.tag not in REPLACEABLE for node in content):
                     raise UnsupportedEdit("this table cell has no editable paragraph; edit it in OneNote")
                 self.retain(old_cell, subtree=False)
-                paragraph = Node("p")
-                paragraph.children = new_cell.children
-                self.update(content[0], paragraph)
+                updated = children(new_cell)
+                if not desired:
+                    # An empty cell means its previous blocks were deleted.
+                    # The renderer's blank paragraph is only a placeholder.
+                    updated = []
+                elif not any(node.tag in REPLACEABLE for node in updated):
+                    paragraph = Node("p")
+                    paragraph.children = new_cell.children
+                    updated = [paragraph]
+                self.sequence(content, updated, old_cell)
 
     def finish(self):
         # Insertions use original anchors, which still exist before any

@@ -70,30 +70,11 @@ IMAGE_LEAD = "\u00a0"
 MAX_IMAGE_DISPLAY = 640
 
 DEFAULT_HIGHLIGHT = "#f9e2af"
-# A highlight is a light marker colour, so the text on it needs its own dark
-# ink — the editor's foreground is the theme's, and on a dark theme it would
-# be light-on-light. `reader` ignores colour, so this never reaches the note.
+# Theme ink is painted by the native display highlighter, outside the saved
+# QTextDocument. Every real foreground brush can therefore be an author's
+# text color, even when it happens to equal a theme color.
 DEFAULT_HIGHLIGHT_INK = "#1e1e2e"
-
-# Qt paints links itself and writes the painting back as a span inside the
-# anchor; that span is decoration, never underline the user asked for
-# (`reader.anchor`, which is why colour is never read back at all).
-#
-# Left to itself Qt paints them #0000ff, which is unreadable on a dark theme
-# and shouts on a light one, so `writer` states the colour on every anchor.
-# This is the fallback for a caller that names none; the app passes a colour
-# leaned toward the theme's own text (see Notes.qml, linkColour) — the same
-# hue on any theme, the contrast the foreground already had. Like the
-# highlight, it never reaches the note: it lives in the document only.
 DEFAULT_LINK = "#4282d7"
-
-# A quote's ink. The margins are what `reader` recognises; the colour is for
-# the eye — without it a quote is indistinguishable from a plain indent. The
-# app passes the theme's foreground at reduced strength (Notes.qml, quoteInk)
-# and draws the classic bar itself, over the document (NoteEditor, quote
-# bars): Qt rich text has no block borders, so the bar cannot live in the
-# document at all. `reader` never reads colour, so the ink stays in the
-# document only.
 DEFAULT_QUOTE_INK = "#9399b2"
 
 # The marker behind a code block. This one is dialect, not decoration: an

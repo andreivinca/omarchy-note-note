@@ -9,5 +9,8 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from parse import parse, walk_text  # noqa: E402
+import htmltree  # noqa: E402
+import htmltables  # noqa: E402
+import textcolor  # noqa: E402
 
-__all__ = ["parse", "walk_text"]
+__all__ = ["parse", "walk_text", "htmltree", "htmltables", "textcolor"]

@@ -35,6 +35,17 @@ theme, and a loud brand cannot arrive loud. Leave `color` out and the tab takes
 a pastel of its own from `name` — which is what a provider with many notebooks
 wants, since each one then looks different.
 
+The editor discovers its tools from `ui/tools/`; see the
+[editing-tool contract](../docs/editing-tools.md) to add one. The `tools`
+capabilities govern toolbar buttons, menu entries, shortcuts and IPC actions.
+Table row/column actions and `currentMonth` share the `table` capability;
+providers that support tables automatically support calendar insertion.
+Nested tables use semantic HTML table blocks within the Markdown body, with
+block content in their cells. The common Markdown parser exposes these as
+table tokens whose cells have `attrs.block: true`; their children are block
+tokens rather than inline runs. OneNote renders and reads those cells
+recursively; the local provider stores the Markdown unchanged.
+
 `logo` is an image the provider ships beside its own `Provider.qml` —
 `Qt.resolvedUrl("logo.svg")`. SVG and raster both load; it is drawn at icon size
 and shown exactly as given, so a provider that has a mark has already decided

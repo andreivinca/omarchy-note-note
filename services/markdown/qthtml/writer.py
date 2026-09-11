@@ -9,7 +9,7 @@ import html as _html
 import re
 
 from . import dialect
-from ._vendor import parse
+from ._vendor import parse, textcolor
 from .imagesize import local_path, width_of
 
 RULE = "<hr />"
@@ -113,10 +113,6 @@ class _Renderer:
         # A paragraph holding only the blank-line character *is* a blank line.
         if body.strip() in ("", dialect.BLANK_PARAGRAPH):
             return BLANK
-        if quote:
-            # The margins carry the meaning; the ink is what makes it read as
-            # a quote rather than an indent. `reader` never reads colour.
-            body = self.span("color:%s;" % self.quote_ink, body)
         return "<p%s>%s</p>" % (self.block_style(indent, quote), body)
 
     def code(self, token, indent):
@@ -206,25 +202,28 @@ class _Renderer:
         rows = []
         for part in token.get("children") or []:
             if part["type"] == "table_head":
-                rows.append([self.inline(c.get("children")) for c in part.get("children") or []])
+                rows.append([self.table_cell(c) for c in part.get("children") or []])
             elif part["type"] == "table_body":
-                rows.extend([self.inline(c.get("children")) for c in row.get("children") or []]
+                rows.extend([self.table_cell(c) for c in row.get("children") or []]
                             for row in part.get("children") or [])
         # An empty cell holds one non-breaking space, not a <br />: the break
         # opens a second line inside the cell (same trap as BLANK), and the
         # reader strips the space with the cell's edges either way.
-        cells = "".join("<tr>%s</tr>" % "".join('<td><p style="%s">%s</p></td>'
-                                                % (LINE_HEIGHT, c or dialect.BLANK_PARAGRAPH)
-                                                for c in row)
+        cells = "".join("<tr>%s</tr>" % "".join('<td>%s</td>' % c for c in row)
                         for row in rows)
         # cellspacing 0 or every cell's border sits beside the table's own and
         # the grid reads doubled; the padding is what keeps text off the rules.
         style = "margin-top:%dpx; margin-bottom:%dpx;" % (dialect.TABLE_MARGIN_PX, dialect.TABLE_MARGIN_PX)
         return '<table border="1" cellspacing="0" cellpadding="6" style="%s">%s</table>' % (style, cells)
 
+    def table_cell(self, cell):
+        if cell.get("attrs", {}).get("block"):
+            return self.document(cell.get("children")) or BLANK
+        return '<p style="%s">%s</p>' % (LINE_HEIGHT, self.inline(cell.get("children")) or dialect.BLANK_PARAGRAPH)
+
     # ---- inline ---------------------------------------------------------
 
-    def inline(self, tokens, heavy=False):
+    def inline(self, tokens, heavy=False, foreground=""):
         out = []
         for token in tokens or []:
             kind = token["type"]
@@ -240,19 +239,22 @@ class _Renderer:
                 out.append(self.span(style, _html.escape(token.get("raw", ""), quote=False)))
             elif kind == "strong":
                 weight = dialect.HEAVY_WEIGHT if heavy else dialect.BOLD_WEIGHT
-                out.append(self.span("font-weight:%d;" % weight, self.inline(token.get("children"), heavy)))
+                out.append(self.span("font-weight:%d;" % weight, self.inline(token.get("children"), heavy, foreground)))
             elif kind in INLINE_SPAN:
-                out.append(self.span(INLINE_SPAN[kind], self.inline(token.get("children"), heavy)))
+                out.append(self.span(INLINE_SPAN[kind], self.inline(token.get("children"), heavy, foreground)))
+            elif kind == "text_color":
+                out.append(textcolor.span(token["attrs"]["color"], self.inline(token.get("children"), heavy, token["attrs"]["color"])))
             elif kind == "mark":
-                out.append(self.span("background-color:%s; color:%s;" % (self.highlight, self.ink),
-                                     self.inline(token.get("children"), heavy)))
+                out.append(self.span("background-color:%s;" % self.highlight,
+                                     self.inline(token.get("children"), heavy, foreground)))
             elif kind == "link":
                 url = token.get("attrs", {}).get("url", "")
-                # The colour is stated here rather than left to Qt: an anchor
-                # with no colour of its own is painted Qt's #0000ff.
-                out.append('<a href="%s" style="color:%s;">%s</a>'
-                           % (_html.escape(url, quote=True), self.link,
-                              self.inline(token.get("children"), heavy)))
+                # Disable Qt's default blue brush; theme ink belongs to the
+                # display highlighter. An enclosing authored color still wins.
+                style = "color:%s;" % foreground if foreground else "-qt-foreground:none;"
+                out.append('<a href="%s" style="%s">%s</a>'
+                           % (_html.escape(url, quote=True), style,
+                              self.inline(token.get("children"), heavy, foreground)))
             elif kind == "image":
                 # mistune keeps an image's alt text in its children, the way a
                 # link keeps its label — not in attrs. The width is in attrs:
@@ -270,7 +272,7 @@ class _Renderer:
             elif kind == "inline_html":
                 out.append(_html.escape(token.get("raw", ""), quote=False))
             elif token.get("children"):
-                out.append(self.inline(token.get("children"), heavy))
+                out.append(self.inline(token.get("children"), heavy, foreground))
             elif token.get("raw"):
                 out.append(_html.escape(token["raw"], quote=False))
         return "".join(out)

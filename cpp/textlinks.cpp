@@ -26,7 +26,6 @@ QTextCharFormat withoutLink(QTextCharFormat format)
     format.clearProperty(QTextFormat::IsAnchor);
     format.clearProperty(QTextFormat::AnchorHref);
     format.clearProperty(QTextFormat::AnchorName);
-    format.clearProperty(QTextFormat::ForegroundBrush);
     format.clearProperty(QTextFormat::FontUnderline);
     format.clearProperty(QTextFormat::TextUnderlineStyle);
     return format;
@@ -160,9 +159,11 @@ TextLinks::TextLinks(QObject *parent) : QSyntaxHighlighter(parent)
 {
 }
 
-void TextLinks::configure(const QColor &colour, bool plainText)
+void TextLinks::configure(const QColor &colour, bool plainText, const QColor &quoteInk, const QColor &highlightInk)
 {
     m_colour = colour;
+    m_quoteInk = quoteInk;
+    m_highlightInk = highlightInk;
     m_plainText = plainText;
     // Also completes the highlighter's initial delayed pass while the editor
     // is loading, so display setup cannot be mistaken for a later text edit.
@@ -171,11 +172,35 @@ void TextLinks::configure(const QColor &colour, bool plainText)
 
 void TextLinks::highlightBlock(const QString &)
 {
-    QTextCharFormat appearance;
-    appearance.setForeground(m_colour);
-    appearance.setFontUnderline(true);
-    for (const Link &link : detect(currentBlock(), m_plainText)) {
-        setFormat(link.start - currentBlock().position(), link.end - link.start, appearance);
+    const QTextBlock block = currentBlock();
+    const bool quote = block.blockFormat().leftMargin() >= 40 && block.blockFormat().rightMargin() >= 40;
+    const auto links = detect(block, m_plainText);
+    for (auto it = block.begin(); !it.atEnd(); ++it) {
+        const QTextFragment fragment = it.fragment();
+        const QTextCharFormat author = fragment.charFormat();
+        const bool colored = !m_plainText && author.foreground().style() != Qt::NoBrush;
+        QTextCharFormat appearance;
+        if (!m_plainText && !colored) {
+            if (author.background().style() != Qt::NoBrush && !isCode(block, author)) {
+                appearance.setForeground(m_highlightInk);
+            } else if (quote) {
+                appearance.setForeground(m_quoteInk);
+            }
+        }
+        setFormat(fragment.position() - block.position(), fragment.length(), appearance);
+        for (const Link &link : links) {
+            const int start = qMax(link.start, fragment.position());
+            const int end = qMin(link.end, fragment.position() + fragment.length());
+            if (start >= end) {
+                continue;
+            }
+            QTextCharFormat linkAppearance = appearance;
+            if (!colored) {
+                linkAppearance.setForeground(m_colour);
+            }
+            linkAppearance.setFontUnderline(true);
+            setFormat(start - block.position(), end - start, linkAppearance);
+        }
     }
     emit linksChanged();
 }

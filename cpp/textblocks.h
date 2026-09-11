@@ -14,6 +14,8 @@
 // inside a code block).
 // Removing an empty paragraph also lives here: it must keep the following
 // block's list membership and character format, which QML cannot set.
+// Table operations use native frame boundaries to target the caret's table,
+// including Backspace immediately after a table and edits inside nested ones.
 // TextLinks colours and locates URLs without changing the document, and
 // clears inherited anchors from empty paragraphs.
 // The edit-block brackets (beginEditBlock/
@@ -54,6 +56,13 @@ class TextBlocks : public QObject
     Q_PROPERTY(int linkRevision READ linkRevision NOTIFY linksChanged)
 
 public:
+    Q_INVOKABLE int insertFormattedText(int from, int to, const QString &text, const QVariantMap &styles);
+    Q_INVOKABLE bool setTextColor(int from, int to, const QString &color);
+    Q_INVOKABLE QVariantMap tableInfo(int position) const;
+    Q_INVOKABLE int editTable(int position, const QString &operation, int index, int count);
+    Q_INVOKABLE int appendTableRow(int position);
+    Q_INVOKABLE int deletePreviousTable(int position);
+
     explicit TextBlocks(QObject *parent = nullptr) : QObject(parent), m_links(new TextLinks(this))
     {
         connect(m_links, &TextLinks::linksChanged, this, [this]() {
@@ -89,12 +98,17 @@ public:
     // throwaway cursor is enough. The depth guard keeps a stray end from
     // underflowing Qt's counter — the QML side brackets in try/finally
     // (NoteEditor.atomic), so depth here never outlives a tool.
-    Q_INVOKABLE void beginEditBlock()
+    Q_INVOKABLE void beginEditBlock(bool joinPrevious = false)
     {
         QTextDocument *doc = m_document ? m_document->textDocument() : nullptr;
-        if (!doc)
+        if (!doc) {
             return;
-        QTextCursor(doc).beginEditBlock();
+        }
+        if (joinPrevious) {
+            QTextCursor(doc).joinPreviousEditBlock();
+        } else {
+            QTextCursor(doc).beginEditBlock();
+        }
         ++m_editDepth;
     }
     Q_INVOKABLE void endEditBlock()
@@ -307,9 +321,11 @@ public:
         TextLinks::normalizeAnchors(m_document ? m_document->textDocument() : nullptr);
     }
 
-    Q_INVOKABLE void configureLinks(const QColor &colour, bool plainText)
+    Q_INVOKABLE void configureLinks(const QColor &colour, bool plainText,
+                                   const QColor &quoteInk = QColor("#9399b2"),
+                                   const QColor &highlightInk = QColor("#1e1e2e"))
     {
-        m_links->configure(colour, plainText);
+        m_links->configure(colour, plainText, quoteInk, highlightInk);
     }
 
     Q_INVOKABLE QString linkAt(qreal x, qreal y) const

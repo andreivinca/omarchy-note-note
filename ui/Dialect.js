@@ -13,3 +13,14 @@ var LINE_HEIGHT_PCT = 130
 // services/markdown/qthtml/reader.py, plus the code span's backtick
 // (services/markdown/mdtext.py, code_span).
 var INLINE_MARKERS = { bold: "**", italic: "*", underline: "_", strikeout: "~~", highlight: "==", code: "`" }
+
+
+function documentHtml(html) {
+  return html.replace(/<!--(Start|End)Fragment-->/g, "")
+    .replace(/<a\b([^>]*)>/gi, function(tag, attributes) {
+      if (/\bstyle\s*=/i.test(attributes)) {
+        return tag
+      }
+      return '<a' + attributes + ' style="-qt-foreground:none;">'
+    })
+}

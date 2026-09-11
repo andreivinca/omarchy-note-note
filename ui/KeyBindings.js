@@ -3,6 +3,16 @@
 // Help and dispatch share these definitions. Aliases have no separate label.
 var CTRL = Qt.ControlModifier
 var SHIFT = Qt.ShiftModifier
+// These remain native document operations (undo/redo pass through the
+// editor's transaction handler). Tool files must not replace them.
+var EDITOR_KEYS = [
+  { key: Qt.Key_A, modifiers: CTRL },
+  { key: Qt.Key_C, modifiers: CTRL },
+  { key: Qt.Key_X, modifiers: CTRL },
+  { key: Qt.Key_Z, modifiers: CTRL },
+  { key: Qt.Key_Z, modifiers: CTRL | SHIFT },
+  { key: Qt.Key_Y, modifiers: CTRL }
+]
 var ACTIONS = [
   { id: "search", key: Qt.Key_K, modifiers: CTRL, group: "Getting around", label: "ctrl+k", description: "Search your notes" },
   { id: "search", key: Qt.Key_L, modifiers: CTRL },
@@ -25,11 +35,6 @@ var ACTIONS = [
   { id: "newNote", key: Qt.Key_N, modifiers: CTRL, group: "Notes", label: "ctrl+n", description: "A new note in the open notebook" },
   { id: "newNotebook", key: Qt.Key_N, modifiers: CTRL | SHIFT, group: "Notes", label: "ctrl+shift+n", description: "A new notebook" },
   { id: "deleteNote", key: Qt.Key_D, modifiers: CTRL, group: "Notes", label: "ctrl+d", description: "Delete the note you are reading" },
-  { id: "bold", key: Qt.Key_B, modifiers: CTRL, context: "editor" },
-  { id: "italic", key: Qt.Key_I, modifiers: CTRL, context: "editor" },
-  { id: "underline", key: Qt.Key_U, modifiers: CTRL, context: "editor" },
-  { id: "strikeout", key: Qt.Key_S, modifiers: CTRL, context: "editor" },
-  { id: "highlight", key: Qt.Key_H, modifiers: CTRL | SHIFT, context: "editor" },
   { id: "paste", key: Qt.Key_V, modifiers: CTRL, context: "editor" },
   { id: "pastePlain", key: Qt.Key_V, modifiers: CTRL | SHIFT, context: "editor" }
 ]
@@ -46,8 +51,8 @@ function match(event, context) {
   return ""
 }
 
-function text() {
-  var visible = ACTIONS.filter(function(action) { return !!action.label })
+function text(extraActions) {
+  var visible = ACTIONS.concat(extraActions || []).filter(function(action) { return !!action.label })
   var width = visible.reduce(function(value, action) { return Math.max(value, action.label.length) }, 0)
   var lines = [], previous = ""
   visible.forEach(function(action) {

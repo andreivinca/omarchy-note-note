@@ -14,6 +14,8 @@ import sys as _sys
 _sys.path.insert(0, _os.path.join(_os.path.dirname(_os.path.abspath(__file__)), "..", "..", "services", "markdown"))
 from mdtext import escape_text, escape_line_start  # noqa: E402
 from parse import parse as _parse  # noqa: E402
+import htmltables  # noqa: E402
+import textcolor  # noqa: E402
 
 # OneNote note tags -> a prefix we can recognise again on save.
 TAG_PREFIX = {
@@ -77,6 +79,7 @@ class Converter:
         # per visual line and Markdown would otherwise flow them together.
         self.last = None
         self.editable = True
+        self.table_depth = 0
         # [{"src", "alt", "width", "local"}] — what the page's images are and
         # where each one was cached, so a save can hand the same resource back.
         self.images = []
@@ -150,7 +153,8 @@ class Converter:
                         core = "~~%s~~" % core
                     if "background-color:" in style and "background-color:transparent" not in style:
                         core = "==%s==" % core           # highlight
-                    inner = lead + core + trail
+                    color = textcolor.from_style(c.attrs.get("style", "")) or textcolor.normalize(c.attrs.get("color", ""))
+                    inner = lead + textcolor.span(color, core) + trail
                 if tag.startswith("to-do"):
                     inner = ("[x] " if tag.endswith("completed") else "[ ] ") + inner.lstrip()
                 elif tag in TAG_PREFIX:
@@ -291,8 +295,15 @@ class Converter:
             self.block(s, depth + 1)
 
     def table(self, node):
+        if self.table_depth or htmltables.nested(node):
+            rows = [[self.rich_cell(cell) for cell in row.children if cell.tag in {"td", "th"}]
+                    for row in htmltables.rows(node)]
+            if self.lines and self.lines[-1] != "":
+                self.lines.append("")
+            self.lines.extend([htmltables.table_markup(rows), ""])
+            return
         rows = []
-        for tr in _find_all(node, "tr"):
+        for tr in htmltables.rows(node):
             cells = []
             for td in tr.children:
                 if td.tag in ("td", "th"):
@@ -309,6 +320,21 @@ class Converter:
         for r in rows[1:]:
             self.lines.append("| " + " | ".join(r) + " |")
         self.lines.append("")
+
+    def rich_cell(self, node):
+        """Keep paragraph and nested table boundaries within a cell."""
+        if not any(child.tag in htmltables.BLOCK_TAGS for child in node.children):
+            return self.inline(node).strip()
+        converter = Converter(self.image_path_for)
+        converter.table_depth = self.table_depth + 1
+        for child in node.children:
+            if converter.lines and converter.lines[-1] != "":
+                converter.lines.append("")
+            converter.last = None
+            converter.block(child)
+        self.editable = self.editable and converter.editable
+        self.images.extend(converter.images)
+        return converter.result()
 
     def result(self):
         out, blank = [], True
@@ -379,6 +405,8 @@ def _inline_html(tokens, image_ref=None):
             out.append("<u>%s</u>" % _inline_html(t.get("children"), image_ref))
         elif ty == "strikethrough":
             out.append("<s>%s</s>" % _inline_html(t.get("children"), image_ref))
+        elif ty == "text_color":
+            out.append(textcolor.span(t["attrs"]["color"], _inline_html(t.get("children"), image_ref)))
         elif ty == "mark":
             out.append('<span style="background-color:#FFFF00">%s</span>' % _inline_html(t.get("children"), image_ref))
         elif ty == "codespan":
@@ -562,14 +590,22 @@ def _render_table(t, out, image_ref=None):
     rows = []
     for part in t.get("children") or []:
         if part["type"] == "table_head":
-            rows.append([_inline_html(c.get("children"), image_ref) for c in part.get("children") or []])
+            rows.append([_render_cell(c, image_ref) for c in part.get("children") or []])
         elif part["type"] == "table_body":
             for r in part.get("children") or []:
-                rows.append([_inline_html(c.get("children"), image_ref) for c in r.get("children") or []])
+                rows.append([_render_cell(c, image_ref) for c in r.get("children") or []])
     out.append('<table style="border:1px solid;border-collapse:collapse">')
     for r in rows:
         out.append("<tr>" + "".join('<td style="border:1px solid">%s</td>' % (c or "<br/>") for c in r) + "</tr>")
     out.append("</table>")
+
+
+def _render_cell(cell, image_ref):
+    if cell.get("attrs", {}).get("block"):
+        parts = []
+        _render_blocks(cell.get("children"), parts, image_ref=image_ref)
+        return "".join(parts) or "<p><br/></p>"
+    return _inline_html(cell.get("children"), image_ref)
 
 
 def walk_text_local(tokens):
