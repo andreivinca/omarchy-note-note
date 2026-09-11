@@ -178,7 +178,17 @@ its original item after an app save. Checks also cover repeated labels,
 mixed checkbox/prose edits, bare blank lines, preserved inline formatting,
 individual and nested list items, table-cell paragraphs, empty-page appends,
 inserts and deletions, missing targets, rejected updates, and invalid
-simulations. The simulated server rejects a whole-page replacement.
+simulations. Mobile-table cases merge a pending local edit with an empty
+table added remotely and preserve leading/trailing bare breaks, including
+breaks in a separate empty layout container. Internal breaks remain part of
+the document unless removing the surrounding content makes them boundary
+breaks. Deletion cases cover the first/last table, the whole page, and a remote
+spacing change while table removal is pending. Ordinary, empty and nested table
+exports check OneNote's HTML `border` attribute; CSS table borders are unsupported
+on input. Calendar cases append a repeated month heading without changing the
+existing page, and clear body cells while preserving headers and table structure.
+Ambiguous partial deletion of repeated entries still keeps the draft. The
+simulated server rejects a whole-page replacement.
 Shared-library tests enumerate check-state combinations with simultaneous
 prose edits and insertions and exercise alignment with provider-neutral
 records. Transition tests deliver OneNote loads out of order and verify

@@ -15,6 +15,19 @@ Item {
     return result.concat(registry.definitions(tool))
   }, [])
   readonly property var placement: ToolbarSettings.resolve(layout, tools)
+  readonly property var toolbarGroups: {
+    var groups = []
+    for (var i = 0; i < placement.toolbar.length; i++) {
+      var entry = placement.toolbar[i]
+      var group = groups[groups.length - 1]
+      if (!group || group.id !== entry.group) {
+        group = { id: entry.group, tools: [] }
+        groups.push(group)
+      }
+      group.tools.push(entry.tool)
+    }
+    return groups
+  }
   readonly property var topLevelTools: placement.toolbar.map(function(entry) {
     return entry.tool
   })

@@ -68,7 +68,10 @@ the same Markdown identity rule used by the text merger. `AmbiguousAlignment`
 means the adapter lacks evidence to choose the surviving repeated entry.
 
 OneNote's `onenote_patch.py` translates these spans into Graph operations.
-It updates paragraphs and individual list items, preserves bare blank lines,
+When the complete existing sequence is an unchanged prefix, it preserves those
+elements and appends the additions directly, even if they repeat an existing
+label. Other edits still require unambiguous alignment. It updates paragraphs
+and individual list items, preserves bare blank lines,
 and edits existing paragraphs inside table cells. One plan is simulated and
 checked for both content equality and preservation of unchanged IDs and
 attributes. There is no whole-page or whole-list replacement fallback.

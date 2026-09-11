@@ -9,6 +9,7 @@ QtObject {
   property string toolId: ""
   property string label: ""
   property string icon: ""
+  property bool toolbarLabelVisible: true
   property string capability: toolId
   property bool available: true
   property int shortcutKey: 0

@@ -30,83 +30,38 @@ Item {
   Column {
     id: strip
     width: parent.width
-    topPadding: Style.spacing.sm
-    bottomPadding: Style.spacing.sm
-    leftPadding: Style.spacing.panelPadding
-    rightPadding: Style.spacing.panelPadding
-    spacing: Style.spacing.sm
+    padding: Style.spacing.sm
+    spacing: padding
 
     Flow {
       id: toolFlow
       width: parent.width - parent.leftPadding - parent.rightPadding
-      spacing: Style.spacing.sm
-      Repeater {
-        id: buttons
-        // Keep controls alive when capabilities/caret context change. Hiding
-        // a tool closes its popup normally and preserves hover lifetimes.
-        model: bar.registry.topLevelTools
-        delegate: Item {
-          id: entry
-          required property var modelData
-          readonly property int visibleIndex: bar.registry.toolbarTools.indexOf(modelData)
-          readonly property bool startsGroup: visibleIndex > 0
-            && bar.registry.groupFor(bar.registry.toolbarTools[visibleIndex - 1].toolId)
-               !== bar.registry.groupFor(modelData.toolId)
-          visible: visibleIndex >= 0
-          width: actionButton.width + (startsGroup ? Style.spacing.md + Style.spacing.sm : 0)
-          height: actionButton.height
-
-          Button {
-            id: actionButton
-            objectName: "editingTool-" + entry.modelData.toolId
-            enabled: bar.editor.writable && (!entry.modelData.isMenu || menu.rows.length > 0)
-            anchors.right: parent.right
-            property bool hovering: false
-            bordered: hovering || menu.opened || entry.modelData.panelOpen
-            foreground: bar.editor.foreground
-            accent: bar.editor.accent
-            iconText: entry.modelData.icon
-            // A tooltip must not cover an open tool panel or menu.
-            tooltipText: bar.panelOpen || menu.opened ? "" : entry.modelData.tooltip
-            iconSize: Style.font.icon
-            horizontalPadding: Style.spacing.sm
-            verticalPadding: Style.spacing.xxs
-            text: entry.modelData.isMenu ? entry.modelData.label + " 󰅀" : (entry.modelData.panelPopup ? "󰅀" : "")
-            opacity: enabled ? 1 : 0.45
-            fontSize: Style.font.caption
-            onHovered: function(over) {
-              hovering = over
-            }
-            onClicked: {
-              if (entry.modelData.isMenu) {
-                if (menu.opened) {
-                  menu.close()
-                } else {
-                  menu.open()
-                }
-              } else if (entry.modelData.panelPopup && entry.modelData.panelOpen) {
-                entry.modelData.cancelPanel()
-              } else {
-                bar.registry.execute(entry.modelData.toolId)
-              }
-            }
-            onVisibleChanged: {
-              if (!visible) {
-                menu.close()
-              }
-            }
-            Component.onDestruction: menu.close()
-
-            ToolMenu {
-              id: menu
-              registry: bar.registry
-              tool: entry.modelData
-              submenuComponent: submenuFactory
-              maximumWidth: toolFlow.width
-              x: Math.min(0, toolFlow.width - entry.x - actionButton.x - width)
-              y: actionButton.height + Style.spacing.xxs
-            }
+      spacing: strip.padding
+      // All groups share the tallest button's height, including text-only
+      // dropdowns whose labels are shorter than the icon glyphs.
+      readonly property real buttonHeight: {
+        var tallest = 0
+        for (var i = 0; i < children.length; i++) {
+          var group = children[i]
+          if (group.naturalButtonHeight) {
+            tallest = Math.max(tallest, group.naturalButtonHeight)
           }
+        }
+        return tallest
+      }
+      Repeater {
+        id: groups
+        model: bar.registry.toolbarGroups
+        delegate: ToolBarGroup {
+          required property var modelData
+          objectName: "editingToolGroup-" + modelData.id
+          registry: bar.registry
+          tools: modelData.tools
+          toolbarFlow: toolFlow
+          submenuComponent: submenuFactory
+          buttonHeight: toolFlow.buttonHeight
+          panelOpen: bar.panelOpen
+          color: Qt.tint(bar.background, Util.alpha("#808080", 0.18))
         }
       }
     }
@@ -126,13 +81,15 @@ Item {
   }
 
   function popupX(id, popupWidth) {
-    for (var i = 0; i < buttons.count; i++) {
-      var button = buttons.itemAt(i)
-      if (button && button.modelData.toolId === id) {
-        return Math.max(0, Math.min(strip.x + toolFlow.x + button.x, bar.width - popupWidth))
+    for (var i = 0; i < groups.count; i++) {
+      var group = groups.itemAt(i)
+      var button = group ? group.buttonFor(id) : null
+      if (button) {
+        var buttonX = strip.x + toolFlow.x + group.x + group.panelPadding + button.x
+        return Math.max(0, Math.min(buttonX, bar.width - popupWidth))
       }
     }
-    return Style.spacing.panelPadding
+    return strip.leftPadding
   }
 
   Repeater {

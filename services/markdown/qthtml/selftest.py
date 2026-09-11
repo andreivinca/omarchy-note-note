@@ -88,6 +88,14 @@ CASES = {
     "code after quote": "> quoted\n\n```\nx = 1\n```\n",
     "table": "| a | b |\n|---|---|\n| 1 | 2 |\n",
     "table with empty cells": "| a |  |\n|---|---|\n|  | 2 |\n",
+    "literal pipes in table headers and cells": (
+        r"| \| | left\|right |" "\n|---|---|\n" r"| \| | \| |" "\n"),
+    "backslashes before table pipes": (
+        r"| \\\| | \\\\\| |" "\n|---|---|\n" r"| one\\\|two | \\\| |" "\n"),
+    "formatted table pipes": (
+        r"| **\|** | *left\|right* |" "\n|---|---|\n" r"| _\|_ | ==\|== |" "\n"),
+    "table pipes with strict escaping": (
+        r"\=\=literal\=\=" "\n\n|  |  |\n|---|---|\n" r"| \| | \| |" "\n"),
     "nested table": (
         "<table><tr><td><p>Outer</p></td><td><p>Neighbour</p></td></tr><tr><td><p>before</p>"
         "<table><tr><td><p>Inner</p></td><td><p>Value</p></td></tr>"

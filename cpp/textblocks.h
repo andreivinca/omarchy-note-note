@@ -440,22 +440,29 @@ public:
     Q_INVOKABLE int fillEmptyBlocksBeforeTables()
     {
         QTextDocument *doc = m_document ? m_document->textDocument() : nullptr;
-        if (!doc)
+        if (!doc) {
             return -1;
+        }
         int filled = -1;
         for (QTextBlock block = doc->begin(); block.isValid(); block = block.next()) {
             const QTextBlock following = block.next();
-            if (block.length() > 1 || !following.isValid())
+            if (block.length() > 1 || !following.isValid()) {
                 continue;
+            }
             QTextCursor cursor(block);
             QTextTable *table = QTextCursor(following).currentTable();
-            if (!table || table == cursor.currentTable())
+            // Leaving a nested table also changes currentTable(), but its
+            // last cell is not an empty paragraph above the parent table.
+            if (!table || table == cursor.currentTable()
+                    || following.position() != table->firstPosition()) {
                 continue;
+            }
             cursor.joinPreviousEditBlock();
             cursor.insertText(QString(QChar(0xa0)));
             cursor.endEditBlock();
-            if (filled < 0)
+            if (filled < 0) {
                 filled = block.position();
+            }
         }
         return filled;
     }

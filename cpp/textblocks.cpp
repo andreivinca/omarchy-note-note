@@ -1,5 +1,21 @@
 #include "textblocks.h"
 
+namespace {
+
+void copyCellPadding(QTextTableCell cell, const QTextTableCellFormat &source)
+{
+    QTextTableCellFormat format = cell.format().toTableCellFormat();
+    for (int property : {QTextFormat::TableCellTopPadding, QTextFormat::TableCellBottomPadding,
+                         QTextFormat::TableCellLeftPadding, QTextFormat::TableCellRightPadding}) {
+        if (source.hasProperty(property)) {
+            format.setProperty(property, source.property(property));
+        }
+    }
+    cell.setFormat(format);
+}
+
+}
+
 int TextBlocks::deletePreviousTable(int position)
 {
     QTextDocument *doc = m_document ? m_document->textDocument() : nullptr;
@@ -63,6 +79,7 @@ int TextBlocks::editTable(int position, const QString &operation, int index, int
     const QTextTableCell original = table->cellAt(cursor);
     const int originalRow = original.row();
     const int originalColumn = original.column();
+    const QTextTableCellFormat padding = original.format().toTableCellFormat();
     cursor.beginEditBlock();
     if (operation == "insertRows") {
         table->insertRows(index, count);
@@ -72,6 +89,19 @@ int TextBlocks::editTable(int position, const QString &operation, int index, int
         table->insertColumns(index, count);
     } else {
         table->removeColumns(index, count);
+    }
+    // Qt creates cells with only the table's uniform padding. Carry the
+    // surrounding cell's per-side padding into the inserted rows/columns.
+    if (insert) {
+        const int firstRow = rows ? index : 0;
+        const int lastRow = rows ? index + count : table->rows();
+        const int firstColumn = columns ? index : 0;
+        const int lastColumn = columns ? index + count : table->columns();
+        for (int row = firstRow; row < lastRow; ++row) {
+            for (int column = firstColumn; column < lastColumn; ++column) {
+                copyCellPadding(table->cellAt(row, column), padding);
+            }
+        }
     }
     cursor.endEditBlock();
     // Deleting the first cell can leave Qt's cursor just before the table,
@@ -111,7 +141,11 @@ int TextBlocks::appendTableRow(int position)
     cursor.setPosition(block.position() + block.length() - 1, QTextCursor::KeepAnchor);
     cursor.removeSelectedText();
     const int row = table->rows();
+    const QTextTableCellFormat padding = cell.format().toTableCellFormat();
     table->insertRows(row, 1);
+    for (int column = 0; column < table->columns(); ++column) {
+        copyCellPadding(table->cellAt(row, column), padding);
+    }
     const int target = table->cellAt(row, 0).firstCursorPosition().position();
     cursor.endEditBlock();
     return target;

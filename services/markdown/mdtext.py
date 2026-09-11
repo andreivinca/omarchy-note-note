@@ -16,6 +16,7 @@ ADJACENT = set("*~")
 LINE_START = re.compile(r"^(\s*)([#>]|[-+*](?=\s)|[-=]{3,}\s*$|\|)")
 LINE_NUMBER = re.compile(r"^(\s*\d+)([.)])")
 STRICT = re.compile(r"([\\*_`~=\[\]<>|])")
+UNESCAPED_PIPE = re.compile(r"(?<!\\)((?:\\\\)*)\|")
 
 
 def escape_inline(text, strict=False):
@@ -63,6 +64,15 @@ def escape_line_start(line):
 def escape_text(text):
     """Conservative escaping for plain text supplied by a remote backend."""
     return escape_inline(text, strict=True)
+
+
+def escape_table_cell(text):
+    """Protect pipes in serialized inline Markdown without escaping them twice.
+
+    An odd number of backslashes already protects the pipe. An even number
+    represents literal backslashes and still needs an escape for the pipe.
+    """
+    return UNESCAPED_PIPE.sub(r"\1\\|", text).replace("\n", " ")
 
 
 def code_span(text):

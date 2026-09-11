@@ -66,6 +66,117 @@ class SaveTests(unittest.TestCase):
         self.assertTrue(actual["editable"])
         self.assertEqual(actual["body"], source)
 
+    def test_table_export_uses_onenote_border_attribute(self):
+        cases = [
+            "| Item | Quantity |\n|---|---|\n| Apples | 2 |",
+            "|  |  |\n|---|---|\n|  |  |",
+            '<table><tr><td><p>Parent</p><table><tr><td><p>Inner</p></td></tr></table>'
+            '</td></tr></table>',
+        ]
+        for source in cases:
+            with self.subTest(source=source):
+                rendered = onenote.onenote_md.markdown_to_onenote_html(source)
+                tables = list(ET.fromstring("<root>" + rendered + "</root>").iter("table"))
+                self.assertTrue(tables)
+                for table in tables:
+                    self.assertEqual(table.get("border"), "1")
+                    self.assertNotIn("border:", table.get("style", ""))
+
+    def test_literal_pipes_in_table_cells_survive_save_and_reload(self):
+        self.remote = ('<html><head><title>Title</title></head><body><div><table id="table:pipes">'
+                       '<tr><td><p id="p:head1"></p></td><td><p id="p:head2"></p></td></tr>'
+                       '<tr><td><p id="p:cell1"></p></td><td><p id="p:cell2"></p></td></tr>'
+                       '</table></div></body></html>')
+        loaded = self.load()
+        cases = [
+            ("|", r"\|"),
+            ("left|right", r"left\|right"),
+            (r"\|", r"\\\|"),
+            (r"\\|", r"\\\\\|"),
+            ("bold|pipe", r"**bold\|pipe**"),
+        ]
+        for text, markdown in cases:
+            with self.subTest(text=text):
+                row = "| " + markdown + " | " + markdown + " |"
+                desired = row + "\n|---|---|\n" + row
+                result = self.save(note(desired), loaded["view"])
+                self.assertTrue(result.get("ok"), result)
+                current = ET.fromstring(self.remote)
+                tables = list(current.iter("table"))
+                self.assertEqual(len(tables), 1)
+                rows = list(tables[0].iter("tr"))
+                self.assertEqual(len(rows), 2)
+                for row in rows:
+                    self.assertEqual(["".join(cell.itertext()) for cell in row], [text, text])
+                loaded = self.load()
+                self.assertEqual(loaded["body"], desired)
+
+    def test_appending_calendar_with_repeated_heading_preserves_existing_page(self):
+        self.remote = ('<html><head><title>Title</title></head><body><div id="div:main">'
+                       '<p id="p:item" data-tag="to-do">Apples</p><br/>'
+                       '<p id="p:month">September 2026</p></div></body></html>')
+        loaded = self.load()
+        table = "| Mon | Tue | Wed | Thu | Fri | Sat | Sun |\n|---|---|---|---|---|---|---|"
+        table += "\n|  |  |  |  |  |  |  |" * 5
+        desired = loaded["body"] + "\n\n\u00a0\n\nSeptember 2026\n\n" + table
+        saved = self.save(note(desired), loaded["view"])
+        self.assertTrue(saved.get("ok"), saved)
+        self.assertEqual(self.load()["body"], desired)
+        operations = [op for method, _, data in self.calls if method == "PATCH" for op in json.loads(data)]
+        self.assertEqual([(op["target"], op["action"], op.get("position")) for op in operations],
+                         [("p:month", "insert", "after")])
+        current = ET.fromstring(self.remote)
+        paragraphs = {node.get("id"): node for node in current.iter("p")}
+        self.assertEqual(paragraphs["p:month"].text, "September 2026")
+        self.assertEqual(paragraphs["p:item"].get("data-tag"), "to-do")
+        rows = list(next(current.iter("table")).iter("tr"))
+        self.assertEqual(len(rows), 6)
+        self.assertEqual([cell.text for cell in rows[0]], ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"])
+        self.assertTrue(all(not "".join(cell.itertext()).strip() for row in rows[1:] for cell in row))
+        with self.store() as journal:
+            self.assertIsNone(journal.recover())
+
+    def test_clearing_table_body_preserves_header_cells_and_structure(self):
+        self.remote = ('<html><head><title>Title</title></head><body><div>'
+                       '<p id="p:before">Before</p><table id="table:calendar">'
+                       '<tr id="tr:head"><td id="td:mon"><p id="p:mon">Mon</p></td>'
+                       '<td id="td:tue"><p id="p:tue">Tue</p></td></tr>'
+                       '<tr id="tr:one"><td id="td:empty"><br/></td>'
+                       '<td id="td:one"><p id="p:one">1</p></td></tr>'
+                       '<tr id="tr:two"><td id="td:two"><p id="p:two">2</p></td>'
+                       '<td id="td:three"><p id="p:three">3</p></td></tr>'
+                       '</table><p id="p:after">After</p></div></body></html>')
+        original = ET.fromstring(self.remote)
+        loaded = self.load()
+        desired = loaded["body"].replace("|  | 1 |", "|  |  |")
+        desired = desired.replace("| 2 | 3 |", "|  |  |")
+        saved = self.save(note(desired), loaded["view"])
+        self.assertTrue(saved.get("ok"), saved)
+        self.assertEqual(self.load()["body"], desired)
+        current = ET.fromstring(self.remote)
+        kept = {node.get("id"): node for node in current.iter()}
+        for node in original.iter():
+            identifier = node.get("id")
+            if identifier and identifier not in {"p:one", "p:two", "p:three"}:
+                self.assertIn(identifier, kept)
+                self.assertEqual(kept[identifier].attrib, node.attrib)
+                if identifier in {"p:before", "p:after", "tr:head", "td:empty"}:
+                    self.assertEqual(ET.tostring(kept[identifier]), ET.tostring(node))
+        operations = [op for method, _, data in self.calls if method == "PATCH" for op in json.loads(data)]
+        self.assertEqual([op["target"] for op in operations], ["p:one", "p:two", "p:three"])
+        self.assertTrue(all(op["content"] == "<p><br/></p>" for op in operations))
+
+    def test_partial_deletion_of_repeated_entries_still_preserves_draft(self):
+        self.remote = ('<html><head><title>Title</title></head><body><div>'
+                       '<p id="p:first" data-tag="to-do">Same</p>'
+                       '<p id="p:second" data-tag="to-do">Same</p></div></body></html>')
+        loaded = self.load()
+        saved = self.save(note("- [ ] Same"), loaded["view"])
+        self.assertIn("repeated entry", saved.get("error", ""))
+        self.assertFalse(any(method == "PATCH" for method, *_ in self.calls))
+        with self.store() as journal:
+            self.assertEqual(journal.recover()["body"], "- [ ] Same")
+
     def test_nested_table_insertion_preserves_parent_and_neighbour_ids(self):
         self.remote = ('<html><head><title>Title</title></head><body><table id="table:outer">'
                        '<tr><td><p id="p:head1">Parent</p></td><td><p id="p:head2">Neighbour</p></td></tr>'
@@ -457,6 +568,108 @@ class SaveTests(unittest.TestCase):
         operations = [op for method, _, data in self.calls if method == "PATCH" for op in json.loads(data)]
         self.assertEqual([op["target"] for op in operations], ["p:second"])
         self.assertEqual(len(list(ET.fromstring(self.remote).iter("br"))), 1)
+
+    def test_mobile_table_and_boundary_breaks_do_not_block_pending_save(self):
+        self.remote = ('<html><head><title>Title</title></head><body><div id="div:main">'
+                       '<p id="p:first" data-tag="to-do">Apples</p>'
+                       '<p id="p:remove">Remove this heading</p>'
+                       '<p id="p:second" data-tag="to-do">Bread</p></div></body></html>')
+        loaded = self.load()
+        local = loaded["body"].replace("\n\nRemove this heading\n", "")
+        table = ('<table id="table:mobile" style="border:1px solid;border-collapse:collapse">'
+                 '<tr id="tr:first"><td id="td:first" style="border:1px solid"><br/></td>'
+                 '<td id="td:second" style="border:1px solid"><br/></td></tr>'
+                 '<tr id="tr:second"><td id="td:third" style="border:1px solid"><br/></td>'
+                 '<td id="td:fourth" style="border:1px solid"><br/></td></tr></table>')
+        self.remote = self.remote.replace('<p id="p:first"', '<br/><br/><p id="p:first"')
+        self.remote = self.remote.replace('</div></body>', '<br/><br/>' + table + '</div>'
+                                          '<div id="div:empty"><br/><br/></div></body>')
+        result = self.save(note(local), loaded["view"])
+        self.assertTrue(result.get("ok"), result)
+        self.assertTrue(result.get("merged"), result)
+        self.assertNotIn("Remove this heading", result["body"])
+        self.assertIn("|  |  |\n|---|---|\n|  |  |", result["body"])
+        operations = [op for method, _, data in self.calls if method == "PATCH" for op in json.loads(data)]
+        self.assertEqual(operations, [{"target": "p:remove", "action": "replace", "content": "<div></div>"}])
+        current = ET.fromstring(self.remote)
+        self.assertEqual(ET.tostring(next(current.iter("table"))), ET.tostring(ET.fromstring(table)))
+        self.assertEqual(len(list(current.iter("br"))), 10)
+        self.assertEqual(self.load()["body"], result["body"])
+        with self.store() as journal:
+            self.assertIsNone(journal.recover())
+
+    def test_append_after_table_keeps_ignored_trailing_breaks(self):
+        self.remote = ('<html><head><title>Title</title></head><body><div>'
+                       '<table id="table:mobile"><tr><td><br/></td></tr></table><br/>'
+                       '</div><div id="div:empty"><br/></div></body></html>')
+        loaded = self.load()
+        result = self.save(note(loaded["body"] + "\n\nAfter table"), loaded["view"])
+        self.assertTrue(result.get("ok"), result)
+        operations = [op for method, _, data in self.calls if method == "PATCH" for op in json.loads(data)]
+        self.assertEqual([(op["target"], op["action"], op.get("position")) for op in operations],
+                         [("table:mobile", "insert", "after")])
+        self.assertEqual(len(list(ET.fromstring(self.remote).iter("br"))), 3)
+        self.assertEqual(self.load()["body"], result["body"])
+
+    def test_deletion_can_turn_internal_breaks_into_boundary_breaks(self):
+        table = ('<table id="table:remove"><tr><td><p id="p:cell">Heading</p></td></tr>'
+                 '<tr><td><br/></td></tr></table>')
+        kept = '<p id="p:keep" data-tag="to-do">Keep this</p>'
+        cases = [
+            ("last table", kept + '<br/><br/>' + table, "- [ ] Keep this", ["table:remove"]),
+            ("first table", table + '<br/><br/>' + kept, "- [ ] Keep this", ["table:remove"]),
+            ("whole page", kept + '<br/>' + table, "", ["p:keep", "table:remove"]),
+            ("last paragraph", kept + '<br/><p id="p:remove">Remove this</p>',
+             "- [ ] Keep this", ["p:remove"]),
+        ]
+        for name, content, desired, targets in cases:
+            with self.subTest(name=name):
+                with self.store() as journal:
+                    journal.discard()
+                self.remote = ('<html><head><title>Title</title></head><body>'
+                               '<div id="div:main">' + content + '</div></body></html>')
+                breaks = len(list(ET.fromstring(self.remote).iter("br")))
+                loaded = self.load()
+                self.calls.clear()
+                result = self.save(note(desired), loaded["view"])
+                self.assertTrue(result.get("ok"), result)
+                self.assertEqual(self.load()["body"], desired)
+                operations = [op for method, _, data in self.calls if method == "PATCH" for op in json.loads(data)]
+                self.assertEqual([op["target"] for op in operations], targets)
+                current = ET.fromstring(self.remote)
+                self.assertEqual(len(list(current.iter("table"))), 0)
+                self.assertEqual(len(list(current.iter("br"))), breaks - int("table:remove" in targets))
+                if desired:
+                    remaining = next(node for node in current.iter("p") if node.get("id") == "p:keep")
+                    self.assertEqual(ET.tostring(remaining), ET.tostring(ET.fromstring(kept)))
+                with self.store() as journal:
+                    self.assertIsNone(journal.recover())
+
+    def test_table_deletion_merges_with_remote_spacing_change(self):
+        table = ('<table id="table:mobile"><tr><td><br/></td><td><br/></td></tr>'
+                 '<tr><td><br/></td><td><br/></td></tr></table>')
+        self.remote = ('<html><head><title>Title</title></head><body><div>'
+                       '<p id="p:keep" data-tag="to-do">Apples</p><br/><br/><br/>'
+                       + table + '</div></body></html>')
+        loaded = self.load()
+        self.remote = self.remote.replace('</p><br/><br/><br/>', '</p><br/>')
+        result = self.save(note("- [ ] Apples"), loaded["view"])
+        self.assertTrue(result.get("ok"), result)
+        self.assertNotIn("conflict", result)
+        self.assertEqual(self.load()["body"], "- [ ] Apples")
+        operations = [op for method, _, data in self.calls if method == "PATCH" for op in json.loads(data)]
+        self.assertEqual(operations, [{"target": "table:mobile", "action": "replace", "content": "<div></div>"}])
+
+    def test_deleting_an_internal_untargetable_break_still_preserves_draft(self):
+        self.remote = ('<html><head><title>Title</title></head><body><div>'
+                       '<p id="p:first">Before</p><br/><p id="p:second">After</p>'
+                       '</div></body></html>')
+        loaded = self.load()
+        result = self.save(note("Before\n\nAfter"), loaded["view"])
+        self.assertIn("no editable target", result.get("error", ""))
+        self.assertFalse(any(method == "PATCH" for method, *_ in self.calls))
+        with self.store() as journal:
+            self.assertEqual(journal.recover()["body"], onenote.normalize_note(note("Before\n\nAfter"))["body"])
 
     def test_inserting_a_blank_line_preserves_existing_elements(self):
         self.remote = ('<html><head><title>Title</title></head><body><div>'

@@ -14,12 +14,13 @@ editor retains its document, keyboard behavior, conversion and undo machinery.
 ## Arrange the toolbar
 
 Open **Settings** and edit `editor.toolbar` in the JSON. Each inner array is
-a group; array order controls button order, and a gap separates groups. Save
+a group; array order controls button order. Each group has a rounded gray
+panel, and groups wrap together when space is tight. Save
 to apply the layout immediately. Existing configurations gain these defaults
 in the Settings page; the file is updated when you save it.
 
-The default layout keeps formatting actions directly on the toolbar and groups
-the calendar tools under **Insert → Insert month**:
+The default layout keeps formatting actions directly on the toolbar, puts the
+separator under **Insert**, and groups calendar tools under **Insert → Insert month**:
 
 ```json
 "editor": {
@@ -27,10 +28,11 @@ the calendar tools under **Insert → Insert month**:
     ["bold", "italic", "underline", "strikeout"],
     ["textColor", "highlight", "code", "heading"],
     ["ul", "ol", "todo", "outdent", "indent"],
-    ["quote", "codeblock", "rule", "link"],
+    ["quote", "codeblock", "link"],
     ["table", "addRow", "delRow", "addCol", "delCol"],
     [{ "dropdown": "insert", "items": [
-      { "dropdown": "insertMonth", "items": ["currentMonth", "nextMonth", "customMonth"] }
+      { "dropdown": "insertMonth", "items": ["currentMonth", "nextMonth", "customMonth"] },
+      "rule"
     ] }]
   ]
 }
@@ -185,6 +187,7 @@ applicable, provider support so its content survives saving and reloading.
 | --- | --- |
 | `toolId` | Unique action ID. Existing IDs such as `bold`, `h1` and `addRow` remain stable for IPC. |
 | `label`, `icon` | Button tooltip/menu text and icon glyph. |
+| `toolbarLabelVisible` | Show the menu label on the toolbar button; defaults to true. Hiding it keeps the icon, dropdown arrow, menu labels and tooltip. |
 | `capability` | Provider capability required; defaults to `toolId`. All four table alteration tools require `table`. |
 | `available` | Reactive context condition, such as `editor.inTable`. Controls both presentation and execution. |
 | `shortcutKey`, `shortcutModifiers`, `shortcutLabel` | Optional key, modifiers and human-readable shortcut. Used for dispatch, tooltips and help. |

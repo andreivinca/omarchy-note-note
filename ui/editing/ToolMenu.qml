@@ -11,6 +11,15 @@ QQC.Menu {
   required property Component submenuComponent
   required property real maximumWidth
   readonly property var rows: registry.menuTools(tool.toolId)
+  readonly property real iconColumnWidth: {
+    var widest = 0
+    for (var i = 0; i < rows.length; i++) {
+      if (rows[i].icon) {
+        widest = Math.max(widest, Style.font.icon, iconMetrics.advanceWidth(rows[i].icon))
+      }
+    }
+    return widest
+  }
   readonly property var borderSpec: Border.localOrSurfaceSpec("popups", "border", Color.popups.border, Color.popups.border, Style.normalBorderWidth)
   objectName: "editingPopup-" + tool.toolId
   title: tool.label
@@ -36,6 +45,12 @@ QQC.Menu {
   bottomPadding: Border.bottom(borderSpec) + Style.spacing.xxs
   onRowsChanged: close()
 
+  FontMetrics {
+    id: iconMetrics
+    font.family: Style.font.family
+    font.pixelSize: Style.font.icon
+  }
+
   background: BorderSurface {
     color: Color.popups.background
     borderSpec: toolMenu.borderSpec
@@ -51,12 +66,14 @@ QQC.Menu {
   }
   delegate: ToolMenuItem {
     editor: toolMenu.registry.editor
+    iconColumnWidth: toolMenu.iconColumnWidth
   }
 
   Component {
     id: actionComponent
     ToolMenuItem {
       editor: toolMenu.registry.editor
+      iconColumnWidth: toolMenu.iconColumnWidth
       onTriggered: {
         toolMenu.dismiss()
         toolMenu.registry.execute(tool.toolId)
