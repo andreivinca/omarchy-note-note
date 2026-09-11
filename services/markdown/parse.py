@@ -11,6 +11,8 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import mistune  # noqa: E402
+import htmltables  # noqa: E402
+import textcolor  # noqa: E402
 
 UNDERLINE_PATTERN = r"(?<![\w_])_(?!\s)(?:\\_|[^_\n])+?(?<!\s)_(?![\w_])"
 
@@ -31,7 +33,7 @@ def _underline_plugin(md):
     md.inline.register("underline", UNDERLINE_PATTERN, _parse_underline, before="emphasis")
 
 
-_md = mistune.create_markdown(renderer=None, plugins=["task_lists", "strikethrough", "table", "mark", _underline_plugin])
+_md = mistune.create_markdown(renderer=None, plugins=["task_lists", "strikethrough", "table", "mark", _underline_plugin, textcolor.plugin])
 
 # A display width the author chose, written right after an image the way
 # pandoc writes attributes: `![alt](pic.png){width=320}`. mistune leaves it
@@ -61,7 +63,16 @@ def parse(markdown):
     """Markdown text -> list of mistune AST tokens."""
     tokens = _md(markdown.replace("\r", ""))
     _absorb_image_widths(tokens)
+    _read_html_tables(tokens)
     return tokens
+
+
+def _read_html_tables(tokens):
+    for index, token in enumerate(tokens):
+        if token["type"] == "block_html" and re.match(r"\s*<table(?:\s|>)", token.get("raw", ""), re.I):
+            tokens[index] = htmltables.parse_table(token["raw"])
+        elif token.get("children"):
+            _read_html_tables(token["children"])
 
 
 def walk_text(tokens):

@@ -12,6 +12,7 @@ import "app/services/notes/sidebar.js" as Sidebar
 import "app/services/providers/settings.js" as Settings
 import "app/ui/MarkdownBlocks.js" as Blocks
 import "app/ui/KeyBindings.js" as Keys
+import "app/ui/editing/ToolbarSettings.js" as ToolbarSettings
 import "app/tests" as Tests
 
 ShellRoot {
@@ -339,7 +340,12 @@ ShellRoot {
     id: configFiles
     property var callback: null
     property int writes: 0
-    function write(path, text, done) { writes++; callback = done }
+    property string lastText: ""
+    function write(path, text, done) {
+      writes++
+      lastText = text
+      callback = done
+    }
   }
   Providers.ProviderLifecycle {
     id: lifecycle
@@ -376,6 +382,27 @@ ShellRoot {
     configFiles.callback({ error: "permission denied" })
     check("failed config write leaves the running setup intact", result.error && host.retired === 0 && session.currentPath === "test:B")
 
+    var layout = [["italic"], [{ dropdown: "insert", items: [
+      { dropdown: "insertMonth", items: ["bold", "futureTool"] }
+    ] }]]
+    var toolbarConfig = { providers: host.config.providers, editor: { toolbar: layout } }
+    lifecycle.apply(JSON.stringify(toolbarConfig), function(r) { result = r })
+    configFiles.callback({ error: "permission denied" })
+    check("failed toolbar settings save preserves the active layout", result.error && !host.config.editor)
+    lifecycle.apply(JSON.stringify(toolbarConfig), function(r) { result = r })
+    configFiles.callback({ ok: true })
+    check("toolbar settings commit without replacing providers or losing the note",
+          result.ok && host.retired === 0 && session.currentPath === "test:B"
+          && JSON.stringify(host.config.editor.toolbar) === JSON.stringify(layout))
+    check("saved toolbar order and future tool ids survive JSON reload",
+          JSON.stringify(ToolbarSettings.editorDefaults(JSON.parse(configFiles.lastText).editor).toolbar) === JSON.stringify(layout))
+    var previousWrites = configFiles.writes
+    toolbarConfig.editor.toolbar = [["bold", { dropdown: "insert", items: ["bold"] }]]
+    lifecycle.apply(JSON.stringify(toolbarConfig), function(r) { result = r })
+    check("invalid toolbar settings are rejected before writes or document locks",
+          result.error && configFiles.writes === previousWrites && !session.locked
+          && JSON.stringify(host.config.editor.toolbar) === JSON.stringify(layout))
+
     configured.busy = true
     lifecycle.apply(JSON.stringify({ providers: { test: { enabled: false } } }), function(r) { result = r })
     var writes = configFiles.writes
@@ -388,6 +415,61 @@ ShellRoot {
   }
 
   function pureCases() {
+    var tools = [
+      { toolId: "bold", isMenu: false },
+      { toolId: "italic", isMenu: false },
+      { toolId: "insert", isMenu: true },
+      { toolId: "newTool", isMenu: false }
+    ]
+    var layout = [["italic", "uninstalled"], [], [{ dropdown: "insert", items: ["bold", "future"] }]]
+    var layoutBefore = JSON.stringify(layout)
+    var resolved = ToolbarSettings.resolve(layout, tools)
+    check("toolbar resolves ordered groups, dropdown members and omitted extensions",
+          resolved.toolbar.map(function(entry) { return entry.tool.toolId }).join(",") === "italic,insert,newTool"
+          && resolved.toolbar[1].group === 2 && resolved.toolbar[2].group === 3
+          && resolved.menus.insert[0].toolId === "bold")
+    check("toolbar resolution preserves user settings", JSON.stringify(layout) === layoutBefore)
+    var nestedTools = tools.concat([
+      { toolId: "insertMonth", isMenu: true },
+      { toolId: "more", isMenu: true }
+    ])
+    var nested = [[{ dropdown: "insert", items: [
+      { dropdown: "insertMonth", items: ["italic", { dropdown: "more", items: ["bold", "future"] }] }
+    ] }]]
+    var nestedBefore = JSON.stringify(nested)
+    var nestedResolved = ToolbarSettings.resolve(nested, nestedTools)
+    check("nested dropdowns preserve order and keep descendants off the toolbar",
+          !ToolbarSettings.validate(nested)
+          && nestedResolved.toolbar.map(function(entry) { return entry.tool.toolId }).join(",") === "insert,newTool"
+          && nestedResolved.menus.insert[0].toolId === "insertMonth"
+          && nestedResolved.menus.insertMonth.map(function(tool) { return tool.toolId }).join(",") === "italic,more"
+          && nestedResolved.menus.more[0].toolId === "bold"
+          && JSON.stringify(nested) === nestedBefore)
+    var missingChild = ToolbarSettings.resolve(nested, tools)
+    check("removing a submenu returns its descendants to the toolbar",
+          missingChild.menus.insert.length === 0 && missingChild.toolbar.length === tools.length)
+    var fallback = ToolbarSettings.resolve([[{ dropdown: "removedMenu", items: ["bold"] }]], tools)
+    check("removing a dropdown tool returns its members to the toolbar", fallback.toolbar.length === tools.length)
+    check("older settings get the full default layout",
+          JSON.stringify(ToolbarSettings.editorDefaults().toolbar) === JSON.stringify(ToolbarSettings.defaults()))
+    check("explicit empty layouts and unknown editor settings survive default merging",
+          ToolbarSettings.editorDefaults({ toolbar: [], future: 42 }).toolbar.length === 0
+          && ToolbarSettings.editorDefaults({ future: 42 }).future === 42)
+    var invalid = [null, {}, ["bold"], [[null]], [[""]], [[{ dropdown: "insert" }]],
+      [["bold", "bold"]], [["bold", { dropdown: "insert", items: ["bold"] }]],
+      [[{ dropdown: "insert", items: [{ dropdown: "nested", items: [null] }] }]],
+      [[{ dropdown: "insert", items: [{ dropdown: "insert", items: [] }] }]],
+      [["bold", { dropdown: "insert", items: [{ dropdown: "nested", items: ["bold"] }] }]]]
+    check("toolbar validation rejects malformed entries and duplicates at any depth", invalid.every(function(value) {
+      return !!ToolbarSettings.validate(value)
+    }))
+    check("toolbar validation permits empty groups and tools not installed yet", !ToolbarSettings.validate(layout))
+    check("editor settings validation rejects invalid containers", [null, [], "invalid"].every(function(value) {
+      return !!ToolbarSettings.validateConfig({ editor: value })
+    }))
+    check("malformed toolbar defaults preserve unrelated editor settings",
+          JSON.stringify(ToolbarSettings.editorDefaults({ toolbar: ["bold"], future: 42 }).toolbar) === JSON.stringify(ToolbarSettings.defaults())
+          && ToolbarSettings.editorDefaults({ toolbar: ["bold"], future: 42 }).future === 42)
     var source = [{ id: "test", canReorder: true, sections: [{ key: "s", name: "Section", rows: [],
       footerActions: [{ path: "logout", title: "Sign out" }],
       notes: [{ kind: "note", path: "test:A", title: "Hidden note" }] }] }]
@@ -411,6 +493,15 @@ ShellRoot {
       if (component.status === Component.Ready) {
         test.appHost = component.createObject(test)
         check("the host instantiates with its real controllers", !!test.appHost)
+        if (test.appHost) {
+          var oldConfig = test.appHost.mergeConfigDefaults({ providers: {} })
+          check("host adds toolbar settings to older configuration", JSON.stringify(oldConfig.editor.toolbar) === JSON.stringify(ToolbarSettings.defaults()))
+          var customConfig = test.appHost.mergeConfigDefaults({ editor: { toolbar: layout, future: 42 } })
+          check("host preserves custom toolbar order and unknown editor settings", JSON.stringify(customConfig.editor.toolbar) === layoutBefore && customConfig.editor.future === 42)
+          var malformedConfig = test.appHost.mergeConfigDefaults({ providers: { local: { enabled: false } }, editor: { toolbar: ["bold"] } })
+          check("invalid toolbar at startup does not reset valid provider settings", !malformedConfig.providers.local.enabled
+                && JSON.stringify(malformedConfig.editor.toolbar) === JSON.stringify(ToolbarSettings.defaults()))
+        }
       }
     }
     check("shortcut dispatch and help use common definitions", Keys.match({ key: Qt.Key_N, modifiers: Qt.ControlModifier | Qt.ShiftModifier }, "workspace") === "newNotebook" && Keys.text().indexOf("ctrl+shift+n") >= 0)
@@ -659,7 +750,8 @@ ShellRoot {
   Timer {
     // Real keyboard and pointer coverage takes around 20 seconds. Leave
     // room for the remaining cases and for slower desktop runs.
-    interval: 45000
+    // The editor suite includes a save/undo/redo round trip for every tool.
+    interval: 90000
     running: true
     onTriggered: {
       test.check("all asynchronous scenarios finished", false, JSON.stringify({

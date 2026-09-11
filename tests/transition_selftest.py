@@ -2,6 +2,7 @@
 import json
 import os
 from pathlib import Path
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -13,6 +14,29 @@ def main():
     with tempfile.TemporaryDirectory(prefix="note-note-transitions-") as directory:
         work = Path(directory)
         (work / "app").symlink_to(ROOT, target_is_directory=True)
+        tool_ui = work / "ui"
+        shutil.copytree(ROOT / "ui/tools", tool_ui / "tools")
+        (tool_ui / "editing").symlink_to(ROOT / "ui/editing", target_is_directory=True)
+        (tool_ui / "Dialect.js").symlink_to(ROOT / "ui/Dialect.js")
+        greeting = (ROOT / "tests/InsertGreeting.qml").read_text().replace('"../ui/editing"', '"../editing"')
+        (tool_ui / "tools/InsertGreeting.qml").write_text(greeting)
+        invalid_tools = tool_ui / "invalid-tools"
+        invalid_tools.mkdir()
+        definitions = {
+            "Good": 'toolId: "okay"; label: "Okay"',
+            "DuplicateOne": 'toolId: "duplicate"; label: "First"',
+            "DuplicateTwo": 'toolId: "duplicate"; label: "Second"',
+            "ReservedShortcut": 'toolId: "reserved"; label: "Reserved"; shortcutKey: Qt.Key_N; '
+                                'shortcutModifiers: Qt.ControlModifier; shortcutLabel: "ctrl+n"',
+            "ReservedUndo": 'toolId: "undo"; label: "Undo"; shortcutKey: Qt.Key_Z; '
+                            'shortcutModifiers: Qt.ControlModifier; shortcutLabel: "ctrl+z"',
+            "MenuShortcut": 'toolId: "menuShortcut"; label: "Menu"; isMenu: true; '
+                            'shortcutKey: Qt.Key_G; shortcutLabel: "g"',
+            "Incomplete": 'label: "Incomplete"',
+        }
+        for name, properties in definitions.items():
+            (invalid_tools / (name + ".qml")).write_text(
+                'import QtQuick\nimport "../editing"\nTool {\n  ' + properties + '\n}\n')
         shell = Path(os.environ.get("OMARCHY_PATH", "/usr/share/omarchy")) / "shell"
         for name in ("Commons", "Ui", "Services"):
             if (shell / name).is_dir():
@@ -36,6 +60,9 @@ def main():
         env = dict(os.environ, HOME=str(work), XDG_RUNTIME_DIR=str(runtime),
                    XDG_CONFIG_HOME=str(work / "config"), XDG_CACHE_HOME=str(work / "cache"),
                    XDG_STATE_HOME=str(work / "state"), NOTE_NOTE_TEST_DIR=str(work / "notes"),
+                   NOTE_NOTE_TEST_TOOLS=(tool_ui / "tools").as_uri(),
+                   NOTE_NOTE_TEST_INVALID_TOOLS=invalid_tools.as_uri(),
+                   NOTE_NOTE_TEST_TOOLS_ONLY="1" if "--tools" in sys.argv else "",
                    QT_QPA_PLATFORM="offscreen", QT_QPA_PLATFORMTHEME="generic", QT_FORCE_STDERR_LOGGING="1")
         env.pop("WAYLAND_DISPLAY", None)
         if "--host" in sys.argv:
@@ -48,7 +75,7 @@ def main():
             env["NOTE_NOTE_TEST_HOST"] = "1"
         try:
             proc = subprocess.run(["qs", "-p", str(work / "shell.qml"), "--no-color"],
-                                  env=env, capture_output=True, text=True, timeout=60)
+                                  env=env, capture_output=True, text=True, timeout=120)
         except subprocess.TimeoutExpired as error:
             print("FAILED:", error)
             for captured in (error.stdout, error.stderr):

@@ -16,7 +16,8 @@ Item {
   readonly property string script: dir + "/qthtml/__main__.py"
 
   // The colours of ==highlighted== text. Neither reaches disk: the note keeps
-  // the markers, the document keeps the colours. The ink is set here because a
+  // the markers, the document keeps the background. The display highlighter
+  // paints the ink separately, because a
   // highlight is a light marker, and the editor's own foreground follows the
   // theme — on a dark theme that would be light text on a light highlight.
   property string highlight: "#f9e2af"
@@ -24,8 +25,8 @@ Item {
 
   // The colour of a link. Set by the host from the theme (Notes.qml,
   // linkColour); this default is only what a caller that names none gets.
-  // It does not reach disk either — Markdown has no colour, and `reader`
-  // never looks at one.
+  // The native display highlighter applies it without storing a foreground
+  // brush. Authored text colors remain ordinary brushes and survive saving.
   property string link: "#4282d7"
 
   // A quote's ink and the slab behind a code block, both set by the host
@@ -81,7 +82,7 @@ Item {
   //
   // `asText` (optional) is a document block: the code block holding it is
   // read as the paragraphs its lines would be — the code block tool
-  // toggling off (NoteEditor.toggleCodeBlock). A number, never note
+  // toggling off (ui/tools/CodeBlock.qml). A number, never note
   // content, so it may ride on argv.
   function toMarkdown(html, callback, base, asText) {
     if (!html) {

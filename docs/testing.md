@@ -31,7 +31,7 @@ omarchy plugin enable io.github.andreivinca.note-note
 - **Python changed** → nothing; the next call picks it up. That includes the
   editor's converters, which run as a process per conversion.
 - Always lint first: `qmllint -I /usr/share/omarchy/shell Notes.qml ui/*.qml
-  providers/*/Provider.qml providers/onenote/SearchCache.qml services/*/*.qml`, and `python3 -m py_compile` the
+  ui/editing/*.qml ui/tools/*.qml providers/*/Provider.qml providers/onenote/SearchCache.qml services/*/*.qml`, and `python3 -m py_compile` the
   scripts. For Python there is also `uvx ruff check .`, configured in
   `pyproject.toml` — it needs nothing installed and it is narrowed to the
   rules that catch defects (a stale import, an unused local) rather than to
@@ -110,10 +110,43 @@ check A → B → A loads, stale formatting/paste callbacks, save failures after
 selection changes, failed deletes, and settings changes while writes drain.
 Real temporary files cover image-save ordering, confirmed mutations, byte
 limits and external inotify events immediately after the provider's own saves.
+Editing-tool cases add an extra QML file to an isolated tool directory and
+verify automatic discovery, toolbar clicks, shortcuts and keyboard help.
+They cover the built-in tools' saved Markdown and undo/redo, provider and
+document restrictions, and the link panel's captured note/selection context.
+Layout checks rearrange groups and dropdown items, exercise moved buttons
+and shortcuts, and verify omitted tools remain accessible. Settings cases
+cover malformed or duplicate entries, older configurations, JSON persistence
+and failed saves that must preserve the current arrangement.
+Submenu cases cover nested settings, hover and click navigation, arrow keys,
+Escape, outside clicks, and closing menus when permissions or layouts change.
+Text color checks exercise palette clicks, Reset color, pending typing, selection
+context, provider restrictions, saving/reloading and undo/redo. Converter cases
+include colors in links, quotes, highlights, checklists and tables, including
+colors equal to theme ink. OneNote saves verify color changes and resets while
+retaining neighbouring checkbox IDs.
+Calendar insertion covers locale week starts and labels, leap years,
+four-to-six-week months, year boundaries, table permissions, menu clicks,
+saving/reloading and undo/redo.
+The custom-month picker covers month selection, typed years, confirmation by
+button and Enter, cancellation, validation, nested insertion, and rejection
+after changing the note, cursor or provider permissions. The current-month
+action remains a separate immediate insertion. Shared calendar cases include
+years 1–99 and the year-field limits.
+Nested-table checks insert ordinary and calendar tables into empty and
+populated cells, reload three nesting levels, change inner and outer table
+dimensions, and undo keyboard row insertion. Converter fixtures keep nested
+structure, inline formatting and block counts through Qt. OneNote tests insert
+and edit a nested table while retaining parent and neighbouring element IDs.
+They also save deletion of an entire table or the only inner table in a cell.
+See [the tool contract](editing-tools.md) when adding a tool.
 Offscreen key events exercise double Enter in the last table cell, including
 text after the table, multiple tables, empty cells, header-only tables,
 paragraphs within cells, keypad Enter, and undo/redo. The `--host` run keeps
 this key-event window closed; the default run executes those cases.
+Backspace checks remove single, adjacent and nested tables from the position
+immediately after them, then save/reload and undo/redo. They also check normal
+text deletion, selections, cell boundaries and read-only notes.
 Right-arrow checks cover empty and multiline code blocks and rules, including
 repeated Right, typing into the empty landing paragraph, and undo/redo.
 Delete checks cover empty headings and blank fillers before ordered, bullet

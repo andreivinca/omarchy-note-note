@@ -7,6 +7,7 @@ import qs.Ui
 import "ui"
 import "ui/TabColors.js" as TabColors
 import "ui/KeyBindings.js" as KeyBindings
+import "ui/editing/ToolbarSettings.js" as ToolbarSettings
 import "services/clipboard" as Clipboard
 import "services/markdown" as Markdown
 import "services/microsoft" as Microsoft
@@ -634,6 +635,7 @@ Item {
 
   function defaultConfig() {
     return {
+      editor: ToolbarSettings.editorDefaults(),
       // notebookTabs: one binder tab per notebook (the local folders'
       // historic shape) instead of one tab holding them as fold-out trees.
       // Only sources that have notebooks offer it; sticky and notion are a
@@ -653,6 +655,12 @@ Item {
   // so nothing here ever needs a migration; unknown keys, top-level or
   // per-provider, pass through untouched.
   function mergeConfigDefaults(parsed) {
+    var toolbarError = ToolbarSettings.validateConfig(parsed)
+    if (toolbarError) {
+      // Save rejects this before merging. At startup a malformed toolbar
+      // falls back on its own, preserving valid provider settings and disk.
+      console.warn("note-note: " + toolbarError + "; using the default toolbar for this session")
+    }
     var d = root.defaultConfig(), out = {}
     for (var k in parsed) {
       out[k] = parsed[k]
@@ -675,6 +683,7 @@ Item {
       mergedProviders[did] = filled
     }
     out.providers = mergedProviders
+    out.editor = ToolbarSettings.editorDefaults(parsed.editor)
     return out
   }
   function providerEnabledIn(cfg, id) {
@@ -698,7 +707,7 @@ Item {
         // session on defaults, but never overwrite what's on disk except
         // through an explicit Save: healing on read would be a surprise
         // write the user never asked for, and could clobber real work.
-        console.warn("note-note: config file is invalid JSON, using defaults for this session:", e.message)
+        console.warn("note-note: config file is invalid, using defaults for this session:", e.message)
         root.config = root.defaultConfig()
       }
     }
@@ -1371,7 +1380,9 @@ Item {
     return JSON.stringify(root.rows.filter(function(r) { return r.provider === providerId }).map(function(r) { return r.kind + ":" + r.path.substring(0, 24) }))
   }
   function sectionsOf(providerId) { var p = providerById(providerId); return p ? JSON.stringify(p.sections.map(function(s) { return s.key + "(" + s.rows.length + ")" })) : "no provider" }
-  function editorTool(id) { editor.tool(id); return true }
+  function editorTool(id) {
+    return editor.tool(id)
+  }
   function editorPaste(x) { editor.paste(); return true }
   function editorUndo(n) {
     for (var i = 0; i < Number(n || 1); i++) {
@@ -1668,6 +1679,9 @@ Item {
       return openPage.handleKey(event)
     }
     var context = editor.bodyFocused && !editor.plain && !editor.readOnly ? "editor" : "workspace"
+    if (context === "editor" && editor.handleToolShortcut(event)) {
+      return true
+    }
     var action = KeyBindings.match(event, context)
     var handlers = {
       back: root.goBack,
@@ -1682,11 +1696,6 @@ Item {
       nextTab: function() { root.cycleSection(1) },
       previousTab: function() { root.cycleSection(-1) },
       toggleList: root.toggleList,
-      bold: function() { editor.toggleFormat("bold") },
-      italic: function() { editor.toggleFormat("italic") },
-      underline: function() { editor.toggleFormat("underline") },
-      strikeout: function() { editor.toggleFormat("strikeout") },
-      highlight: editor.highlightSelection,
       paste: editor.paste,
       pastePlain: editor.pastePlain
     }
@@ -2010,6 +2019,7 @@ Item {
             plain: { var p = root.providerOf(root.currentPath); return p ? !p.markdown : false }
             hasTitle: { var p = root.providerOf(root.currentPath); return p ? p.hasTitle : true }
             enabledTools: { var p = root.providerOf(root.currentPath); return (p && p.tools !== undefined) ? p.tools : null }
+            toolbarLayout: root.config.editor.toolbar
             placeholder: root.loadingPath && root.loadingPath === root.currentPath ? "Loading…"
               : (root.rows.length === 0 && !root.filterText ? "No notes yet — press ctrl+n to create one." : "")
             foreground: root.foreground
@@ -2118,7 +2128,7 @@ Item {
         opened: root.page === "keys"
         title: "Key bindings"
         subtitle: "Getting around your notes without reaching for the mouse"
-        bodyText: KeyBindings.text()
+        bodyText: KeyBindings.text(editor.tools.shortcutActions)
         readOnly: true
         cornerRadius: root.chromeRadius
         background: root.background

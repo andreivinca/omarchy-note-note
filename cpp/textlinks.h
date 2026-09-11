@@ -4,7 +4,8 @@
 #include <QSyntaxHighlighter>
 #include <QTextDocument>
 
-// URL colour and underline are display-only. The document's text, character
+// Theme ink for links, quotes and highlights is display-only. Authored text
+// colors take precedence. The document's text, character
 // advances, anchor formats and undo history stay unchanged.
 class TextLinks : public QSyntaxHighlighter
 {
@@ -12,7 +13,7 @@ class TextLinks : public QSyntaxHighlighter
 
 public:
     explicit TextLinks(QObject *parent = nullptr);
-    void configure(const QColor &colour, bool plainText);
+    void configure(const QColor &colour, bool plainText, const QColor &quoteInk, const QColor &highlightInk);
     QString linkAt(const QPointF &point) const;
     static void normalizeAnchors(QTextDocument *document);
 
@@ -24,5 +25,7 @@ protected:
 
 private:
     QColor m_colour;
+    QColor m_quoteInk;
+    QColor m_highlightInk;
     bool m_plainText = false;
 };

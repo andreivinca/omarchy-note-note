@@ -18,6 +18,7 @@ import struct
 import subprocess
 import sys
 import tempfile
+from pathlib import Path
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from qthtml import convert, dialect, to_html, to_markdown  # noqa: E402
@@ -26,6 +27,20 @@ from qthtml import convert, dialect, to_html, to_markdown  # noqa: E402
 # because Qt's *Markdown* writer used to corrupt them (docs/engine-notes.md);
 # they are the reason the editor moved to rich text.
 CASES = {
+    "text color": '<span style="color:#0070c0;">Mushrooms</span>\n',
+    "color in checklist": '- [x] <span style="color:#0070c0;">Mushrooms</span>\n- [ ] Milk\n',
+    "color with formatting": '<span style="color:#ff0000;">**bold** and *italic* and ==mark==</span>\n',
+    "color in heading": '# <span style="color:#0070c0;">Heading</span>\n',
+    "color in quote": '> <span style="color:#0070c0;">Quote</span>\n',
+    "color in table": '| A | B |\n|---|---|\n| <span style="color:#0070c0;">Blue</span> | plain |\n',
+    "color in link": '<span style="color:#0070c0;">[link](https://example.com)</span>\n',
+    "color in code span": '<span style="color:#0070c0;">`code`</span>\n',
+    "adjacent colors": '<span style="color:#ff0000;">red</span><span style="color:#0070c0;">blue</span>\n',
+    "color equal to link decoration": '<span style="color:#4282d7;">[link](https://example.com)</span>\n',
+    "color equal to quote decoration": '> <span style="color:#9399b2;">Quote</span>\n',
+    "color equal to highlight ink": '<span style="color:#1e1e2e;">==mark==</span>\n',
+    "literal color HTML in code": '`<span style="color:red;">long</span>`\n',
+
     "headings": "# One\n\n## Two\n\n### Three\n",
     "inline": "para **b** *i* _u_ ~~s~~ ==hi== `c` [l](http://x)\n",
     "heading with formatting": "## Head with ==mark== and *italic*\n",
@@ -73,6 +88,25 @@ CASES = {
     "code after quote": "> quoted\n\n```\nx = 1\n```\n",
     "table": "| a | b |\n|---|---|\n| 1 | 2 |\n",
     "table with empty cells": "| a |  |\n|---|---|\n|  | 2 |\n",
+    "nested table": (
+        "<table><tr><td><p>Outer</p></td><td><p>Neighbour</p></td></tr><tr><td><p>before</p>"
+        "<table><tr><td><p>Inner</p></td><td><p>Value</p></td></tr>"
+        "<tr><td><p></p></td><td><p>2</p></td></tr></table><p>after</p>"
+        "</td><td><p>untouched</p></td></tr></table>\n"),
+    "nested table in empty cell": (
+        "<table><tr><td><p>Outer</p></td></tr><tr><td>"
+        "<table><tr><td><p>Inner</p></td></tr><tr><td><p></p></td></tr></table>"
+        "</td></tr></table>\n"),
+    "three table levels": (
+        "<table><tr><td><p>One</p></td></tr><tr><td>"
+        "<table><tr><td><p>Two</p></td></tr><tr><td>"
+        "<table><tr><td><p>Three</p></td></tr><tr><td><p>deep</p></td></tr></table>"
+        "</td></tr></table></td></tr></table>\n"),
+    "nested table inline formatting": (
+        "<table><tr><td><p><strong>Outer</strong></p></td></tr><tr><td>"
+        '<p><em>before</em> <u>underlined</u> <a href="https://example.com/?a=1&amp;b=2">link</a></p>'
+        "<table><tr><td><p><code>a|b</code></p></td></tr><tr><td><p><mark>marked</mark></p></td></tr></table>"
+        "<p>after &lt;literal&gt; &amp; text</p></td></tr></table>\n"),
     "rule": "---\n",
     "blank line": "one\n\n \n\ntwo\n",
     "indent": "plain\n\n    indented once\n",
@@ -117,10 +151,13 @@ CASES = {
 #            that the first block of the note silently loses its format.
 QML_TEMPLATE = """
 import QtQuick
+import "__DIALECT_URL__" as Dialect
 Window {
   visible: true
   TextEdit { id: e; textFormat: TextEdit.RichText; font.family: "sans-serif"; width: 600 }
-  function strip(html) { return html.replace(/<!--(Start|End)Fragment-->/g, "") }
+  function strip(html) {
+    return Dialect.documentHtml(html)
+  }
   Timer { interval: 60; running: true; onTriggered: {
     var cases = %s, out = {}
     for (var key in cases) {
@@ -147,7 +184,8 @@ Window {
 
 def through_qt(documents):
     """{name: html} -> {name: {html, fixpoint}} as Qt itself rewrites them."""
-    script = QML_TEMPLATE % json.dumps(documents)
+    script = (QML_TEMPLATE % json.dumps(documents)).replace(
+        "__DIALECT_URL__", (Path(__file__).resolve().parents[3] / "ui/Dialect.js").as_uri())
     with tempfile.NamedTemporaryFile("w", suffix=".qml", delete=False) as handle:
         handle.write(script)
         path = handle.name

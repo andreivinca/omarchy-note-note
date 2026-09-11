@@ -1,7 +1,7 @@
 import QtQuick
-import QtQuick.Controls as QQC
 import qs.Commons
 import qs.Ui
+import "editing" as Editing
 import "QuoteBars.js" as QuoteBars
 import "EditContext.js" as EditContext
 import "Dialect.js" as Dialect
@@ -26,7 +26,6 @@ Item {
   property bool readOnly: false
   // Tool ids the current provider supports (see PROVIDERS.md); null = all.
   property var enabledTools: null
-  function toolEnabled(id) { return root.enabledTools === null || root.enabledTools.indexOf(id) >= 0 }
   property string placeholder: ""
   property color foreground: Color.menu.text
   property color accent: Color.accent
@@ -65,6 +64,9 @@ Item {
   readonly property bool bodyFocused: area.activeFocus
   onPlainChanged: root.configureLinkDisplay()
   onLinkColourChanged: root.configureLinkDisplay()
+  onHighlightInkChanged: root.configureLinkDisplay()
+  readonly property string quoteInk: root.markdown && root.markdown.quoteInk ? root.markdown.quoteInk : "#9399b2"
+  onQuoteInkChanged: root.configureLinkDisplay()
   readonly property string hoveredLink: root.hasNote && !root.showingNotice && root.visible && linkHover.hovered
     ? root.linkAt(linkHover.point.position.x, linkHover.point.position.y) : ""
   signal linkOpenRequested(string url)
@@ -131,8 +133,7 @@ Item {
   // The tools strip exists only while the note can be styled: Markdown,
   // writable, and no notice standing in for it. Gated here once, so the
   // strip, its height and the sheet below all agree.
-  readonly property bool toolsVisible: hasNote && !plain && !readOnly && !showingNotice
-    && (enabledTools === null || enabledTools.length > 0)
+  readonly property bool toolsVisible: editing.writable && toolRegistry.toolbarTools.length > 0
 
   // Match Heading 1's xx-large size: twice the document's body font.
   // The note itself fills its pane
@@ -172,6 +173,8 @@ Item {
   function shortcut(event) {
     if (shortcutHandler && shortcutHandler(event)) {
       event.accepted = true
+    } else if (area.activeFocus && root.handleToolShortcut(event)) {
+      event.accepted = true
     }
   }
 
@@ -184,7 +187,10 @@ Item {
   // is still being converted must win: only the newest token may assign.
   property int noteToken: 0
   property int documentRevision: 0
-  onEdited: root.documentRevision++
+  onEdited: {
+    root.documentRevision++
+    root.scheduleInTable()
+  }
 
   function editContext() {
     return EditContext.capture(root.noteToken, root.documentRevision,
@@ -207,7 +213,7 @@ Item {
   // A setNote that a newer one overtook never calls its `shown`: the editor
   // now belongs to the newer note, and so does the host's state.
   function setNote(t, body, shown) {
-    clearPending()
+    editing.clearPending()
     var token = ++root.noteToken
     settingText = true
     titleField.text = t
@@ -237,7 +243,7 @@ Item {
   }
 
   function restoreDocument(snapshot) {
-    clearPending()
+    editing.clearPending()
     var token = ++root.noteToken
     root.settingText = true
     titleField.text = snapshot.title
@@ -251,7 +257,7 @@ Item {
       return  // a newer note won the race
     }
     settingText = true
-    area.text = document
+    area.text = root.plain ? document : Dialect.documentHtml(document)
     if (nativeBlocks.item) {
       nativeBlocks.item.document = area.textDocument
       root.configureLinkDisplay()
@@ -267,75 +273,10 @@ Item {
   function showTop() {
     area.cursorPosition = 0
     flick.contentY = 0
+    updateInList()
+    updateInTable()
   }
 
-  // Highlight is a real background colour in the document, and ==text== in the
-  // note: Markdown has no highlight of its own, and the providers already
-  // translate the markers into each backend's own.
-  function highlightSelection() {
-    if (root.readOnly || root.plain || refusedAcrossCode() || markedInCode(Dialect.INLINE_MARKERS.highlight)) {
-      return
-    }
-    var from = Math.min(area.selectionStart, area.selectionEnd)
-    var to = Math.max(area.selectionStart, area.selectionEnd)
-    if (from === to) {
-      return
-    }
-    var fragment = inlineFragment(area.getFormattedText(from, to))
-    var lit = withoutChip(fragment).indexOf("background-color") >= 0
-    // The restyled copy goes in after the selection and the original comes
-    // out second: inserted at a block's start instead, Qt hands the block
-    // the fragment's own paragraph format, and a list item stops being one.
-    atomic(function() {
-      area.insert(to, lit ? unhighlight(fragment)
-                          : '<span style="background-color:' + root.highlightColour
-                            + "; color:" + root.highlightInk + ';">' + fragment + "</span>")
-      area.remove(from, to)
-    })
-    area.select(from, to)
-    root.edited()
-  }
-
-  // Qt serialises any range as a whole document whose body holds the block
-  // the selection sits in — a paragraph, a heading, a list wrapping its item,
-  // a table wrapping its cell. Peel every wrapper that encloses the whole
-  // fragment, down to the inline HTML actually selected: a block tag put back
-  // mid-line starts a new block, which is how a highlight used to split a
-  // checkbox line. A wrapper whose closing tag appears again inside is a
-  // selection spanning blocks, and stays.
-  function inlineFragment(html) {
-    var f = ((html.split("<body>")[1] || "").split("</body>")[0])
-              .replace(/<!--(Start|End)Fragment-->/g, "").trim()
-    // A fragment that starts with a list gets a phantom empty paragraph in
-    // front from Qt's serialiser; it is not part of the selection.
-    f = f.replace(/^<p[^>]*-qt-paragraph-type:empty[^>]*>\s*<br\s*\/?>\s*<\/p>\s*(?=<[uo]l\b)/, "")
-    var wrap = /^<(p|li|ul|ol|h[1-6]|blockquote|pre|table|tbody|tr|td|th)(\s[^>]*)?>([\s\S]*)<\/\1>$/
-    for (var m = wrap.exec(f); m; m = wrap.exec(f)) {
-      if (m[3].indexOf("</" + m[1] + ">") >= 0) {
-        break
-      }
-      f = m[3].trim()
-    }
-    return f
-  }
-
-  // The marker colour goes, and so does the ink that came with it — left
-  // behind, it kept reading as near-black text on a dark theme. Only the
-  // highlight's own ink is taken: a link keeps its blue, and inline code
-  // keeps its chip — that background is the code tool's, not this one's.
-  function unhighlight(fragment) {
-    var ink = String(root.highlightInk).replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
-    var chip = String(root.codeChipColour).replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
-    return fragment.replace(new RegExp('background-color\\s*:(?!\\s*' + chip + '\\s*[;"])[^;"]*;?', "gi"), "")
-                   .replace(new RegExp("color\\s*:\\s*" + ink + "\\s*;?", "gi"), "")
-  }
-
-  // The chip is a background-color too; the highlight tool looks through
-  // this, or a selection holding inline code would read as already lit.
-  function withoutChip(html) {
-    var chip = String(root.codeChipColour).replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
-    return html.replace(new RegExp("background-color\\s*:\\s*" + chip + "\\s*;?", "gi"), "")
-  }
   // Qt moves the caret to the document's end whenever a TextEdit's
   // readOnly changes (QQuickTextEdit::setReadOnly, measured on 6.11), and
   // the view follows the caret. A note is loaded read-only and released
@@ -434,7 +375,7 @@ Item {
       var to = Math.max(area.selectionStart, area.selectionEnd)
       var before = area.length, added = 0
       atomic(function() {
-        area.insert(to, html.replace(/<!--(Start|End)Fragment-->/g, ""))
+        area.insert(to, Dialect.documentHtml(html))
         added = area.length - before
         if (from !== to) {
           area.remove(from, to)
@@ -690,7 +631,7 @@ Item {
     if (root.readOnly || !(forward ? area.canRedo : area.canUndo)) {
       return
     }
-    clearPending()
+    editing.clearPending()
     root.replayingHistory = true
     try {
       if (forward) {
@@ -720,6 +661,24 @@ Item {
     return true
   }
 
+  function deletePreviousTable() {
+    if (root.readOnly || root.plain || area.selectionStart !== area.selectionEnd
+        || !nativeBlocks.item || typeof nativeBlocks.item.deletePreviousTable !== "function") {
+      return false
+    }
+    if (!nativeBlocks.item.document) {
+      nativeBlocks.item.document = area.textDocument
+    }
+    var position = nativeBlocks.item.deletePreviousTable(area.cursorPosition)
+    if (position < 0) {
+      return false
+    }
+    area.cursorPosition = position
+    root.edited()
+    root.updateInTable()
+    return true
+  }
+
   // One tool, one undo step. A tool edits in strokes — highlight inserts
   // the restyled copy and then removes the original, a block tool removes
   // the whole document and inserts the rewrite — and Qt's undo stack
@@ -730,7 +689,25 @@ Item {
   // normalize passes that join the edit join the same step. Without the
   // native helper there is nothing to bracket with and undo walks the
   // strokes again — the one degradation of the fallback.
-  function atomic(edit) {
+  readonly property bool canColorText: !!nativeBlocks.item
+
+  function insertFormattedText(from, to, text, styles) {
+    if (!nativeBlocks.item) {
+      return -1
+    }
+    nativeBlocks.item.document = area.textDocument
+    return nativeBlocks.item.insertFormattedText(from, to, text, styles)
+  }
+
+  function setTextColor(from, to, color) {
+    if (!nativeBlocks.item) {
+      return false
+    }
+    nativeBlocks.item.document = area.textDocument
+    return nativeBlocks.item.setTextColor(from, to, color)
+  }
+
+  function atomic(edit, joinPrevious) {
     var nb = nativeBlocks.item
     if (!nb) {
       edit()
@@ -739,21 +716,12 @@ Item {
     if (!nb.document) {
       nb.document = area.textDocument
     }
-    nb.beginEditBlock()
+    nb.beginEditBlock(!!joinPrevious)
     try { edit() } finally { nb.endEditBlock() }
   }
 
-  // ── formatting tools ────────────────────────────────────────────────
-  // Inline styles use the selection's font. Block styles cannot be set from
-  // QML, so they go through the Markdown: a marker is put at the end of each
-  // selected paragraph, the note is serialised, the marked lines get their
-  // new prefix, and the note is reloaded. Snippets are inserted as Markdown,
-  // which the editor parses in place.
-  readonly property string marker: "⦃M⦄"
-  readonly property string nbsp4: "\u00a0\u00a0\u00a0\u00a0"
-
   readonly property string sep: "\u2029"
-  // ── editing tools ───────────────────────────────────────────────────
+  // ── document conversion shared by tools and keyboard editing ────────
   // A block style is not something QML can set on the document, and it is one
   // line of Markdown — so every block tool takes the same trip: read the
   // document as Markdown, rewrite the lines it owns, put it back. The
@@ -836,7 +804,7 @@ Item {
       }
       atomic(function() {
         area.remove(0, area.length)
-        area.insert(0, html)
+        area.insert(0, Dialect.documentHtml(html))
         area.cursorPosition = Math.max(0, Math.min(pos, area.length))
         if (then) {
           then()
@@ -846,71 +814,6 @@ Item {
       focusEditor()
     }, root.documentBase)
   }
-
-  function setBlockStyle(style) {
-    withMarkdown(function(lines, map) {
-      var first = lineAt(map, Math.min(area.selectionStart, area.selectionEnd))
-      var last = lineAt(map, Math.max(area.selectionStart, area.selectionEnd))
-      var caret = area.cursorPosition, changed = false
-      var code = MarkdownBlocks.fences(lines)
-      var isList = style === "ul" || style === "ol" || style === "todo"
-      // Selected paragraphs arrive with Markdown's blank separator lines
-      // between them, and a separator restyled is an empty item — the extra
-      // checkbox after every row. Under a list style a separator is never
-      // restyled: dropped when the lines on both sides come out as items
-      // (restyleLine toggles, so a click can also *strip* markers — a freed
-      // paragraph needs its separator back or the two would lazily merge),
-      // kept blank otherwise — before a table or a fence, or beside a line
-      // toggling off. Separators own no document block, so the caret's
-      // position never counted them and dropping them moves nothing.
-      var itemRx = /^\s*([-*+]|\d+[.)])[ \t]/
-      var out = [], prevItem = false, prevFreed = false
-      for (var i = 0; i < lines.length; i++) {
-        // table rows and fenced code are never restyled: it would corrupt them
-        if (i < first || i > last || code[i] || /^\s*\|/.test(lines[i])) {
-          out.push(lines[i])
-          prevItem = false
-          prevFreed = false
-          continue
-        }
-        if (isList && lines[i] === "") {
-          var j = i + 1
-          while (j <= last && j < lines.length && lines[j] === "") {
-            j++
-          }
-          if (prevItem && j <= last && j < lines.length && !code[j] && !/^\s*\|/.test(lines[j])
-              && itemRx.test(restyleLine(lines[j], style))) {
-            changed = true
-            continue
-          }
-          out.push(lines[i]); prevItem = false; prevFreed = false; continue
-        }
-        var next = restyleLine(lines[i], style)
-        if (next !== lines[i]) {
-          changed = true
-        }
-        // The toggle's other direction: two adjacent items freed of their
-        // markers are two paragraphs, and paragraphs need the separator a
-        // tight list never had — without it Markdown lazily reads them as
-        // one line.
-        var freed = isList && itemRx.test(lines[i]) && !itemRx.test(next)
-        if (freed && prevFreed) {
-          out.push("")
-        }
-        out.push(next)
-        prevItem = isList && itemRx.test(next)
-        prevFreed = freed
-      }
-      if (!changed) {
-        if (style === "indent") {
-          root.statusRequestedText = "A nested list item needs one above it"
-        }
-        return
-      }
-      replaceDoc(out.join("\n"), caret)
-    })
-  }
-
 
   // ── tables: add/remove rows and columns around the caret's cell ──────
   // Qt's plain text separates table cells with U+FDD0 and ends a table with
@@ -924,6 +827,11 @@ Item {
   Timer { id: inTableTimer; interval: 120; onTriggered: { root.updateInTable(); root.updateInList() } }
   function scheduleInTable() { inTableTimer.restart() }
   function updateInTable() {
+    var cell = root.tableContext()
+    if (cell !== null) {
+      root.inTable = cell.rows !== undefined
+      return
+    }
     // getText() ranges are table-granular (a range touching a table returns
     // the whole table), so scan the full text; positions match the caret's.
     if (area.length > 200000) {
@@ -948,9 +856,33 @@ Item {
     root.inTable = beforeChar === root.cellSep && (afterChar === root.cellSep || afterChar === root.tableEnd)
   }
 
+  function tableContext() {
+    if (!nativeBlocks.item || typeof nativeBlocks.item.tableInfo !== "function") {
+      return null
+    }
+    if (!nativeBlocks.item.document) {
+      nativeBlocks.item.document = area.textDocument
+    }
+    return nativeBlocks.item.tableInfo(area.cursorPosition)
+  }
+
+  function changeTable(operation, index, count) {
+    if (!editing.writable || !editing.supports("table") || !nativeBlocks.item) {
+      return false
+    }
+    var position = nativeBlocks.item.editTable(area.cursorPosition, operation, index, count)
+    if (position < 0) {
+      return false
+    }
+    area.cursorPosition = position
+    root.edited()
+    root.updateInTable()
+    return true
+  }
+
   // ── the caret's list, on the same timer ─────────────────────────────
   // The style menu stands down inside a list: restyling a list item strips
-  // its marker and splits the list (restyleLine), so a heading mid-list is
+  // its marker and splits the list, so a heading mid-list is
   // not a thing the note can say — the tool hides instead, the way the
   // table alteration tools exist only inside a table. The probe reads the
   // character before the caret, which is the one that shares its block: at
@@ -958,9 +890,11 @@ Item {
   // block, so probing it calls the last line of a paragraph a list when a
   // list follows, and disowns the last line of a list when one doesn't.
   property bool inList: false
+  property bool inCode: false
   function updateInList() {
     var pos = area.cursorPosition
     root.inList = inListItem(pos > 0 ? pos - 1 : pos)
+    root.inCode = root.selectionInCode()
   }
 
   // ── block decorations: quote bars and code slabs ────────────────────
@@ -1012,7 +946,8 @@ Item {
     var wasNormalizing = root.normalizing
     root.normalizing = true
     try {
-      nativeBlocks.item.configureLinks(root.linkColour, root.plain)
+      nativeBlocks.item.configureLinks(root.linkColour, root.plain,
+                                       root.quoteInk, root.highlightInk)
     } finally {
       root.normalizing = wasNormalizing
     }
@@ -1192,29 +1127,6 @@ Item {
     }
   }
 
-  function restyleLine(line, style) {
-    var m = /^([ \t]*)((?:#{1,6}[ \t]+)|(?:[-*+][ \t]+(?:\[[ xX]\][ \t]+)?)|(?:\d+[.)][ \t]+)|(?:>[ \t]+))?([\s\S]*)$/.exec(line)
-    var indent = m[1] || "", prefix = m[2] || "", content = m[3] || ""
-    var isList = /^([-*+]|\d+[.)])[ \t]/.test(prefix)
-    switch (style) {
-      case "p": return content
-      case "h1": return "# " + content
-      case "h2": return "## " + content
-      case "h3": return "### " + content
-      case "ul": return indent + (/^[-*+][ \t](?!\[)/.test(prefix) ? "" : "- ") + content
-      case "ol": return indent + (/^\d+[.)][ \t]/.test(prefix) ? "" : "1. ") + content
-      // an empty checkbox needs some content or Qt drops the box
-      case "todo": return indent + (/\[[ xX]\]/.test(prefix) ? "" : "- [ ] ") + (content || "\u00a0")
-      case "quote": return (/^>[ \t]/.test(prefix) ? "" : "> ") + content
-      // Lists nest; plain text gets four non-breaking spaces per level, which
-      // Markdown keeps and OneNote maps to a real paragraph indent.
-      case "indent": return isList ? "  " + indent + prefix + content : indent + prefix + root.nbsp4 + content
-      case "outdent": return isList ? indent.substring(2) + prefix + content
-                                    : indent + prefix + (content.indexOf(root.nbsp4) === 0 ? content.substring(4) : content)
-    }
-    return line
-  }
-
   // Where the block holding Markdown line `i` ends (a table, a fenced code
   // block or a single line): snippets go after it, never inside.
   function blockEndLine(lines, i) {
@@ -1239,7 +1151,25 @@ Item {
   // starts clean — a rule or table that ends the note would otherwise
   // leave the caret nowhere to stand. escapeForward is the same promise
   // for a note that arrives already ending in one.
-  function insertSnippet(md) {
+  function insertSnippet(md, insideCell) {
+    root.updateInTable()
+    if (insideCell && root.inTable) {
+      var context = root.editContext()
+      var position = area.cursorPosition
+      root.markdown.toHtml(md, function(html, ok) {
+        if (!ok || !root.contextCurrent(context) || !editing.writable || !editing.supports("table")) {
+          return
+        }
+        var before = area.length
+        root.atomic(function() {
+          area.insert(position, Dialect.documentHtml(html))
+          area.cursorPosition = position + area.length - before
+        })
+        root.edited()
+        root.focusEditor()
+      }, root.documentBase)
+      return
+    }
     withMarkdown(function(lines, map) {
       var i = Math.min(caretLine(map), lines.length - 1)
       var onEmpty = !MarkdownBlocks.fences(lines)[i] && lines[i] === ""
@@ -1255,57 +1185,6 @@ Item {
       }
       replaceDoc(head.concat([""], rest).join("\n"), area.cursorPosition)
     })
-  }
-
-  // The code block tool is a toggle: inside a code block it takes the block
-  // off, anywhere else it puts an empty one in.
-  function toggleCodeBlock() {
-    if (root.readOnly || root.plain) {
-      return
-    }
-    var b = blockInfoAt(area.cursorPosition)
-    if (b && b.kind === "code") {
-      unfenceCodeBlock(b.empty)
-    } else {
-      insertCodeBlock()
-    }
-  }
-
-  // An empty code block, ready to type into. Its one empty line is held open
-  // by a filler character (services/markdown/qthtml/dialect.py,
-  // EMPTY_CODE_LINE); selecting the filler puts the caret in the block with
-  // the monospace format, and the first keystroke replaces it — the converter
-  // strips a leftover one anyway.
-  function insertCodeBlock() {
-    withMarkdown(function(lines, map) {
-      var at = blockEndLine(lines, Math.min(caretLine(map), lines.length - 1))
-      var rest = lines.slice(at + 1)
-      var atEnd = rest.join("").trim() === ""
-      var out = lines.slice(0, at + 1).concat(["", "```", "", "```", ""])
-      if (!atEnd) {
-        out = out.concat(rest)
-      }
-      var block = lastBlockThrough(map, at) + 1
-      replaceDoc(out.join("\n"), area.cursorPosition, function() { selectBlock(block) })
-    })
-  }
-
-  // The caret's code block comes off: the converter reads that one block as
-  // the paragraphs its lines would be (withMarkdown's asText — the escaping
-  // is the reader's, the same it gives every paragraph it writes), and
-  // re-rendering the markdown is the whole edit. Each line keeps its block
-  // with the same characters in it, so the caret's position survives the
-  // trip; a caret that sat on an empty line lands on the blank paragraph it
-  // became, its filler selected so typing starts clean.
-  function unfenceCodeBlock(empty) {
-    var block = blockAt(area.cursorPosition)
-    withMarkdown(function(lines) {
-      replaceDoc(lines.join("\n"), area.cursorPosition, function() {
-        if (empty) {
-          selectBlock(block)
-        }
-      })
-    }, block)
   }
 
   // Where a document block's content starts: blocks begin after each
@@ -1421,6 +1300,15 @@ Item {
   // a new row, caret in its first cell. That empty line is the one block
   // bounded by a paragraph separator and the table's end character.
   function tableReturn() {
+    if (nativeBlocks.item && typeof nativeBlocks.item.appendTableRow === "function") {
+      var target = nativeBlocks.item.appendTableRow(area.cursorPosition)
+      if (target < 0) {
+        return false
+      }
+      area.cursorPosition = target
+      root.edited()
+      return true
+    }
     // The caret's block, bounded by a paragraph separator and the table's
     // end, holding nothing or only a filler space (an empty cell's, pushed
     // down by typing before it). Read the full text and index it: a ranged
@@ -1454,6 +1342,10 @@ Item {
 
   function leaveTableRow() {
     withMarkdown(function(lines) {
+      if (lines.some(function(line) { return /^\s*<table[ >]/.test(line) })) {
+        root.statusRequestedText = "Rebuild the native text helper to edit nested table rows and columns"
+        return
+      }
       // Qt can omit an empty paragraph at a cell's start when exporting
       // HTML. Locate the table by document order, independent of block counts.
       var text = area.getText(0, area.length)
@@ -1595,104 +1487,6 @@ Item {
     return Math.max(0, n)
   }
 
-  function tableOp(op) {
-    if (!root.inTable) {
-      root.statusRequestedText = "Put the cursor in a table cell first"
-      return
-    }
-    withMarkdown(function(lines, map) { root.rewriteTable(op, lines, map) })
-  }
-
-  function rewriteTable(op, lines, map) {
-    var at = Math.min(caretLine(map), lines.length - 1)
-    while (at >= 0 && !/^\s*\|/.test(lines[at])) {
-      at--
-    }
-    if (at < 0) {
-      return
-    }
-    var first = at, last = at
-    while (first > 0 && /^\s*\|/.test(lines[first - 1])) {
-      first--
-    }
-    while (last + 1 < lines.length && /^\s*\|/.test(lines[last + 1])) {
-      last++
-    }
-    var rows = lines.slice(first, last + 1).map(splitRow), cols = rows[0].length
-    var cell = caretCell()
-    var rowIdx = cell < 0 ? 0 : Math.floor(cell / cols), colIdx = cell < 0 ? 0 : cell % cols
-    if (rowIdx > 0) {
-      rowIdx += 1  // the separator row is not a document row
-    }
-    var blank = function(n) {
-      var out = []
-      for (var k = 0; k < n; k++) {
-        out.push("")
-      }
-      return out
-    }
-    if (op === "addRow") {
-      rows.splice((rowIdx === 0 ? 1 : rowIdx) + 1, 0, blank(cols))
-    } else if (op === "addCol") {
-      for (var r2 = 0; r2 < rows.length; r2++) {
-        rows[r2].push(r2 === 1 ? "---" : "")
-      }
-    } else if (op === "delRow") {
-      if (rowIdx <= 1) {
-        root.statusRequestedText = "The header row stays"
-        return
-      }
-      rows.splice(rowIdx, 1)
-    } else if (op === "delCol") {
-      if (cols <= 1) {
-        root.statusRequestedText = "A table needs at least one column"
-        return
-      }
-      for (var r3 = 0; r3 < rows.length; r3++) {
-        rows[r3].splice(colIdx, 1)
-      }
-    }
-    var rebuilt = rows.map(function(cells, k) {
-      return k === 1 ? "|" + cells.map(function() { return "---" }).join("|") + "|" : joinRow(cells)
-    })
-    var out = lines.slice(0, first).concat(rebuilt, lines.slice(last + 1))
-    replaceDoc(out.join("\n"), area.cursorPosition)
-  }
-
-
-  // Inline code takes the highlight's trip: the selection's HTML goes back
-  // in wearing the mono family — which IS the dialect's code span — and the
-  // chip the converter paints behind loaded code (codeChipColour), so the
-  // style is visible the moment the tool is used. Same insert-then-remove
-  // order as highlightSelection, for the same list-item reason.
-  function toggleCode() {
-    if (root.readOnly || root.plain || refusedAcrossCode() || markedInCode(Dialect.INLINE_MARKERS.code)) {
-      return
-    }
-    var from = Math.min(area.selectionStart, area.selectionEnd)
-    var to = Math.max(area.selectionStart, area.selectionEnd)
-    if (from === to) {
-      return
-    }
-    var fragment = inlineFragment(area.getFormattedText(from, to))
-    var mono = /font-family:[^;"]*mono/i.test(fragment)
-    atomic(function() {
-      area.insert(to, mono ? uncode(fragment)
-                           : "<span style=\"font-family:'monospace'; background-color:"
-                             + root.codeChipColour + ';">' + fragment + "</span>")
-      area.remove(from, to)
-    })
-    area.select(from, to)
-    root.edited()
-  }
-
-  // Off is both halves off: the mono family (the body font takes over) and
-  // the chip. Only mono families are taken — any other face a paste brought
-  // along is not this tool's to touch.
-  function uncode(fragment) {
-    return withoutChip(fragment.replace(/font-family:[^;"]*mono[^;"]*;?/gi, ""))
-  }
-
   // ── stepping past a trap: Right at the note's very end ──────────────
   // Some shapes trap the caret at the end of a note, each for its own Qt
   // reason, and one gesture frees it from all of them: a rule and a code
@@ -1779,59 +1573,6 @@ Item {
     return true
   }
 
-  property bool linkBarOpen: false
-  function openLinkBar() {
-    if (root.readOnly || root.plain || refusedAcrossCode()) {
-      return
-    }
-    root.linkBarOpen = true
-    linkText.text = area.selectedText
-    linkUrl.text = "https://"
-    Qt.callLater(function() { (area.selectedText ? linkUrl : linkText).forceActiveFocus(); linkUrl.cursorPosition = linkUrl.text.length })
-  }
-  function insertLink() {
-    var url = linkUrl.text.trim(), text = linkText.text.trim() || url
-    root.linkBarOpen = false
-    if (!url) {
-      focusEditor()
-      return
-    }
-    var s = area.selectionStart, e = area.selectionEnd
-    if (selectionInCode()) {
-      // the link's Markdown, as the characters they are
-      typeInCode(Math.min(s, e), Math.max(s, e), "[" + text + "](" + url + ")")
-      focusEditor()
-      return
-    }
-    atomic(function() {
-      if (s !== e) {
-        area.remove(Math.min(s, e), Math.max(s, e))
-      }
-      // Same colour the converter gives a link, so one typed here and one
-      // that came from the note look alike before any reload.
-      area.insert(Math.min(s, e), '<a href="' + url.replace(/"/g, "%22") + '" style="color:'
-                  + root.linkColour + ';">' + text.replace(/</g, "&lt;") + "</a>")
-    })
-    focusEditor()
-    root.edited()
-  }
-
-  function tool(id) {
-    if (!toolEnabled(["addRow", "addCol", "delRow", "delCol"].indexOf(id) >= 0 ? "table" : id)) {
-      return
-    }
-    switch (id) {
-      case "bold": case "italic": case "underline": case "strikeout": toggleFormat(id); break
-      case "highlight": highlightSelection(); break
-      case "code": toggleCode(); break
-      case "h1": case "h2": case "h3": case "p": case "ul": case "ol": case "todo": case "quote": case "indent": case "outdent": setBlockStyle(id); break
-      case "table": insertSnippet("| Column 1 | Column 2 |\n|---|---|\n|  |  |"); break
-      case "addRow": case "addCol": case "delRow": case "delCol": tableOp(id); break
-      case "rule": insertSnippet("---"); break
-      case "codeblock": toggleCodeBlock(); break
-      case "link": openLinkBar(); break
-    }
-  }
   function cursorPosition() { return area.cursorPosition }
   // Where the reader is: the caret, and how far the note is scrolled. A
   // reload in place puts both back (services/notes/NoteSession.qml, load)
@@ -1853,278 +1594,35 @@ Item {
     return t ? t.split(/\s+/).length : 0
   }
 
-  // ---- formatting (Ctrl+B / I / U)
-  // With a selection, Qt applies the format directly. With no selection Qt
-  // cannot carry a format into text typed next, so we remember a pending
-  // style and apply it to every new run of typed text until the caret moves.
-  property var pending: null
-  property int pendingLen: 0
-  property int pendingCursor: -1
-  property bool applying: false
+  readonly property alias tools: toolRegistry
+  property alias toolDirectory: toolRegistry.directory
+  property alias toolbarLayout: toolRegistry.layout
 
-  function clearPending() { pending = null; pendingCursor = -1 }
-
-  function toggleFormat(kind) {
-    if (!(kind === "bold" || kind === "italic" || kind === "underline" || kind === "strikeout")) {
-      return
-    }
-    if (root.readOnly || root.plain || refusedAcrossCode() || markedInCode(Dialect.INLINE_MARKERS[kind])) {
-      return
-    }
-    var f = area.cursorSelection.font
-    if (area.selectionStart !== area.selectionEnd) {
-      f[kind] = !f[kind]
-      area.cursorSelection.font = f
-      root.edited()
-      return
-    }
-    if (!pending) {
-      pending = { bold: f.bold, italic: f.italic, underline: f.underline, strikeout: f.strikeout }
-    }
-    pending[kind] = !pending[kind]
-    pendingLen = area.length
-    pendingCursor = area.cursorPosition
+  Editing.EditorApi {
+    id: editing
+    host: root
+    textArea: area
   }
 
-  function applyPendingToInsertion() {
-    if (!pending || applying) {
-      return
-    }
-    var n = area.length - pendingLen
-    var pos = area.cursorPosition
-    pendingLen = area.length
-    if (n <= 0 || pos - n < 0) {
-      pendingCursor = pos
-      return
-    }
-    applying = true
-    area.select(pos - n, pos)
-    var f = area.cursorSelection.font
-    f.bold = pending.bold; f.italic = pending.italic; f.underline = pending.underline; f.strikeout = pending.strikeout
-    area.cursorSelection.font = f
-    area.deselect()
-    area.cursorPosition = pos
-    pendingCursor = pos
-    applying = false
+  Editing.ToolRegistry {
+    id: toolRegistry
+    editor: editing
   }
 
-  // ---- the tools strip: the pane's own toolbar, pinned across its top the
-  // way an IDE pins one, wearing the chrome's tint and hairline so it reads
-  // as chrome — the sheet below stays a bare page. Gone entirely, height and
-  // all, while the note cannot be styled.
-  Item {
+  function tool(id) {
+    return toolRegistry.execute(id)
+  }
+
+  function handleToolShortcut(event) {
+    return toolRegistry.handleShortcut(event)
+  }
+
+  Editing.ToolBar {
     id: toolStrip
     width: parent.width
-    height: root.toolsVisible ? strip.implicitHeight + Style.spacing.hairline : 0
+    registry: toolRegistry
+    background: root.background
     visible: root.toolsVisible
-
-    Rectangle {
-      anchors.fill: parent
-      color: Qt.tint(root.background, Util.alpha(root.foreground, 0.015))
-    }
-
-    Column {
-      id: strip
-      width: parent.width
-      topPadding: Style.spacing.sm
-      bottomPadding: Style.spacing.sm
-      leftPadding: Style.spacing.panelPadding
-      rightPadding: Style.spacing.panelPadding
-      spacing: Style.spacing.sm
-
-      // ---- formatting toolbar (Markdown notes only)
-      Flow {
-        id: toolbar
-        width: parent.width - parent.leftPadding - parent.rightPadding
-        spacing: Style.spacing.sm
-
-        // The rows of the text-style menu, the toolbar's one dropdown: each
-        // previews its own size, on the same scale the dialect writes headings
-        // at (HEADING_FONT_SIZE in services/markdown/qthtml/dialect.py —
-        // xx-large, x-large, large). Sub- and superscript stayed out: the
-        // dialect's Markdown has no syntax for them, so the round trip through
-        // save would drop them (docs/decisions.md). Providers gate the ids one
-        // by one, so the menu carries only the rows the provider can store.
-        readonly property var styleMenuRows: [
-          { id: "h1", label: "Heading 1", scale: 2.0, bold: true },
-          { id: "h2", label: "Heading 2", scale: 1.5, bold: true },
-          { id: "h3", label: "Heading 3", scale: 1.17, bold: true },
-          { id: "p", label: "Normal text", scale: 1.0, bold: false }
-        ].filter(function(o) { return root.toolEnabled(o.id) })
-
-        Repeater {
-          // Material Design glyphs from the shell's Nerd Font, by name:
-          // md-format_bold, md-format_italic, … (see PROVIDERS.md for tool ids).
-          model: [
-            { id: "bold", icon: "󰉤", tip: "Bold (ctrl+b)" },
-            { id: "italic", icon: "󰉷", tip: "Italic (ctrl+i)" },
-            { id: "underline", icon: "󰊇", tip: "Underline (ctrl+u)" },
-            { id: "strikeout", icon: "󰊁", tip: "Strikethrough (ctrl+s)" },
-            { id: "sep" },
-            // The dressing-up group: what a run of text *is* (highlight, code,
-            // heading), apart from the toggles of how it is drawn. The style
-            // entry is one dropdown, not four buttons — the block styles read
-            // as a choice of one, the way bold/italic never could. Its rows
-            // keep the ids h1 h2 h3 p (toolbar.styleMenuRows), so providers
-            // and `editorTool` see nothing new.
-            { id: "highlight", icon: "󰙒", tip: "Highlight (ctrl+shift+h)" },
-            { id: "code", icon: "󰅴", tip: "Inline code" },
-            { id: "style", icon: "󰉿", tip: "Text style" },
-            { id: "sep" },
-            { id: "ul", icon: "󰉹", tip: "Bullet list" },
-            { id: "ol", icon: "󰉻", tip: "Numbered list" },
-            { id: "todo", icon: "󰥪", tip: "Checkbox" },
-            { id: "outdent", icon: "󰉵", tip: "Outdent" },
-            { id: "indent", icon: "󰉶", tip: "Indent" },
-            { id: "sep" },
-            { id: "quote", icon: "󰉾", tip: "Quote" },
-            { id: "codeblock", icon: "󰅩", tip: "Code block" },
-            { id: "rule", icon: "󰍴", tip: "Horizontal rule" },
-            { id: "link", icon: "󰌹", tip: "Insert link" },
-            { id: "sep" },
-            { id: "table", icon: "󰓫", tip: "Insert a table" },
-            { id: "addRow", icon: "󰓳", tip: "Add a row below" },
-            { id: "delRow", icon: "󰓵", tip: "Delete this row" },
-            { id: "addCol", icon: "󰓬", tip: "Add a column" },
-            { id: "delCol", icon: "󰓮", tip: "Delete this column" }
-          ]
-          delegate: Loader {
-            required property var modelData
-            sourceComponent: modelData.id === "sep" ? sepComp : (modelData.id === "style" ? styleComp : buttonComp)
-            readonly property bool tableOnly: ["addRow", "addCol", "delRow", "delCol"].indexOf(modelData.id) >= 0
-            // The style menu stands for its rows: it stays as long as any of
-            // them survives the provider's gate.
-            readonly property bool allowed: modelData.id === "sep"
-              || (modelData.id === "style" ? toolbar.styleMenuRows.length > 0
-                                           : root.toolEnabled(tableOnly ? "table" : modelData.id))
-            visible: allowed && (tableOnly ? root.inTable
-                               : modelData.id === "table" ? !root.inTable
-                               : modelData.id === "style" ? !root.inList
-                               : true)
-            onLoaded: if (modelData.id !== "sep") {
-              item.iconText = modelData.icon
-              item.tooltipText = modelData.tip
-              item.toolId = modelData.id
-            }
-          }
-        }
-        Component { id: sepComp; Item { width: Style.spacing.md; height: Style.spacing.controlHeight } }
-        Component {
-          id: buttonComp
-          Button {
-            property string toolId: ""
-            property bool hovering: false
-            // Quiet toolbar: the outline appears only under the cursor.
-            bordered: hovering
-            foreground: root.foreground
-            accent: root.accent
-            iconSize: Style.font.icon
-            horizontalPadding: Style.spacing.sm
-            verticalPadding: Style.spacing.xxs
-            onHovered: function(isHovered) { hovering = isHovered }
-            onClicked: root.tool(toolId)
-          }
-        }
-        Component {
-          id: styleComp
-          Button {
-            id: styleButton
-            property string toolId: ""
-            property bool hovering: false
-            // Held open reads as held down: the outline stays while the menu is up.
-            bordered: hovering || styleMenu.opened
-            foreground: root.foreground
-            accent: root.accent
-            iconSize: Style.font.icon
-            // A chevron after the glyph — this button opens a menu, the others act.
-            text: "󰅀"
-            fontSize: Style.font.caption
-            horizontalPadding: Style.spacing.sm
-            verticalPadding: Style.spacing.xxs
-            onHovered: function(isHovered) { hovering = isHovered }
-            onClicked: styleMenu.opened ? styleMenu.close() : styleMenu.open()
-            // The toolbar can vanish under the menu (a provider switch, a
-            // notice); the menu must not outlive it.
-            onVisibleChanged: if (!visible) {
-              styleMenu.close()
-            }
-
-            // The two candidate widest rows, measured at their menu size, so
-            // every row takes the same width and the hover fill is not ragged.
-            TextMetrics { id: widestHeading; text: "Heading 1"; font.family: root.noteFontFamily; font.bold: true; font.pixelSize: root.titleSize }
-            TextMetrics { id: widestNormal; text: "Normal text"; font.family: root.noteFontFamily; font.pixelSize: root.bodyFontSize }
-
-            QQC.Popup {
-              id: styleMenu
-              y: styleButton.height + Style.spacing.xxs
-              readonly property var borderSpec: Border.localOrSurfaceSpec("popups", "border", Color.popups.border, Color.popups.border, Style.normalBorderWidth)
-              readonly property real rowWidth: Math.ceil(Math.max(widestHeading.width, widestNormal.width)) + 2 * Style.spacing.controlPaddingX
-              padding: Style.spacing.xxs
-              leftPadding: Border.left(borderSpec) + Style.spacing.xxs
-              rightPadding: Border.right(borderSpec) + Style.spacing.xxs
-              topPadding: Border.top(borderSpec) + Style.spacing.xxs
-              bottomPadding: Border.bottom(borderSpec) + Style.spacing.xxs
-              background: BorderSurface {
-                color: Color.popups.background
-                borderSpec: styleMenu.borderSpec
-                radius: Style.cornerRadius
-              }
-              contentItem: Column {
-                spacing: Style.spacing.labelGap
-                Repeater {
-                  model: toolbar.styleMenuRows
-                  delegate: Rectangle {
-                    id: styleRow
-                    required property var modelData
-                    width: styleMenu.rowWidth
-                    height: rowLabel.implicitHeight + Style.spacing.sm
-                    radius: Style.cornerRadius
-                    color: rowMouse.containsMouse ? Style.hoverFillFor(Color.popups.text, root.accent) : "transparent"
-                    Text {
-                      id: rowLabel
-                      anchors.left: parent.left
-                      anchors.leftMargin: Style.spacing.controlPaddingX
-                      anchors.verticalCenter: parent.verticalCenter
-                      text: styleRow.modelData.label
-                      color: rowMouse.containsMouse ? Style.hoverStateColor(Color.popups.text, root.accent) : Color.popups.text
-                      font.family: root.noteFontFamily
-                      font.pixelSize: Math.round(root.bodyFontSize * styleRow.modelData.scale)
-                      font.bold: styleRow.modelData.bold
-                    }
-                    MouseArea {
-                      id: rowMouse
-                      anchors.fill: parent
-                      hoverEnabled: true
-                      cursorShape: Qt.PointingHandCursor
-                      onClicked: { styleMenu.close(); root.tool(styleRow.modelData.id) }
-                    }
-                  }
-                }
-              }
-            }
-          }
-        }
-      }
-
-      // ---- link bar
-      Row {
-        visible: root.linkBarOpen
-        spacing: Style.spacing.sm
-        TextField { id: linkText; width: Style.space(200); placeholderText: "Text"; foreground: root.foreground; accent: root.accent; font.family: root.fontFamily; verticalPadding: Style.spacing.xxs
-          Keys.onReturnPressed: root.insertLink(); Keys.onEscapePressed: { root.linkBarOpen = false; root.focusEditor() } }
-        TextField { id: linkUrl; width: Style.space(340); placeholderText: "https://…"; foreground: root.foreground; accent: root.accent; font.family: root.fontFamily; verticalPadding: Style.spacing.xxs
-          Keys.onReturnPressed: root.insertLink(); Keys.onEscapePressed: { root.linkBarOpen = false; root.focusEditor() } }
-        Button { text: "Insert"; bordered: true; foreground: root.foreground; accent: root.accent; verticalPadding: Style.spacing.xxs; onClicked: root.insertLink() }
-        Button { text: "Cancel"; bordered: true; foreground: root.foreground; accent: root.accent; verticalPadding: Style.spacing.xxs; onClicked: { root.linkBarOpen = false; root.focusEditor() } }
-      }
-    }
-
-    Rectangle {
-      anchors.bottom: parent.bottom
-      width: parent.width
-      height: Style.spacing.hairline
-      color: Util.alpha(root.foreground, 0.1)
-    }
   }
 
   // ---- the note's sheet: title and body on one surface. No frame around it
@@ -2343,6 +1841,8 @@ Item {
           font.pixelSize: root.bodyFontSize
           wrapMode: TextEdit.Wrap
           selectByMouse: true
+          // Tool panels take focus while acting on this selection.
+          persistentSelection: true
           // Native detection handles raw URLs and explicit links together.
           // Qt's activation remains available when the module is absent.
           onLinkActivated: function(link) {
@@ -2386,6 +1886,11 @@ Item {
             if (root.plain) {
               return
             }
+            if (event.key === Qt.Key_Backspace && event.modifiers === Qt.NoModifier
+                && root.deletePreviousTable()) {
+              event.accepted = true
+              return
+            }
             if (event.key === Qt.Key_Delete && event.modifiers === Qt.NoModifier
                 && root.deleteParagraphBoundary()) {
               event.accepted = true
@@ -2400,6 +1905,12 @@ Item {
             if (event.text.length > 0
                 && !(event.modifiers & (Qt.ControlModifier | Qt.AltModifier))
                 && root.typeLeavesRule(event.text)) {
+              event.accepted = true
+              return
+            }
+            if (event.text.length > 0 && event.text.charCodeAt(0) >= 32
+                && !(event.modifiers & (Qt.ControlModifier | Qt.AltModifier))
+                && editing.typePending(event.text)) {
               event.accepted = true
               return
             }
@@ -2425,7 +1936,7 @@ Item {
             if (root.settingText) {
               return
             }
-            root.applyPendingToInsertion()
+            editing.applyPendingToInsertion()
             root.edited()
           }
           // A caret move that isn't the result of typing ends the pending
@@ -2433,12 +1944,12 @@ Item {
           // textChanged, so a move that matches the grown length is typing.
           onCursorPositionChanged: {
             root.scheduleInTable()
-            if (!root.pending || root.applying) {
+            if (!editing.pending || editing.applying) {
               return
             }
-            var byTyping = cursorPosition === root.pendingCursor + (length - root.pendingLen)
-            if (cursorPosition !== root.pendingCursor && !byTyping) {
-              root.clearPending()
+            var byTyping = cursorPosition === editing.pendingCursor + (length - editing.pendingLen)
+            if (cursorPosition !== editing.pendingCursor && !byTyping) {
+              editing.clearPending()
             }
           }
 

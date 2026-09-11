@@ -67,6 +67,16 @@ The ✕ at its top right, `Esc`, or any notebook tab takes you back. The file
 lives at `~/.config/notenote/config.json` and is pre-filled with every
 setting on first run.
 
+- `editor.toolbar` — ordered groups of editing-tool IDs. Move IDs between
+  the group arrays to rearrange the buttons, or into
+  `{ "dropdown": "insert", "items": ["table", "link"] }` to place them in
+  Insert. Dropdowns can contain other dropdown objects to create submenus.
+  Unlisted tools appear at the end. **Insert → Insert month** contains
+  `currentMonth`, `nextMonth` (insert immediately), then `customMonth`
+  (choose a month and year first).
+  All three use the OS locale's week start and labels for providers that support
+  tables. Layout changes apply on Save;
+  see [the layout examples and tool IDs](docs/editing-tools.md#arrange-the-toolbar).
 - `providers.<id>.enabled` — hide a source (`local`, `sticky`, `onenote`,
   `notion`, or an external provider's own id) from the sidebar. Reordering
   the `providers` object reorders the sidebar tabs to match.
@@ -113,6 +123,10 @@ you type, even when they are plain text in Markdown. Drag across a link to
 select it. The display styling leaves saved Markdown and cursor spacing
 unchanged. Type a space to continue with ordinary text after a URL. A new
 list item starts with ordinary text.
+Local and OneNote notes support tables inside table cells, including
+**Insert → Insert month → Insert current month**. Place the caret in a cell before inserting;
+row and column tools act on the table containing the caret.
+Backspace immediately after a table deletes it; undo restores the whole table.
 Search filters by title as you type and by body a moment
 later. OneNote builds a private text cache in the background and shows how
 many pages are searchable while it fills; searches then use the saved text.

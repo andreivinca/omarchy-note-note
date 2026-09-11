@@ -17,8 +17,7 @@ someone's note, so it is the one failure that is checked for.
 from itertools import groupby
 
 from . import dialect
-from . import htmltree
-from ._vendor import parse, walk_text
+from ._vendor import parse, walk_text, htmltree, htmltables, textcolor
 from .imagesize import local_path, width_of
 from .mdtext import escape_inline, escape_line_start, code_span, code_fence
 
@@ -73,7 +72,7 @@ def convert(html, base="", as_text=None):
 
     `as_text` is a document block index: the code block holding it is read
     as the paragraphs its lines would be — the code block tool toggling off
-    (NoteEditor.toggleCodeBlock), which is a read with this one instruction
+    (ui/tools/CodeBlock.qml), which is a read with this one instruction
     and a re-render. Every other block reads as it always does.
     """
     tree = htmltree.parse(dialect.strip_fragment_markers(html))
@@ -106,6 +105,7 @@ class _Reader:
         self.base = base
         self.as_text = as_text
         self.next_block = 0
+        self.table_depth = 0
 
     def render(self, body):
         chunks = self.prepare(_drop_leading_spacer(self.walk(body)))
@@ -336,6 +336,12 @@ class _Reader:
 
     def table(self, node):
         """A row is one Markdown line, owning every paragraph in its cells."""
+        if self.table_depth or htmltables.nested(node):
+            self.table_depth += 1
+            try:
+                return self.rich_table(node)
+            finally:
+                self.table_depth -= 1
         rows, starts = [], []
         for row in _rows(node):
             cells = [cell for cell in row.children if cell.tag in ("td", "th")]
@@ -357,6 +363,29 @@ class _Reader:
             lines.append(_row(row))
             blocks.append(starts[index])
         return lines, blocks
+
+    def rich_table(self, node):
+        """Nested tables keep each cell's block structure in semantic HTML."""
+        start = self.next_block
+        rows = []
+        for row in _rows(node):
+            cells = []
+            for cell in row.children:
+                if cell.tag not in {"td", "th"}:
+                    continue
+                before = self.next_block
+                chunks = self.prepare(_drop_leading_spacer(self.walk(cell)))
+                if self.next_block == before:
+                    self.take()
+                # Qt creates empty paragraphs on both sides of an inner
+                # table. They are caret positions, not additional content.
+                if len(chunks) > 1 and chunks[-1].kind == "blank" and chunks[-2].kind == "table":
+                    chunks.pop()
+                markdown = _join(chunks, self.next_block)["markdown"].strip("\n")
+                cells.append(markdown if markdown.strip() else "")
+            if cells:
+                rows.append(cells)
+        return [htmltables.table_markup(rows)], [start]
 
     def cell(self, node):
         paragraphs = [self.inline(p.children).strip() for p in node.children if p.tag == "p"]
@@ -402,10 +431,14 @@ class _Reader:
                                                  self.image_width(node)), active))
             elif node.tag == "span":
                 style = dialect.style_map(node.style)
+                color = textcolor.from_style(node.style)
+                inherited = active
+                if color:
+                    inherited = frozenset(s for s in active if not s.startswith("color:")) | {"color:" + color}
                 if dialect.is_mono(style):
-                    out.append(_Run(code_span(self.plain(node.children)), active))
+                    out.append(_Run(code_span(self.plain(node.children)), inherited))
                 else:
-                    out.extend(self.runs(node.children, active | self.styles_of(style, active)))
+                    out.extend(self.runs(node.children, inherited | self.styles_of(style, inherited)))
             else:
                 out.extend(self.runs(node.children, active))
         return out
@@ -478,11 +511,13 @@ def _emit(runs, active=frozenset()):
             out.append(runs[index].text)
             index += 1
             continue
-        name, marker = next((n, m) for n, m in INLINE_MARKERS if n in extra)
+        colors = sorted(s for s in extra if s.startswith("color:"))
+        name, marker = (colors[0], None) if colors else next((n, m) for n, m in INLINE_MARKERS if n in extra)
         end = index
         while end < len(runs) and name in (runs[end].styles - active):
             end += 1
-        out.append(_wrap(marker, _emit(runs[index:end], active | {name})))
+        body = _emit(runs[index:end], active | {name})
+        out.append(textcolor.span(name[6:], body) if marker is None else _wrap(marker, body))
         index = end
     return "".join(out)
 

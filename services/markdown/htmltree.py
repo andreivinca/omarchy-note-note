@@ -1,6 +1,6 @@
-"""A tiny HTML tree, built with the standard library's own parser.
+"""A small HTML tree shared by the document reader and table parser.
 
-Qt writes well-formed HTML, so this stays deliberately small: enough to walk
+The converters write well-formed HTML, so this stays small: enough to walk
 blocks and inline runs, and nothing that would tempt anyone to treat it as a
 general HTML implementation.
 """

@@ -1,5 +1,6 @@
 import QtQuick
 import "settings.js" as Settings
+import "../../ui/editing/ToolbarSettings.js" as ToolbarSettings
 
 // Settings changes have three phases: validate, drain, commit. Providers stay
 // alive until their accepted writes settle; a failed save keeps the old setup.
@@ -26,6 +27,11 @@ Item {
     }
     if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
       callback({ error: "The settings must be a JSON object" })
+      return
+    }
+    var toolbarError = ToolbarSettings.validateConfig(parsed)
+    if (toolbarError) {
+      callback({ error: toolbarError })
       return
     }
     var merged = host.mergeConfigDefaults(parsed)

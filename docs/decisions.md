@@ -3,6 +3,20 @@
 Why things are the way they are — including options that were tried and
 rejected, so they are not tried again by accident.
 
+### Nested tables keep their cell structure
+
+Pipe-table Markdown cannot represent a table inside a cell. A table containing
+another table is stored as semantic HTML, with paragraphs and child tables
+preserved recursively. The shared Markdown parser reads this into structured
+table tokens; neither the editor nor providers receive unchecked HTML.
+Ordinary tables keep their existing pipe-table syntax.
+
+Row and column actions use the native document's innermost table at the caret.
+They stay within that table and form one undo transaction, including when the
+parent cell contains text before or after it. OneNote saves compare direct rows
+and edit cell contents recursively, retaining unaffected element IDs. Its
+existing restrictions on changing saved table dimensions still apply.
+
 ---
 
 ### One notebook at a time, on a binder rail

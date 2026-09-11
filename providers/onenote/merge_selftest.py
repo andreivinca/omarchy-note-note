@@ -37,6 +37,113 @@ def page_html(value):
 
 
 class SaveTests(unittest.TestCase):
+    def test_color_conversion_and_reset_preserve_checkboxes_and_neighbours(self):
+        self.remote = ('<html><head><title>Title</title></head><body><div id="div:food">'
+                       '<p id="p:mushrooms" data-tag="to-do:completed"><span style="color:#0070c0">Mushrooms</span></p>'
+                       '<p id="p:milk" data-tag="to-do">Milk</p></div></body></html>')
+        loaded = self.load()
+        self.assertIn('<span style="color:#0070c0;">Mushrooms</span>', loaded["body"])
+        changed = loaded["body"].replace("#0070c0", "#ff0000")
+        result = self.save(note(changed), loaded["view"])
+        self.assertTrue(result.get("ok"), result)
+        self.assertIn("#ff0000", self.remote)
+        self.assertIn('data-tag="to-do:completed"', self.remote)
+        self.assertIn('id="p:milk"', self.remote)
+        loaded = self.load()
+        reset = loaded["body"].replace('<span style="color:#ff0000;">Mushrooms</span>', 'Mushrooms')
+        result = self.save(note(reset), loaded["view"])
+        self.assertTrue(result.get("ok"), result)
+        self.assertNotIn("color:", self.remote)
+        self.assertIn('data-tag="to-do:completed"', self.remote)
+
+
+    def test_nested_table_conversion_preserves_cell_blocks(self):
+        source = ('<table><tr><td><p>Parent</p></td><td><p>Neighbour</p></td></tr><tr><td>'
+                  '<p><strong>before</strong></p><table><tr><td><p>Inner</p></td></tr>'
+                  '<tr><td><p>one</p></td></tr></table><p>after</p></td><td><p>untouched</p></td></tr></table>')
+        rendered = onenote.onenote_md.markdown_to_onenote_html(source)
+        actual = onenote.onenote_md.html_to_markdown(rendered)
+        self.assertTrue(actual["editable"])
+        self.assertEqual(actual["body"], source)
+
+    def test_nested_table_insertion_preserves_parent_and_neighbour_ids(self):
+        self.remote = ('<html><head><title>Title</title></head><body><table id="table:outer">'
+                       '<tr><td><p id="p:head1">Parent</p></td><td><p id="p:head2">Neighbour</p></td></tr>'
+                       '<tr><td><p id="p:before">before</p></td><td><p id="p:neighbour">untouched</p></td></tr>'
+                       '</table></body></html>')
+        loaded = self.load()
+        nested = ('<table><tr><td><p>Parent</p></td><td><p>Neighbour</p></td></tr><tr><td>'
+                  '<p>before</p><table><tr><td><p>Inner</p></td></tr><tr><td><p>one</p></td></tr></table>'
+                  '</td><td><p>untouched</p></td></tr></table>')
+        result = self.save(note(nested), loaded["view"])
+        self.assertTrue(result.get("ok"), result)
+        current = ET.fromstring(self.remote)
+        self.assertEqual(len(list(current.iter("table"))), 2)
+        identifiers = {node.get("id") for node in current.iter()}
+        self.assertTrue({"table:outer", "p:head1", "p:head2", "p:before", "p:neighbour"}.issubset(identifiers))
+        operations = [op for method, _, data in self.calls if method == "PATCH" for op in json.loads(data)]
+        self.assertEqual([(op["target"], op["action"]) for op in operations], [("p:before", "insert")])
+        reloaded = self.load()
+        self.assertEqual(reloaded["body"], nested)
+        self.calls.clear()
+        result = self.save(note(nested.replace("<p>one</p>", "<p>edited</p>")), reloaded["view"])
+        self.assertTrue(result.get("ok"), result)
+        edited = ET.fromstring(self.remote)
+        self.assertEqual(len(list(edited.iter("table"))), 2)
+        self.assertTrue(identifiers - {node.get("id") for node in current.iter("p") if node.text == "one"}
+                        <= {node.get("id") for node in edited.iter()})
+        targets = [op["target"] for method, _, data in self.calls if method == "PATCH" for op in json.loads(data)]
+        self.assertEqual(len(targets), 1)
+        self.assertTrue(targets[0].startswith("p:"))
+
+    def test_nested_table_insertion_into_empty_cell(self):
+        self.remote = ('<html><head><title>Title</title></head><body><table id="table:outer">'
+                       '<tr><td><p id="p:head1">Parent</p></td><td><p id="p:head2">Neighbour</p></td></tr>'
+                       '<tr><td><p id="p:empty"><br/></p></td><td><p id="p:neighbour">untouched</p></td></tr>'
+                       '</table></body></html>')
+        loaded = self.load()
+        nested = ('<table><tr><td><p>Parent</p></td><td><p>Neighbour</p></td></tr><tr><td>'
+                  '<table><tr><td><p>Inner</p></td></tr><tr><td><p>one</p></td></tr></table>'
+                  '</td><td><p>untouched</p></td></tr></table>')
+        result = self.save(note(nested), loaded["view"])
+        self.assertTrue(result.get("ok"), result)
+        current = ET.fromstring(self.remote)
+        self.assertEqual(len(list(current.iter("table"))), 2)
+        identifiers = {node.get("id") for node in current.iter()}
+        self.assertTrue({"table:outer", "p:head1", "p:head2", "p:neighbour"}.issubset(identifiers))
+        self.assertEqual(self.load()["body"], nested)
+
+    def test_table_deletion_preserves_surrounding_content(self):
+        nested = ('<table><tr><td><p>Parent</p></td><td><p>Neighbour</p></td></tr><tr><td>'
+                  '<table><tr><td><p>Inner</p></td></tr><tr><td><p>value</p></td></tr></table>'
+                  '</td><td><p>untouched</p></td></tr></table>')
+        cases = [
+            ("entire table", "Before\n\n" + nested + "\n\nAfter", "Before\n\nAfter", 0),
+            ("inner table", nested, "| Parent | Neighbour |\n|---|---|\n|  | untouched |", 1),
+        ]
+        for name, source, expected, tables in cases:
+            with self.subTest(name=name):
+                self.remote = page_html(note(source))
+                tree = ET.fromstring(self.remote)
+                labels = {"Parent", "Neighbour", "untouched"} if tables else {"Before", "After"}
+                neighbours = {node.get("id") for node in tree.iter("p")
+                              if node.text in labels}
+                if tables:
+                    neighbours.add(next(tree.iter("table")).get("id"))
+                loaded = self.load()
+                result = self.save(note(expected), loaded["view"])
+                self.assertTrue(result.get("ok"), result)
+                current = ET.fromstring(self.remote)
+                self.assertEqual(len(list(current.iter("table"))), tables)
+                self.assertTrue(neighbours <= {node.get("id") for node in current.iter()})
+                reloaded = self.load()
+                self.assertEqual(onenote.normalize_note(reloaded), onenote.normalize_note(note(expected)))
+                if tables:
+                    refilled = expected.replace("|  | untouched |", "| new text | untouched |")
+                    result = self.save(note(refilled), reloaded["view"])
+                    self.assertTrue(result.get("ok"), result)
+                    self.assertEqual(onenote.normalize_note(self.load()), onenote.normalize_note(note(refilled)))
+
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory(dir=WORK.name)
         self.addCleanup(self.temp.cleanup)
@@ -271,7 +378,7 @@ class SaveTests(unittest.TestCase):
                         loaded = self.load()
                         before = "[x]" if state.endswith(":completed") else "[ ]"
                         after = "[x]" if updated.endswith(":completed") else "[ ]"
-                        result = self.save(note(loaded["body"].replace(before + " Task", after + " Task")), loaded["view"])
+                        result = self.save(note(loaded["body"].replace(before + ' <span style="color:#ff0000;">Task</span>', after + ' <span style="color:#ff0000;">Task</span>')), loaded["view"])
                     self.assertTrue(result.get("ok"), result)
                     tree = ET.fromstring(self.remote)
                     carrier = next(node for node in tree.iter("span") if node.get("data-id") == "task")
@@ -311,7 +418,7 @@ class SaveTests(unittest.TestCase):
                        '<p id="p:second" data-tag="to-do"><span style="color:#abcdef">Same</span></p>'
                        '</div></body></html>')
         loaded = self.load()
-        result = self.save(note("- [ ] Same\n- [x] Same"), loaded["view"])
+        result = self.save(note(loaded["body"].replace('[ ] <span style="color:#abcdef;">', '[x] <span style="color:#abcdef;">')), loaded["view"])
         self.assertTrue(result.get("ok"), result)
         operations = [operation for method, _, data in self.calls if method == "PATCH" for operation in json.loads(data)]
         self.assertEqual(len(operations), 1)
@@ -332,7 +439,7 @@ class SaveTests(unittest.TestCase):
                        '<p id="p:second" data-tag="to-do"><span style="color:#abcdef">Same</span></p>'
                        '<p id="p:footer">Footer</p></div></body></html>')
         loaded = self.load()
-        result = self.save(note("- [x] Same\n- [ ] Same\n\nNew footer"), loaded["view"])
+        result = self.save(note(loaded["body"].replace("[ ] Same", "[x] Same").replace("Footer", "New footer")), loaded["view"])
         self.assertTrue(result.get("ok"), result)
         kept = next(node for node in ET.fromstring(self.remote).iter("p") if node.get("id") == "p:second")
         self.assertEqual(kept.get("data-tag"), "to-do")
