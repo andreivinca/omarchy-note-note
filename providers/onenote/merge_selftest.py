@@ -37,6 +37,70 @@ def page_html(value):
 
 
 class SaveTests(unittest.TestCase):
+    def test_edit_beside_normalized_layout_preserves_original_elements(self):
+        image = Path(onenote.ONENOTE_IMG_DIR) / "layout-image"
+        image.parent.mkdir(parents=True, exist_ok=True)
+        image.write_bytes(b"synthetic image")
+        patch.object(onenote, "cached_image", return_value=image.as_uri()).start()
+        src = "https://graph.microsoft.com/v1.0/me/onenote/resources/layout/$value"
+        layout = ('<img id="img:banner" src="' + src + '" alt="Generated description:&#10;&#10;" width="400"/>'
+                  '<table id="table:ideas"><tr><td><ul id="ul:ideas">'
+                  '<li id="li:first">First idea</li>\n<br/>\n<li id="li:second">Second idea</li>'
+                  '</ul></td></tr></table>')
+        photos = ('<table id="table:photos"><tr><td><p id="p:caption">Caption</p></td></tr>'
+                  '<tr><td><img id="img:photo" src="' + src + '" alt="Photo" width="100"/></td></tr></table>')
+        heading = ('<table id="table:heading"><tr><td><p id="p:left">Left</p></td>'
+                   '<td><p id="p:middle"></p></td><td><p id="p:right">Right</p></td></tr></table>')
+        self.remote = ('<html><head><title>Title</title></head><body><div id="div:layout">'
+                       + layout + heading + photos + '<p id="p:end">End</p></div></body></html>')
+        original = ET.fromstring(self.remote)
+        loaded = self.load()
+        desired = loaded["body"].replace('| Left |  | Right |', r'| Left | \| | Right |')
+        desired = desired.replace('End', 'Edited ending')
+        self.assertNotEqual(desired, loaded["body"])
+        result = self.save(note(desired), loaded["view"])
+        self.assertTrue(result.get("ok"), result)
+        operations = [op for method, _, data in self.calls if method == "PATCH" for op in json.loads(data)]
+        self.assertEqual([op["target"] for op in operations], ["p:middle", "p:end"])
+        current = ET.fromstring(self.remote)
+        for identifier in ("img:banner", "table:ideas", "table:photos", "p:left", "p:right"):
+            before = next(node for node in original.iter() if node.get("id") == identifier)
+            after = next(node for node in current.iter() if node.get("id") == identifier)
+            self.assertEqual(ET.tostring(after), ET.tostring(before))
+        self.assertEqual(self.load()["body"], result["body"])
+
+    def test_inline_table_cell_edit_preserves_layout_and_nearby_targets(self):
+        self.remote = ('<html><head><title>Title</title></head><body><div>'
+                       '<p id="p:before">Before</p><table id="table:legacy" style="border:0px;width:400px">'
+                       '<tr><td style="width:190px"><span style="color:#3f3f3f;font-weight:bold">Left</span></td>'
+                       '<td style="width:20px"><br/></td><td style="width:190px"><b>Right</b></td></tr></table>'
+                       '<p id="p:after">After</p></div></body></html>')
+        original = ET.fromstring(self.remote)
+        loaded = self.load()
+        changed = loaded["body"].replace(' |  | ', r' | \| | ')
+        result = self.save(note(changed), loaded["view"])
+        self.assertTrue(result.get("ok"), result)
+        operations = [op for method, _, data in self.calls if method == "PATCH" for op in json.loads(data)]
+        self.assertEqual([op["target"] for op in operations], ["table:legacy"])
+        content = ET.fromstring(operations[0]["content"])
+        old_table = next(original.iter("table"))
+        self.assertEqual(content.attrib, {key: value for key, value in old_table.attrib.items() if key != "id"})
+        old_cells, new_cells = list(old_table.iter("td")), list(content.iter("td"))
+        for index in (0, 2):
+            self.assertEqual(ET.tostring(new_cells[index]), ET.tostring(old_cells[index]))
+        identifiers = {node.get("id") for node in ET.fromstring(self.remote).iter()}
+        self.assertTrue({"p:before", "p:after"}.issubset(identifiers))
+        self.assertEqual(self.load()["body"], result["body"])
+
+    def test_untargetable_cell_does_not_replace_nested_editable_content(self):
+        self.remote = ('<html><head><title>Title</title></head><body><div><table id="table:mixed">'
+                       '<tr><td><p id="p:keep">Keep</p></td><td><br/></td></tr></table></div></body></html>')
+        loaded = self.load()
+        result = self.save(note(loaded["body"].replace('| Keep |  |', '| Keep | Added |')), loaded["view"])
+        self.assertIn("no editable paragraph", result.get("error", ""))
+        self.assertFalse(any(method == "PATCH" for method, *_ in self.calls))
+        self.assertIn('id="p:keep"', self.remote)
+
     def test_color_conversion_and_reset_preserve_checkboxes_and_neighbours(self):
         self.remote = ('<html><head><title>Title</title></head><body><div id="div:food">'
                        '<p id="p:mushrooms" data-tag="to-do:completed"><span style="color:#0070c0">Mushrooms</span></p>'

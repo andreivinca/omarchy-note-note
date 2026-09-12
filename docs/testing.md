@@ -189,7 +189,12 @@ its original item after an app save. Checks also cover repeated labels,
 mixed checkbox/prose edits, bare blank lines, preserved inline formatting,
 individual and nested list items, table-cell paragraphs, empty-page appends,
 inserts and deletions, missing targets, rejected updates, and invalid
-simulations. Mobile-table cases merge a pending local edit with an empty
+simulations. Legacy-layout cases preserve original images and tables when
+their imported representation normalizes whitespace or moves image references.
+They also edit bare cells in tables containing only inline text, preserving
+the layout and surrounding targets, and reject table replacement when nested
+editable elements would lose their identities.
+Mobile-table cases merge a pending local edit with an empty
 table added remotely and preserve leading/trailing bare breaks, including
 breaks in a separate empty layout container. Internal breaks remain part of
 the document unless removing the surrounding content makes them boundary

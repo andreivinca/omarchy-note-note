@@ -75,9 +75,19 @@ and individual list items, preserves bare blank lines,
 and edits existing paragraphs inside table cells. One plan is simulated and
 checked for both content equality and preservation of unchanged IDs and
 attributes. There is no whole-page or whole-list replacement fallback.
+Before alignment, the OneNote adapter projects each source element through
+the same normalization used for the editor. A complete unchanged projection
+keeps its original subtree, even when import collapses whitespace or displays
+a table's images after it. The final simulation is still checked against the
+complete requested document.
+Legacy tables containing only inline text and breaks can be edited by
+replacing that table, the smallest supported Graph target, while copying its
+layout attributes and unchanged cells. This applies only when there are no
+nested paragraphs, lists, tables or images to preserve. Tables with those
+elements continue to use individual targets.
 Unsupported restructures, missing targets, and failed validation keep the
 draft and report an error. Table row/column changes and edits without a
-separate Graph target must be made in OneNote. Uncertain inserts and uploads
+usable Graph target must be made in OneNote. Uncertain inserts and uploads
 are never automatically repeated, including after HTTP 503. The Microsoft
 transport distinguishes replaying a safe read (`RetryPolicy.REPLAY`),
 restarting a replacement job with a fresh read and merge (`RESTART`), and

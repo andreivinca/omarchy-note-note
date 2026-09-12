@@ -914,12 +914,19 @@ def write_page(page_id, note, remote, current):
         runs = onenote_md.markdown_to_runs(note["body"], uploads.ref)
         if uploads.error:
             fail(uploads.error)
-        try:
-            planned = onenote_patch.plan(current, "".join(run["html"] for run in runs))
-        except (onenote_patch.UnsupportedEdit, onenote_patch.InvalidPlan) as error:
-            fail(str(error) + " — your draft was kept")
         image_paths = {item["src"]: item.get("local") for item in remote.get("images", [])}
         image_paths.update(uploads.image_paths)
+
+        def project(element):
+            source = onenote_patch.serialize(element, keep_ids=True)
+            displayed = onenote_md.html_to_markdown(source, lambda src, width: image_paths.get(src))
+            normalized = normalize_note(displayed)
+            return onenote_md.markdown_to_onenote_html(normalized["body"], uploads.ref)
+
+        try:
+            planned = onenote_patch.plan(current, "".join(run["html"] for run in runs), project=project)
+        except (onenote_patch.UnsupportedEdit, onenote_patch.InvalidPlan) as error:
+            fail(str(error) + " — your draft was kept")
         simulated_note = onenote_md.html_to_markdown(planned.simulated, lambda src, width: image_paths.get(src))
         if not simulated_note["editable"] or normalize_note(simulated_note)["body"] != note["body"]:
             fail("the proposed update could not preserve this page's content — your draft was kept")

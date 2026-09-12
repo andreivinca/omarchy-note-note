@@ -231,6 +231,9 @@ class _Planner:
         new_rows = list(htmltables.rows(new))
         if len(old_rows) != len(new_rows):
             raise UnsupportedEdit("OneNote cannot change this table's rows without rebuilding it")
+        if not any(child.tag in REPLACEABLE for child in list(walk(old))[1:]):
+            self.inline_table(old, new_rows)
+            return
         self.retain(old, subtree=False)
         converter = Converter(lambda src, width: src)
         for old_row, new_row in zip(old_rows, new_rows):
@@ -258,6 +261,32 @@ class _Planner:
                     paragraph.children = new_cell.children
                     updated = [paragraph]
                 self.sequence(content, updated, old_cell)
+
+    def inline_table(self, old, new_rows):
+        """A table containing only inline content is itself the editable unit.
+
+        Legacy templates have spans and bare breaks directly inside cells.
+        Graph cannot target those cells. Replace this table only when it has
+        no nested paragraphs, lists, tables or images whose identities would
+        be lost, copying the original layout and every unchanged cell.
+        """
+        updated = copy.deepcopy(old)
+        converter = Converter(lambda src, width: src)
+        for old_row, new_row in zip(htmltables.rows(updated), new_rows):
+            old_cells = [node for node in children(old_row) if node.tag in {"td", "th"}]
+            new_cells = [node for node in children(new_row) if node.tag in {"td", "th"}]
+            if len(old_cells) != len(new_cells):
+                raise UnsupportedEdit("OneNote cannot change this table's columns without rebuilding it")
+            for old_cell, new_cell in zip(old_cells, new_cells):
+                if converter.rich_cell(old_cell) == converter.rich_cell(new_cell):
+                    continue
+                content = copy.deepcopy(new_cell.children)
+                if not any(child.tag in REPLACEABLE for child in content):
+                    paragraph = Node("p")
+                    paragraph.children = content
+                    content = [paragraph]
+                old_cell.children = content
+        self.replacements.append({"target": target(old), "action": "replace", "content": serialize(updated)})
 
     def finish(self):
         # Insertions use original anchors, which still exist before any
@@ -304,14 +333,56 @@ def simulate(tree, commands):
     return tree
 
 
-def plan(current, desired):
+def preserve_projected(before, after, project):
+    """Match the editor's representation back to its original source elements.
+
+    A source table can display as a table followed by images, and whitespace
+    can normalize on import. Only a complete, consecutive, unchanged projection
+    permits retaining the source subtree. Changed projections still go through
+    the ordinary target checks and the caller's whole-document validation.
+    """
+    projected, groups = [], []
+    for original in before:
+        start = len(projected)
+        projected.extend(document_elements(parse(project(original))) or [original])
+        groups.append((original, start, len(projected)))
+
+    matches = {}
+    if len(after) >= len(projected) and all(text(old) == text(new) for old, new in zip(projected, after)):
+        matches = dict(enumerate(range(len(projected))))
+    else:
+        for span in align(projected, after, identity):
+            if span.kind != "equal":
+                continue
+            for old, new in zip(range(span.before_start, span.before_end), range(span.after_start, span.after_end)):
+                if text(projected[old]) == text(after[new]):
+                    matches[old] = new
+
+    retained = {}
+    for original, start, end in groups:
+        position = matches.get(start)
+        if position is not None and all(matches.get(index) == position + index - start for index in range(start, end)):
+            retained[position] = (original, end - start)
+
+    result, index = [], 0
+    while index < len(after):
+        original, count = retained.get(index, (after[index], 1))
+        result.append(original)
+        index += count
+    return result
+
+
+def plan(current, desired, project=None):
     """Return a validated Plan, or raise UnsupportedEdit/InvalidPlan."""
     tree, desired_tree = parse(current), parse(desired)
     bodies = [node for node in walk(tree) if node.tag == "body"]
     body = bodies[0] if bodies else tree
     planner = _Planner(tree)
     try:
-        planner.sequence(document_elements(body), document_elements(desired_tree), body)
+        before, after = document_elements(body), document_elements(desired_tree)
+        if project is not None:
+            after = preserve_projected(before, after, project)
+        planner.sequence(before, after, body)
     except AmbiguousAlignment as error:
         raise UnsupportedEdit(str(error)) from error
     return planner.finish()
