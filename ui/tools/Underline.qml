@@ -5,6 +5,7 @@ import "../Dialect.js" as Dialect
 Tool {
   id: tool
   toolId: "underline"
+  checked: editor.underline
   label: "Underline"
   icon: "󰊇"
   shortcutKey: Qt.Key_U

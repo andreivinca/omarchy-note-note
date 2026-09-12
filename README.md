@@ -1,14 +1,15 @@
 # Note Note
 
-A notes sidebar for the Omarchy shell: notebooks on the left, the note on
-the right, always editable and autosaved. Local Markdown notes, your
+A notes workspace for the Omarchy shell: notebook tabs across the top, a
+preview list on the left, and an editable, autosaved note on the right.
+The layout follows your Omarchy theme in both dark and light modes. Local Markdown notes, your
 Microsoft Sticky Notes, OneNote and Notion pages all live in the same list.
 
 OneNote saves fetch the current page and merge independent edits made on
 other devices. Conflicts pause saving for review, with a private recovery
 draft kept on this device. See [merge behavior and limits](lib/notemerge/README.md).
 
-![Note Note showing a OneNote checklist, with local notebooks, Sticky Notes and the OneNote tree down the left](preview.png)
+![Note Note with notebook tabs, a note list, and an editable document](preview.png)
 
 **[Install](#install)** · **[Update](#update)** · **[Shortcut](#shortcut)** ·
 **[Removal](#removal)** · **[Settings](#settings)** ·
@@ -59,7 +60,7 @@ token, or delete those files by hand.
 
 ## Settings
 
-Open the menu (☰, top right) and pick **Settings** to edit note-note's own
+Open the menu (⋯, top right) and pick **Settings** to edit note-note's own
 config directly as JSON. (**Key bindings**, in the same menu, opens the same
 kind of page over every shortcut the app answers to — read-only.) It opens in place of your notes, saved with **Save**
 or `Ctrl+S` — the page stays open, so a rejected edit is still there to fix.
@@ -83,7 +84,7 @@ setting on first run.
 - `providers.local.notesDir` — where local notebooks live, overriding
   `~/Notes/` or `NOTE_NOTE_DIR`.
 - `providers.<id>.notebookTabs` — `true` spreads a source's notebooks into
-  a tab each down the left (how your local notebooks show by default);
+  a tab each across the top (how your local notebooks show by default);
   `false` folds them into one tab as an expandable tree (OneNote's
   default). Offered by the sources that have notebooks: `local` and
   `onenote` — Sticky Notes and Notion are a single flat list either way.
@@ -104,13 +105,18 @@ milk, eggs
 
 A note with no title shows the first words of its body in the list instead.
 
-Each source and notebook gets its own tab down the left; click one, or
+Each source and notebook gets its own tab across the top; click one, or
 `Ctrl+Tab` through them. Whether a source's notebooks spread into a tab
 each or fold inside a single tab is per source — the `notebookTabs`
-setting; your local folders spread by default, OneNote folds. `+ New
-note…` adds a note to the open notebook;
-`+ New notebook…` makes one in your own notes (the only source that
-supports it from here). Drag rows to reorder. Delete a note with the `×` on
+setting; your local folders spread by default, OneNote folds. Local notes offer
+**New Note** and **New notebook** at the bottom. OneNote offers **New section**
+in its footer and **New Note** only inside each section.
+Providers supply all footer actions, including creation
+and account controls; every action uses the same full-width, stacked row.
+Local notebooks keep your note order without date
+headings; other flat notebooks group notes by modification date.
+Drag local notes to reorder them, or rows within a date group. Notebook trees keep
+their provider’s hierarchy and order. Delete a note with the `×` on
 its row. Rename or remove a notebook by renaming or removing its folder.
 
 The body is Markdown, rendered live and saved back as Markdown, with a
@@ -118,7 +124,7 @@ formatting toolbar for headings, lists, tables, links, images and the usual
 bold/italic/underline/strikethrough/highlight/code shortcuts (`Ctrl+B/I/U/S`,
 `Ctrl+Shift+H`). Hover a link to see its destination in the bottom view bar;
 click the link itself to open it in your browser or the associated app.
-Web addresses (`https://`, `http://`, and `www.`) turn blue and underlined as
+Web addresses (`https://`, `http://`, and `www.`) use the theme accent and an underline as
 you type, even when they are plain text in Markdown. Drag across a link to
 select it. The display styling leaves saved Markdown and cursor spacing
 unchanged. Type a space to continue with ordinary text after a URL. A new

@@ -127,6 +127,21 @@ the change comes back through `textChanged`). So the editor keeps the marker
 the eye sees over the glyph's cell (NoteEditor.qml, block decorations;
 `marker` in the inspector's `blocks()`, `class="checked"` in the HTML scan).
 
+**Nested lists have no vertical margins** (measured on 6.11). Qt gives the
+first and last items of an outer list 12px top and bottom margins, but every
+item in a nested list (`QTextListFormat::indent() > 1`) gets zero. Applying
+outer margins to every `QTextList` makes a one-item sublist jump by 12px on
+both sides when typing anywhere triggers `normalizeListMargins()`. The
+normalizer preserves Qt's imported spacing and repairs margins copied by
+Enter, joining the triggering edit for undo.
+
+**Link hover must wait for document edits to finish.** Syntax highlighting
+runs during table undo, before the document's frame layout is stable.
+Emitting link notifications immediately can re-enter `hitTest()` through a
+stationary pointer's QML binding and crash in `QTextFrame::firstPosition()`.
+The highlighter coalesces notifications on a zero-delay timer, after the
+current edit, without delaying the text formatting itself.
+
 **Block backgrounds survive on the paragraph** (measured on 6.11): a
 `background-color` in a `<p>`'s style comes back in the same place, is not
 copied onto spans that already exist, and vertical margins round-trip.

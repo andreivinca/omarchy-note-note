@@ -2,47 +2,25 @@ import QtQuick
 import qs.Commons
 import qs.Ui
 
-// The view bar — the status strip a desktop app keeps along its bottom edge.
-// Left to right: the sidebar toggle, then it answers whose notes these are
-// (the open tab's source, a full-height segment in the tab's own wash, the
-// way an IDE's remote badge is), where the open note lives (the provider's
-// crumb, then the storage word), whether everything is put away (the unsaved
-// dot), what just happened (the transient status), and how much is written
-// (the word count).
-//
-// Every caption in the bar shares one text line: the source label is placed
-// once, on a whole pixel, and everything else either carries the same font
-// metrics at the same y or centers on it. Nothing here is nested in a padded
-// box of its own — that is what put a label half a pixel off the line.
-//
-// Presentation, plus one control: the toggle folds the sidebar away and
-// brings it back (listToggled). Every other value arrives bound from the
-// host, and nothing else here signals back.
+// Provider badge, breadcrumb, word count, save state and the sidebar toggle.
 Item {
   id: root
 
-  // The open tab's source: the provider's name and logo, in the tab's ink,
-  // over a wash of the tab's own colour (see the host's rebuildRows).
   property string sourceName: ""
   property url sourceLogo: ""
   property color sourceInk: Color.menu.text
   property color sourceBase: "transparent"
-  // Where the open note lives: the provider's breadcrumb, then the storage
-  // word beside it ("note-….md", "synced online", "read-only here").
   property string crumb: ""
   property string storage: ""
-  // Providers wrote their crumbs for a line that stood alone, so some open
-  // with their own name; beside a segment that already says it, that reads
-  // twice. Presentation only, and no provider named: the segment's own text
-  // is what gets folded away, whichever provider wrote it.
+  // Some providers include their name in the breadcrumb; the badge owns it.
   readonly property string shownCrumb: {
-    if (crumb === sourceName) {
+    if (root.crumb === root.sourceName) {
       return ""
     }
-    if (crumb.indexOf(sourceName + " › ") === 0) {
-      return crumb.substring(sourceName.length + 3)
+    if (root.sourceName && root.crumb.indexOf(root.sourceName + " › ") === 0) {
+      return root.crumb.substring(root.sourceName.length + 3)
     }
-    return crumb
+    return root.crumb
   }
   // The note holds edits not yet confirmed saved: dirty, or a save in flight.
   property bool unsaved: false
@@ -58,7 +36,7 @@ Item {
   property color foreground: Color.menu.text
   property color accent: Color.accent
   property string fontFamily: Style.font.menuFamily
-  // One size for every caption on the bar; the source logo follows it.
+  // One size for every caption on the bar.
   property int fontSize: Style.font.caption
   // The bar sits flush along the bottom of whatever hosts it. In the overlay
   // that host is a rounded card whose border is painted under the content,
@@ -67,225 +45,203 @@ Item {
   // one, against the sidebar, and reach the other.
   property real leftRadius: 0
   property real rightRadius: 0
-  // The badges on the bar — the toggle's hover ring and the source pill —
-  // share one shape: a pixel short of the bar's height at either end, with
-  // a soft corner.
-  readonly property real badgeInset: Style.space(1)
-  readonly property real badgeRadius: Style.space(3)
+  // Every control and caption occupies the same row, including icon fonts
+  // whose line metrics differ from the caption font.
+  readonly property real verticalPadding: Style.space(4)
+  readonly property real controlHeight: Math.max(Style.space(20),
+    Math.ceil(captionMetrics.height) + Style.space(4) + 2)
+  readonly property real controlRadius: Math.min(Style.cornerRadius, Style.space(4))
+  height: controlHeight + verticalPadding * 2
 
-  height: Style.space(26)
+  FontMetrics {
+    id: captionMetrics
+    font.family: root.fontFamily
+    font.pixelSize: root.fontSize
+  }
+
+  // Center the visible icon, independent of its font's baseline and bearings.
+  component StatusGlyph: Item {
+    id: symbol
+    required property string text
+    required property color color
+    required property real fontSize
+    implicitWidth: fontSize
+
+    TextMetrics {
+      id: metrics
+      font: glyph.font
+      text: symbol.text
+    }
+
+    Text {
+      id: glyph
+      x: (parent.width - metrics.tightBoundingRect.width) / 2 - metrics.tightBoundingRect.x
+      y: (parent.height - metrics.tightBoundingRect.height) / 2
+        - baselineOffset - metrics.tightBoundingRect.y
+      text: symbol.text
+      textFormat: Text.PlainText
+      color: symbol.color
+      font.family: Style.fontFamily
+      font.pixelSize: symbol.fontSize
+      renderType: Text.NativeRendering
+    }
+  }
 
   Rectangle {
     anchors.fill: parent
-    color: Qt.tint(root.background, Util.alpha(root.foreground, 0.015))
+    color: root.background
     bottomLeftRadius: root.leftRadius
     bottomRightRadius: root.rightRadius
   }
-
   Rectangle {
-    id: topRule
-    anchors.top: parent.top
     width: parent.width
     height: Style.spacing.hairline
-    color: Util.alpha(root.foreground, 0.1)
+    color: Util.alpha(root.foreground, 0.09)
   }
-
-  // The sidebar toggle, first in the bar: a chevron pointing the way the
-  // sidebar will go — left to fold it away, right to bring it back.
   Button {
     id: toggle
+    objectName: "sidebarToggle"
     anchors.left: parent.left
-    anchors.leftMargin: Style.spacing.xs
-    anchors.top: topRule.bottom
-    anchors.topMargin: root.badgeInset
-    anchors.bottom: parent.bottom
-    anchors.bottomMargin: root.badgeInset
-    radius: root.badgeRadius
-    property bool hovering: false
-    // Quiet, like the editor's toolbar: the outline appears under the
-    // cursor — and only the outline. The kit's button would also fill
-    // itself; here the ring alone says it is a button, in the source
-    // pill's own shape beside it.
-    bordered: hovering
-    color: "transparent"
+    anchors.leftMargin: Style.spacing.md
+    y: root.verticalPadding
+    height: root.controlHeight
+    width: Math.max(Style.space(24), height)
+    radius: root.controlRadius
+    borderSpec: Border.flat(Util.alpha(root.foreground, hot ? 0.45 : 0.2), 1)
+    background: Util.alpha(root.foreground, 0.06)
     foreground: root.foreground
     accent: root.accent
-    iconText: root.listCollapsed ? "󰅂" : "󰅁"
-    iconSize: Style.font.icon
     tooltipText: root.listCollapsed ? "Show sidebar (ctrl+e)" : "Hide sidebar (ctrl+e)"
-    horizontalPadding: Style.spacing.sm
-    onHovered: function(isHovered) { hovering = isHovered }
+    Accessible.role: Accessible.Button
+    Accessible.name: root.listCollapsed ? "Show sidebar" : "Hide sidebar"
     onClicked: root.listToggled()
+
+    StatusGlyph {
+      anchors.fill: parent
+      text: root.listCollapsed ? "󰅂" : "󰅁"
+      color: root.foreground
+      fontSize: Style.font.iconSmall
+    }
   }
 
-  // The source segment, right after the toggle: a pill a pixel short of the
-  // bar's height at either end, so it reads as a badge on the bar rather
-  // than a block of it. Sized off its label, which is laid out first
-  // (below) and is the whole bar's line.
   Rectangle {
     id: sourceBlock
+    objectName: "providerBadge"
     visible: root.sourceName.length > 0
     anchors.left: toggle.right
     anchors.leftMargin: Style.spacing.xs
-    anchors.top: topRule.bottom
-    anchors.topMargin: root.badgeInset
-    anchors.bottom: parent.bottom
-    anchors.bottomMargin: root.badgeInset
-    radius: root.badgeRadius
-    width: sourceLabel.x - x + sourceLabel.width + Style.spacing.lg
-    // The tab's colour said quietly; without a tab yet, the neutral fill
-    // every theme has.
+    y: root.verticalPadding
+    height: root.controlHeight
+    width: sourceContent.implicitWidth + Style.spacing.lg * 2
+    radius: root.controlRadius
+    border.width: 1
+    border.color: Util.alpha(root.sourceInk, 0.3)
     color: root.sourceBase.a > 0 ? Util.alpha(root.sourceBase, 0.16)
-                                 : Util.alpha(root.foreground, 0.05)
+      : Util.alpha(root.foreground, 0.05)
+
+    Row {
+      id: sourceContent
+      anchors.centerIn: parent
+      height: parent.height
+      spacing: Style.spacing.xs
+
+      Image {
+        visible: status === Image.Ready
+        source: root.sourceLogo
+        anchors.verticalCenter: parent.verticalCenter
+        anchors.alignWhenCentered: false
+        width: root.fontSize
+        height: root.fontSize
+        sourceSize.width: width * 2
+        sourceSize.height: height * 2
+        fillMode: Image.PreserveAspectFit
+        smooth: true
+      }
+
+      Text {
+        objectName: "providerLabel"
+        height: parent.height
+        verticalAlignment: Text.AlignVCenter
+        width: Math.min(implicitWidth, Style.space(160))
+        text: root.sourceName
+        textFormat: Text.PlainText
+        color: root.sourceInk
+        font.family: root.fontFamily
+        font.pixelSize: root.fontSize
+        elide: Text.ElideRight
+      }
+    }
   }
 
-  Image {
-    id: sourceLogoMark
-    visible: root.sourceName.length > 0 && status === Image.Ready
-    source: root.sourceLogo
-    x: sourceBlock.x + Style.spacing.lg
-    anchors.verticalCenter: sourceLabel.verticalCenter
-    width: root.fontSize
-    height: root.fontSize
-    sourceSize.width: root.fontSize * 2
-    sourceSize.height: root.fontSize * 2
-    fillMode: Image.PreserveAspectFit
-    smooth: true
-  }
-
-  // The bar's reference line. Placed on a whole pixel — every other caption
-  // is this label's own metrics at this label's own y, so the bar cannot
-  // disagree with itself about where its one line of text sits.
   Text {
-    id: sourceLabel
-    visible: root.sourceName.length > 0
-    textFormat: Text.PlainText
-    x: sourceBlock.x + Style.spacing.lg + (sourceLogoMark.visible ? sourceLogoMark.width + Style.spacing.xs : 0)
-    y: Math.round((parent.height - height) / 2)
-    text: root.sourceName
-    color: root.sourceInk
-    Behavior on color { ColorAnimation { duration: 150 } }
-    font.family: root.fontFamily
-    font.pixelSize: root.fontSize
-  }
-
-  Row {
-    id: contextRow
-    visible: !root.previewingLink
+    id: context
+    objectName: "statusContext"
     anchors.left: sourceBlock.visible ? sourceBlock.right : toggle.right
     anchors.leftMargin: Style.spacing.lg
-    y: sourceLabel.y
-    spacing: Style.spacing.md
-
-    Text {
-      textFormat: Text.PlainText
-      visible: root.shownCrumb.length > 0
-      // Capped, not implicit: a deep OneNote crumb must not push the
-      // status and the count off the bar.
-      width: Math.min(implicitWidth, Style.space(280))
-      text: root.shownCrumb
-      color: Util.alpha(root.foreground, 0.7)
-      font.family: root.fontFamily
-      font.pixelSize: root.fontSize
-      elide: Text.ElideRight
-    }
-
-    Text {
-      textFormat: Text.PlainText
-      visible: root.shownCrumb.length > 0 && root.storage.length > 0
-      text: "·"
-      color: Util.alpha(root.foreground, 0.35)
-      font.family: root.fontFamily
-      font.pixelSize: root.fontSize
-    }
-
-    Text {
-      textFormat: Text.PlainText
-      visible: root.storage.length > 0
-      width: Math.min(implicitWidth, Style.space(220))
-      text: root.storage
-      color: Util.alpha(root.foreground, 0.5)
-      font.family: root.fontFamily
-      font.pixelSize: root.fontSize
-      elide: Text.ElideRight
-    }
-
-    // The unsaved dot, the way an editor marks a modified tab. It shows
-    // for the beat between a keystroke and its save landing, so most of
-    // the time it is the quiet proof that autosave has kept up. Centered
-    // on the row rather than baselined: the glyph may come from a symbol
-    // font whose baseline is its own, and a dot has no baseline to read.
-    Text {
-      textFormat: Text.PlainText
-      visible: root.unsaved
-      anchors.verticalCenter: parent.verticalCenter
-      text: "●"
-      color: Qt.tint(root.foreground, Util.alpha(root.accent, 0.6))
-      font.family: root.fontFamily
-      font.pixelSize: root.fontSize
-    }
-  }
-
-  // The band between the context and the count belongs to status
-  // messages — a save's error, "Section created", a rate-limit
-  // countdown; it sits empty otherwise.
-  Text {
-    textFormat: Text.PlainText
-    visible: root.statusText.length > 0 && !root.previewingLink
-    anchors.left: contextRow.right
-    anchors.leftMargin: Style.spacing.lg
-    anchors.right: counter.visible ? counter.left : parent.right
+    anchors.right: details.left
     anchors.rightMargin: Style.spacing.lg
-    y: sourceLabel.y
+    y: root.verticalPadding
+    height: root.controlHeight
+    verticalAlignment: Text.AlignVCenter
+    visible: !root.previewingLink
     text: root.statusText
-    color: Qt.tint(root.foreground, Util.alpha(root.accent, 0.6))
+      || [root.shownCrumb, root.storage].filter(function(part) { return !!part }).join(" › ")
+    color: root.statusText ? Qt.tint(root.foreground, Util.alpha(root.accent, 0.55))
+      : Util.alpha(root.foreground, 0.55)
+    textFormat: Text.PlainText
     font.family: root.fontFamily
     font.pixelSize: root.fontSize
     elide: Text.ElideRight
-    horizontalAlignment: Text.AlignRight
   }
 
-  Text {
-    id: counter
-    textFormat: Text.PlainText
-    visible: root.countVisible && !root.previewingLink
-    anchors.right: parent.right
-    anchors.rightMargin: Style.spacing.lg
-    y: sourceLabel.y
-    text: root.wordCount + (root.wordCount === 1 ? " word" : " words")
-    color: Util.alpha(root.foreground, 0.55)
-    font.family: root.fontFamily
-    font.pixelSize: root.fontSize
-  }
-
-  // A hovered destination gets the space normally used by note details.
-  // Keep the action separate so a long URL cannot elide the hint away.
   Text {
     objectName: "linkPreview"
     visible: root.previewingLink
-    textFormat: Text.PlainText
-    anchors.left: sourceBlock.visible ? sourceBlock.right : toggle.right
-    anchors.leftMargin: Style.spacing.lg
-    anchors.right: linkHint.left
-    anchors.rightMargin: Style.spacing.lg
-    y: sourceLabel.y
+    anchors.fill: context
+    verticalAlignment: Text.AlignVCenter
     text: root.hoveredLink
-    color: Qt.tint(root.foreground, Util.alpha(root.accent, 0.6))
+    color: Qt.tint(root.foreground, Util.alpha(root.accent, 0.55))
+    textFormat: Text.PlainText
     font.family: root.fontFamily
     font.pixelSize: root.fontSize
     elide: Text.ElideMiddle
   }
 
-  Text {
-    id: linkHint
-    visible: root.previewingLink
-    textFormat: Text.PlainText
+  Row {
+    id: details
     anchors.right: parent.right
     anchors.rightMargin: Style.spacing.lg
-    y: sourceLabel.y
-    text: "Click to open"
-    color: Util.alpha(root.foreground, 0.55)
-    font.family: root.fontFamily
-    font.pixelSize: root.fontSize
+    y: root.verticalPadding
+    height: root.controlHeight
+    spacing: Style.spacing.md
+    Text {
+      objectName: "wordCount"
+      height: parent.height
+      verticalAlignment: Text.AlignVCenter
+      visible: root.countVisible && !root.previewingLink
+      text: root.wordCount + (root.wordCount === 1 ? " word" : " words")
+      color: Util.alpha(root.foreground, 0.45)
+      font.family: root.fontFamily
+      font.pixelSize: root.fontSize
+    }
+    StatusGlyph {
+      objectName: "saveIndicator"
+      height: parent.height
+      visible: root.countVisible && !root.previewingLink && root.storage !== "loading…"
+      text: root.unsaved ? "●" : "󰄬"
+      color: Qt.tint(root.foreground, Util.alpha(root.accent, 0.6))
+      fontSize: root.fontSize
+    }
+    Text {
+      objectName: "saveStatus"
+      height: parent.height
+      verticalAlignment: Text.AlignVCenter
+      visible: root.previewingLink || root.countVisible
+      text: root.previewingLink ? "Click to open" : (root.unsaved ? "Unsaved" :
+        (root.storage === "loading…" ? "Loading…" : (root.storage === "read-only here" ? "Read-only" : "Saved")))
+      color: Util.alpha(root.foreground, 0.5)
+      font.family: root.fontFamily
+      font.pixelSize: root.fontSize
+    }
   }
 }

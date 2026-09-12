@@ -151,11 +151,11 @@ Item {
     books.sort(function(a, b) { return a.name.localeCompare(b.name) })
     return books
   }
-  // One notebook's rows — "New section…", then each section as a tree with
-  // its pages when open — starting at `level`: 0 when the notebook is a tab
+  // One notebook's sections with their pages and New Note rows when open,
+  // starting at `level`: 0 when the notebook is a tab
   // of its own, 1 when it sits under its own tree row.
   function bookRows(bookId, level) {
-    var rows = [{ kind: "action", path: "newsection:" + bookId, title: "New section…", icon: "+", level: level }]
+    var rows = []
     for (var k = 0; k < root.onSections.length; k++) {
       var sec = root.onSections[k]
       if (sec.notebookId !== bookId) {
@@ -171,15 +171,23 @@ Item {
         if (pg.sectionId !== sec.id) {
           continue
         }
-        rows.push({ kind: "note", path: pathOf(pg.id), title: pg.title, preview: "", level: level + 1, fixed: true, version: pg.modified || "" })
+        rows.push({ kind: "note", path: pathOf(pg.id), title: pg.title, preview: "", level: level + 1, fixed: true, version: pg.modified || "", modified: pg.modified || "" })
       }
       rows.push({ kind: "new", path: "section:" + sec.id, level: level + 1 })
     }
     return rows
   }
-  function noteList(pgs) { return pgs.map(function(p) { return { path: pathOf(p.id), title: p.title, preview: "" } }) }
-  function accountActions() {
+  function noteList(pgs) { return pgs.map(function(p) { return { path: pathOf(p.id), title: p.title, preview: "", modified: p.modified || "" } }) }
+  function accountActions(bookId) {
     var actions = []
+    var books = bookList().filter(function(book) {
+      return !bookId || book.id === bookId
+    })
+    books.forEach(function(book) {
+      actions.push({ path: "newsection:" + book.id,
+                     title: books.length === 1 ? "New section" : "New section in " + book.name,
+                     icon: "󰉗" })
+    })
     if (!ms.hasScope("Files.Read")) {
       actions.push({ path: "enableorder", title: ms.loggingIn ? "Cancel signing in…" : "Enable custom section order…", icon: "󰒓" })
     }
@@ -200,7 +208,7 @@ Item {
       root.sections = books.map(function(b) {
         var pgs = root.pages.filter(function(p) { var sec = root.sectionAt(p.sectionId); return sec && sec.notebookId === b.id })
         return { key: b.id, name: b.name, count: pgs.length, notes: noteList(pgs),
-                 rows: bookRows(b.id, 0), footerActions: accountActions() }
+                 rows: bookRows(b.id, 0), footerActions: accountActions(b.id) }
       })
       root.updated()
       return
@@ -231,6 +239,7 @@ Item {
   }
 
   function crumb(path) { var pg = pageAt(path); return pg ? sectionName(pg.sectionId) : "OneNote" }
+  function storageLabel(path) { return "synced online" }
   function createTargetFor(path) { var pg = pageAt(path); return pg ? "section:" + pg.sectionId : "" }
   function restoreState(obj) {
     if (!obj) {

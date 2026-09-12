@@ -106,9 +106,9 @@ Item {
       rows.push({ kind: "action", path: "relogin", title: ms.loggingIn ? "Cancel signing in…" : "Sign in again to enable Sticky Notes…", icon: ms.loggingIn ? "󰅖" : "󰊻" })
     } else {
       for (var i = 0; i < root.notes.length; i++) {
-        rows.push({ kind: "note", path: pathOf(root.notes[i].id), title: "", preview: previewOf(root.notes[i].body), fixed: true, version: root.notes[i].modified || "" })
+        rows.push({ kind: "note", path: pathOf(root.notes[i].id), title: "", preview: previewOf(root.notes[i].body), fixed: true, version: root.notes[i].modified || "", modified: root.notes[i].modified || "" })
       }
-      rows.push({ kind: "new", path: "new" })
+      footerActions.push({ path: "newNote", title: "New Note", icon: "󰐕", shortcut: "newNote" })
       footerActions.push({ path: "logout", title: "Sign out" + (ms.account ? " (" + ms.account + ")" : ""), icon: "󰍃" })
     }
     // The sticky-note yellow, which is recognisable where Microsoft's
@@ -118,6 +118,7 @@ Item {
   }
 
   function crumb(path) { return "Microsoft Sticky Notes" }
+  function storageLabel(path) { return "synced online" }
   function createTargetFor(path) { return root.ready ? "new" : "" }
   function restoreState(obj) {}
   function saveState() { return {} }
@@ -127,7 +128,9 @@ Item {
     if (!ms) {
       return
     }
-    if (id === "login") {
+    if (id === "newNote" && root.ready) {
+      root.host.newNote(root.id, "new")
+    } else if (id === "login") {
       if (ms.loggingIn) {
         ms.cancelLogin()
         root.noticeCleared()

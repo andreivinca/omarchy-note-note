@@ -2,23 +2,26 @@ import QtQuick
 import QtQuick.Layouts
 import QtQuick.Controls as QQC
 import qs.Commons
+import ".." as AppUi
 
 QQC.MenuItem {
   id: row
   required property var editor
   required property real iconColumnWidth
+  required property AppUi.ChromePopupStyle popupStyle
   property var tool: subMenu ? subMenu.tool : null
   objectName: tool ? "editingMenu-" + tool.toolId : ""
   text: tool ? tool.label : ""
   hoverEnabled: true
   implicitWidth: contentItem.implicitWidth + leftPadding + rightPadding
-  implicitHeight: contentItem.implicitHeight + topPadding + bottomPadding
-  topPadding: Style.spacing.sm / 2
+  implicitHeight: Math.max(popupStyle.rowHeight, contentItem.implicitHeight + topPadding + bottomPadding)
+  topPadding: popupStyle.verticalPadding
   bottomPadding: topPadding
-  leftPadding: Style.spacing.controlPaddingX
-  rightPadding: Style.spacing.controlPaddingX + (subMenu ? arrow.implicitWidth + Style.spacing.md : 0)
-  font.family: editor.noteFontFamily
-  font.pixelSize: Math.round(editor.bodyFontSize * (tool ? tool.previewScale : 1))
+  leftPadding: popupStyle.horizontalPadding
+  rightPadding: popupStyle.horizontalPadding + (subMenu ? arrow.implicitWidth + Style.spacing.controlGap : 0)
+  // Retain relative heading previews at the same text scale as the chrome.
+  font.family: editor.fontFamily
+  font.pixelSize: Math.round(Style.font.body * (tool ? tool.previewScale : 1))
   font.bold: tool ? tool.previewBold : false
 
   contentItem: RowLayout {
@@ -40,22 +43,24 @@ QQC.MenuItem {
       id: rowLabel
       Layout.fillWidth: true
       text: row.text
+      textFormat: Text.PlainText
       font: row.font
-      color: row.highlighted ? Style.hoverStateColor(Color.popups.text, row.editor.accent) : Color.popups.text
+      color: row.highlighted ? Style.hoverStateColor(row.popupStyle.foreground, row.editor.accent) : row.popupStyle.foreground
       verticalAlignment: Text.AlignVCenter
       elide: Text.ElideRight
     }
   }
   arrow: Text {
-    x: row.width - width - Style.spacing.controlPaddingX
+    x: row.width - width - row.popupStyle.horizontalPadding
     y: (row.height - height) / 2
     visible: !!row.subMenu
     text: "›"
-    font: row.font
+    font.family: row.editor.fontFamily
+    font.pixelSize: Style.font.body
     color: rowLabel.color
   }
   background: Rectangle {
-    radius: Style.cornerRadius
-    color: row.highlighted ? Style.hoverFillFor(Color.popups.text, row.editor.accent) : "transparent"
+    radius: row.popupStyle.rowRadius
+    color: row.highlighted ? Style.hoverFillFor(row.popupStyle.foreground, row.editor.accent) : "transparent"
   }
 }

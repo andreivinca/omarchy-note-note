@@ -153,6 +153,10 @@ Delete checks cover empty headings and blank fillers before ordered, bullet
 and task lists, a single-item list, numbered starts and nested code. They
 compare the full document HTML through repeated keyboard and API Undo/Redo,
 including ordinary paragraph joins that trigger list-margin normalization.
+Nested-list checks compare row positions before and after typing above,
+inside and below the list, then save/reload and undo/redo. Enter splits nested
+and outer items; the native suite also verifies that normalization leaves
+every imported fixture's list margins unchanged.
 Conflict-panel checks use the real editor loader and click every action,
 including replacing an already-open conflict with fresh data.
 Pointer events check link previews in the view bar, directly opening editable

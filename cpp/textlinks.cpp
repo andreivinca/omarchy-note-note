@@ -157,6 +157,8 @@ void TextLinks::normalizeAnchors(QTextDocument *document)
 
 TextLinks::TextLinks(QObject *parent) : QSyntaxHighlighter(parent)
 {
+    m_notifyLinks.setSingleShot(true);
+    connect(&m_notifyLinks, &QTimer::timeout, this, &TextLinks::linksChanged);
 }
 
 void TextLinks::configure(const QColor &colour, bool plainText, const QColor &quoteInk, const QColor &highlightInk)
@@ -202,7 +204,10 @@ void TextLinks::highlightBlock(const QString &)
             setFormat(start - block.position(), end - start, linkAppearance);
         }
     }
-    emit linksChanged();
+    // Highlighting runs inside document edits, including table undo. Wait
+    // until the layout is stable before hover bindings call hitTest(), and
+    // coalesce the notifications from all blocks in the same edit.
+    m_notifyLinks.start(0);
 }
 
 QString TextLinks::linkAt(const QPointF &point) const

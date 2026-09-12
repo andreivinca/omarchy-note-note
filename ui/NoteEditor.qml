@@ -35,8 +35,8 @@ Item {
   property string fontFamily: Style.font.menuFamily
   // The body must NOT be fixed-pitch: Qt's Markdown writer serialises any
   // monospace text as a code span and drops bold/italic/underline.
-  // The note's own type: its title, its text, and the style previews that
-  // show how that text will look. `fontFamily` is the chrome around it.
+  // The note's own type: its title and text. `fontFamily` is the chrome
+  // around it, including the menus.
   property string noteFontFamily: "sans-serif"
   property int bodyFontSize: Style.font.title
   // The conversion service (services/markdown/Markdown.qml). The document is
@@ -917,8 +917,8 @@ Item {
   // eye sees. The marker itself stays in the document — it carries the
   // state, and a click on it is Qt's own toggle.
   property var checkBoxes: []
-  readonly property color quoteBarColour: Util.alpha("#2e75b5", 0.8)
-  readonly property color codeSlabColour: Util.alpha(root.foreground, 0.07)
+  readonly property color quoteBarColour: Util.alpha(root.accent, 0.6)
+  readonly property color codeSlabColour: Qt.darker(root.background, 1.16)
   Timer { id: decorTimer; interval: 120; onTriggered: root.updateDecorations() }
   // With the native inspector the pass is cheap — real block formats, no
   // serialisation — so it runs synchronously and the bars and slabs move in
@@ -1600,6 +1600,9 @@ Item {
   readonly property alias tools: toolRegistry
   property alias toolDirectory: toolRegistry.directory
   property alias toolbarLayout: toolRegistry.layout
+  readonly property real toolbarHeight: toolStrip.height
+  readonly property real toolbarRowHeight: toolStrip.rowHeight
+  property string modifiedText: ""
 
   Editing.EditorApi {
     id: editing
@@ -1625,7 +1628,8 @@ Item {
     width: parent.width
     registry: toolRegistry
     background: root.background
-    visible: root.toolsVisible
+    // Keep this row aligned with the sidebar header when tools are unavailable.
+    toolsVisible: root.toolsVisible
   }
 
   // ---- the note's sheet: title and body on one surface. No frame around it
@@ -1636,17 +1640,23 @@ Item {
     anchors.bottom: parent.bottom
     anchors.left: parent.left
     anchors.right: parent.right
-    anchors.topMargin: Style.spacing.panelPadding
+    anchors.topMargin: Style.space(12)
     anchors.bottomMargin: Style.spacing.panelPadding
-    anchors.leftMargin: Style.spacing.panelPadding
-    anchors.rightMargin: Style.spacing.panelPadding
-    // The title stands as far from the body's first line as from the
-    // toolbar's edge above it. Above, that is the panel padding plus the
-    // leading the title's face carries over its caps; below, this gap
-    // plus the body's slab inset (area.topPadding) and the two faces'
-    // leading between them — measured on the bundled faces at the default
-    // scale, the same 29px each way.
+    anchors.leftMargin: Math.max(Style.spacing.panelPadding, Math.min(Style.space(72), root.width * 0.064))
+    anchors.rightMargin: anchors.leftMargin
+    // Shared spacing between the date, title and document.
     spacing: Style.spacing.xxxl
+
+    Text {
+      visible: root.hasNote && !root.showingNotice && root.modifiedText.length > 0
+      width: parent.width
+      horizontalAlignment: Text.AlignRight
+      text: root.modifiedText
+      textFormat: Text.PlainText
+      color: Util.alpha(root.foreground, 0.45)
+      font.family: root.fontFamily
+      font.pixelSize: Style.font.bodySmall
+    }
 
     // ---- header: the title belongs on the note's own sheet
     Item {
@@ -1678,11 +1688,11 @@ Item {
           enabled: root.hasNote && !root.readOnly
           placeholderText: root.hasNote ? "Untitled" : "Note Note"
           // The title sits a step behind the body: slightly faded.
-          foreground: Util.alpha(root.foreground, 0.6)
+          foreground: root.foreground
           accent: root.accent
           font.family: root.noteFontFamily
           font.pixelSize: root.titleSize
-          font.bold: false
+          font.bold: true
           horizontalPadding: Style.spacing.xs
           verticalPadding: 0
           // A title is a title: no box around it. The padding still comes off

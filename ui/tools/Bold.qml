@@ -5,6 +5,7 @@ import "../Dialect.js" as Dialect
 Tool {
   id: tool
   toolId: "bold"
+  checked: editor.bold
   label: "Bold"
   icon: "󰉤"
   shortcutKey: Qt.Key_B

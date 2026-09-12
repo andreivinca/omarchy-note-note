@@ -83,7 +83,8 @@ its own content.
 ## Heading
 
 `Heading.qml` provides one dropdown with **Heading 1**, **Heading 2**,
-**Heading 3**, and **Normal**, each previewed at its document size. Use
+**Heading 3**, and **Normal**, with relative size and weight previews at
+the menu's text scale. Use
 `"heading"` in toolbar settings to move the dropdown as one tool, including
 inside another menu. Older layouts naming `h1`, `h2`, `h3`, or `p` display
 one Heading dropdown at the first of those positions.
@@ -189,11 +190,12 @@ applicable, provider support so its content survives saving and reloading.
 | `label`, `icon` | Button tooltip/menu text and icon glyph. |
 | `toolbarLabelVisible` | Show the menu label on the toolbar button; defaults to true. Hiding it keeps the icon, dropdown arrow, menu labels and tooltip. |
 | `capability` | Provider capability required; defaults to `toolId`. All four table alteration tools require `table`. |
+| `checked` | Reactive pressed state for formatting buttons; false by default. |
 | `available` | Reactive context condition, such as `editor.inTable`. Controls both presentation and execution. |
 | `shortcutKey`, `shortcutModifiers`, `shortcutLabel` | Optional key, modifiers and human-readable shortcut. Used for dispatch, tooltips and help. |
 | `isMenu` | This entry opens a menu; automatically true when `options` are provided. |
 | `options` | Fixed executable `Tool` choices owned by this file, as in `Heading.qml`. They retain individual action IDs and capabilities but move together in the toolbar. Bind their `editor` and availability to the owning tool. |
-| `previewScale`, `previewBold` | Optional menu-label styling, used by headings. |
+| `previewScale`, `previewBold` | Optional menu-label styling relative to the chrome text size, used by headings. |
 | `panelPopup` | Render the tool panel as a dropdown anchored to its toolbar button. |
 | `panel`, `panelOpen` | Optional QML component rendered below the toolbar and whether it is open. |
 | `panelContext` | Note, document revision and selection captured by `openPanel()`. Cleared when the panel closes. |
