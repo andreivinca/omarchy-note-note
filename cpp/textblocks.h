@@ -333,29 +333,30 @@ public:
         return m_links->linkAt(QPointF(x, y));
     }
 
-    // Qt reads a list into canonical margins — 12 above the first item, 12
-    // below the last, 0 between — but an item made by pressing Enter
-    // inherits the split item's margins instead, so a growing list drifts
-    // from the form a re-render would give it, and snaps there on the next
-    // one. This restores the canonical form as the items change. It is the
-    // one write in this class; the change joins the edit that caused it, so
-    // undo stays one step, and it never reaches the note (the reader does
-    // not look at an item's margins).
+    // Qt gives an outer list 12px above its first item and below its last,
+    // with zero between items. Nested lists (indent > 1) have zero margins
+    // throughout. Enter copies the split item's margins, so restore this
+    // imported form as the items change. The repair joins the triggering
+    // edit for undo and never reaches the note: the reader ignores margins.
     Q_INVOKABLE void normalizeListMargins()
     {
         QTextDocument *doc = m_document ? m_document->textDocument() : nullptr;
-        if (!doc)
+        if (!doc) {
             return;
+        }
         for (QTextBlock block = doc->begin(); block.isValid(); block = block.next()) {
             QTextList *list = block.textList();
-            if (!list)
+            if (!list) {
                 continue;
+            }
+            const bool nested = list->format().indent() > 1;
             const int item = list->itemNumber(block);
-            const qreal top = item == 0 ? 12 : 0;
-            const qreal bottom = item == list->count() - 1 ? 12 : 0;
+            const qreal top = !nested && item == 0 ? 12 : 0;
+            const qreal bottom = !nested && item == list->count() - 1 ? 12 : 0;
             QTextBlockFormat format = block.blockFormat();
-            if (format.topMargin() == top && format.bottomMargin() == bottom)
+            if (format.topMargin() == top && format.bottomMargin() == bottom) {
                 continue;
+            }
             format.setTopMargin(top);
             format.setBottomMargin(bottom);
             QTextCursor cursor(block);

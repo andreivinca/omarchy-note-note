@@ -1,14 +1,8 @@
 import QtQuick
 import qs.Commons
 import qs.Ui
-import "TabColors.js" as TabColors
 
-// The binder's tabs, laid across the title bar the way a browser lays its
-// own: the open one wears its notebook's wash and ink, the rest are quiet
-// names, and the strip scrolls sideways when the binder outgrows the bar.
-// A provider's logo keeps its identity on every tab it has; a tab without
-// one (the local notebooks — a folder is not a brand) is just its name
-// (PROVIDERS.md promises exactly that).
+// Scrollable notebook tabs, with provider logos when available.
 Item {
   id: root
 
@@ -21,9 +15,18 @@ Item {
   property bool filtering: false
   // The exact fill behind the strip, for the overflow fades to fade into.
   property color background: Color.menu.background
+  property color activeBackground: Qt.tint(background, Util.alpha(foreground, 0.07))
   property color foreground: Color.menu.text
   property string fontFamily: Style.font.menuFamily
   property int fontSize: Style.font.bodySmall
+  // Mockup measurements at a 16 px tab font. Keep these proportions
+  // independent of the shell's general-purpose spacing overrides.
+  readonly property real designScale: root.fontSize / 16
+  readonly property real horizontalPadding: Math.round(18 * root.designScale)
+  readonly property real contentGap: Math.round(10 * root.designScale)
+  readonly property real iconSize: root.fontSize
+  readonly property real verticalInset: Math.round(5 * root.designScale)
+  implicitHeight: Math.round(42 * root.designScale)
   signal activated(string key)
 
   clip: true
@@ -32,6 +35,8 @@ Item {
   // ctrl+tab, a search hopping to the tab that has hits — the strip
   // scrolls to show it.
   onActiveKeyChanged: Qt.callLater(revealActive)
+  onWidthChanged: Qt.callLater(revealActive)
+  onSectionsChanged: Qt.callLater(revealActive)
   function revealActive() {
     for (var i = 0; i < tabs.count; i++) {
       var it = tabs.itemAt(i)
@@ -71,8 +76,8 @@ Item {
     Row {
       id: row
       height: strip.height
-      // The gap between two tabs; each tab pads its own label inside.
-      spacing: Style.spacing.md
+      // Tabs meet at their dividers; the whitespace belongs inside each tab.
+      spacing: 0
 
       Repeater {
         id: tabs
@@ -81,45 +86,53 @@ Item {
         delegate: Rectangle {
           id: tab
           required property var modelData
+          objectName: "notebookTab-" + modelData.key
           readonly property bool current: modelData.key === root.activeKey
           readonly property int hits: root.matchCounts[modelData.key] || 0
           // While a search is on, a tab with nothing to show steps back —
           // the rail's old dimming, kept.
           readonly property bool dimmed: root.filtering && hits === 0
-          readonly property color base: TabColors.baseFor(modelData.color || "", modelData.name || "")
           readonly property bool branded: String(modelData.logo || "").length > 0
           readonly property string displayName: modelData.name || "Notes"
 
           anchors.verticalCenter: parent.verticalCenter
-          width: content.width + Style.spacing.md * 2
-          height: Style.spacing.controlHeight
+          width: content.implicitWidth + root.horizontalPadding * 2
+          height: root.height
           radius: Math.min(Style.cornerRadius, Style.space(6))
           // The open tab's wash, the hover fill for the rest — the same
           // treatment the sidebar rows get, so the strip reads as chrome
           // of the same app.
-          color: current ? Util.alpha(base, 0.22)
+          color: current ? root.activeBackground
                          : (tabHover.hovered ? Style.hoverFill : "transparent")
           opacity: dimmed ? 0.38 : 1
           Behavior on color { ColorAnimation { duration: 120 } }
+
+          Rectangle {
+            anchors.right: parent.right
+            anchors.verticalCenter: parent.verticalCenter
+            width: Style.spacing.hairline
+            height: Math.round(18 * root.designScale)
+            visible: !tab.current && !tabHover.hovered
+            color: Util.alpha(root.foreground, 0.12)
+          }
 
           HoverHandler { id: tabHover }
 
           Row {
             id: content
             anchors.left: parent.left
-            anchors.leftMargin: Style.spacing.md
+            anchors.leftMargin: root.horizontalPadding
             anchors.verticalCenter: parent.verticalCenter
-            spacing: Style.spacing.xs
+            spacing: root.contentGap
+            anchors.alignWhenCentered: false
 
             Image {
-              id: logo
-              visible: tab.branded && status === Image.Ready
+              visible: tab.branded
               source: tab.modelData.logo || ""
               anchors.verticalCenter: parent.verticalCenter
-              // The logo is as tall as the label's type, so the two read as
-              // one size whatever the tab font is set to.
-              width: root.fontSize
-              height: root.fontSize
+              anchors.alignWhenCentered: false
+              width: root.iconSize
+              height: root.iconSize
               sourceSize.width: width * 2
               sourceSize.height: height * 2
               fillMode: Image.PreserveAspectFit
@@ -131,14 +144,14 @@ Item {
               id: label
               textFormat: Text.PlainText
               anchors.verticalCenter: parent.verticalCenter
+              anchors.alignWhenCentered: false
               // Capped the way a browser caps a tab: a long notebook name
               // elides, and the tooltip below says the whole of it.
-              width: Math.min(implicitWidth, Style.space(120))
+              width: Math.min(implicitWidth, Style.space(200))
               text: tab.displayName
-              // The open tab's ink is its colour's — the same rule as the
-              // view bar's source label (see the host's sourceInk).
+              // Keep notebook labels neutral so the selected note remains prominent.
               color: tab.current
-                ? Qt.tint(root.foreground, Util.alpha(tab.base, TabColors.inkAlpha()))
+                ? root.foreground
                 : Util.alpha(root.foreground, 0.68)
               font.family: root.fontFamily
               font.pixelSize: root.fontSize

@@ -12,6 +12,7 @@ QtObject {
   property bool toolbarLabelVisible: true
   property string capability: toolId
   property bool available: true
+  property bool checked: false
   property int shortcutKey: 0
   property int shortcutModifiers: Qt.NoModifier
   property string shortcutLabel: ""

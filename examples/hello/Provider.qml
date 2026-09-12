@@ -50,18 +50,19 @@ Item {
 
   function rebuild() {
     var rows = []
+    var footerActions = []
     if (!root.configured) {
       rows.push({ kind: "action", path: "setup", title: "Set up…", icon: "󰒓" })
     } else {
       for (var i = 0; i < root.notes.length; i++) {
         rows.push({ kind: "note", path: root.id + ":" + root.notes[i].id, title: root.notes[i].title, preview: root.notes[i].body.split("\n")[0] })
       }
-      rows.push({ kind: "new", path: "new" })
-      rows.push({ kind: "action", path: "settings", title: "Settings…", icon: "󰒓" })
+      footerActions.push({ path: "newNote", title: "New Note", icon: "󰐕", shortcut: "newNote" })
+      footerActions.push({ path: "settings", title: "Settings…", icon: "󰒓" })
     }
     // `color` is optional: name one and the tab is yours, leave it out and
     // the tab takes a pastel from the section name.
-    root.sections = [{ key: "hello", name: root.configured ? "Hello, " + root.owner : "Hello", color: "#a9dcc0", rows: rows }]
+    root.sections = [{ key: "hello", name: root.configured ? "Hello, " + root.owner : "Hello", color: "#a9dcc0", rows: rows, footerActions: footerActions }]
     root.updated()
   }
   function refresh() { rebuild() }
@@ -105,7 +106,9 @@ Item {
 
   // ── setup: the provider's own screen ────────────────────────────────
   function action(id) {
-    if (id === "setup" || id === "settings") {
+    if (id === "newNote" && root.configured) {
+      root.host.newNote(root.id, "new")
+    } else if (id === "setup" || id === "settings") {
       root.viewRequested(root.configured ? "Hello — settings" : "Set up Hello", setupView, { current: root.owner })
     }
   }

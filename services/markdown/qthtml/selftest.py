@@ -53,6 +53,10 @@ CASES = {
         "columns, because Qt's Markdown writer used to fold it into two.\n"),
     "escapes": "a - b # c 1. d * e\n",
     "lists": "- bullet\n  - nested\n- second\n",
+    "shopping with nested item": (
+        "Before\n\n- Coffee beans\n- Oat milk\n  - the barista one\n- Bread\n\nAfter\n"),
+    "list ending with nested items": "Before\n\n- parent\n  - child\n    - grandchild\n\nAfter\n",
+    "nested lists under siblings": "- first\n  - [ ] child\n- last\n  1. other\n",
     "ordered": "1. first\n2. second\n",
     "code in ordered items": (
         "1. **Install driver:**\n\n"

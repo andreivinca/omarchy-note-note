@@ -1,23 +1,18 @@
-import "KeyBindings.js" as KeyBindings
 import QtQuick
 import QtQuick.Controls as QQC
 import qs.Commons
 import qs.Ui
 
-// The title bar, in a browser's shape: the binder's tabs from the left edge
-// (TabStrip.qml), then the search and the window actions at the right. No
-// masthead — the app needs no nameplate over its own work; whose notes are
-// open is the tabs' and the view bar's answer.
-//
-// Presentation only: the field's text is the host's filter, edits and tab
-// switches go out as signals, and the two functions are how the host hands
-// focus back in.
+// Notebook tabs, search and the application menu.
 Item {
   id: root
 
-  // The host's filter, live: the clear button and the keycap trade places
-  // on it, and it survives the host rebuilding its rows under the field.
+  // Search dims tabs with no matches.
   property string filterText: ""
+  property var shortcutHandler: null
+  readonly property bool searchFocused: search.searchFocused
+  function focusSearch() { search.focusSearch() }
+  function setSearchText(text) { search.setSearchText(text) }
   // The binder's tabs, passed straight through to the strip.
   property var sections: []
   property var matchCounts: ({})
@@ -32,34 +27,31 @@ Item {
   property color accent: Color.accent
   property string fontFamily: Style.font.menuFamily
   property int tabFontSize: Style.font.bodySmall
-  // (KeyEvent) -> bool, the host's shortcuts — run before the field's own
-  // key handling, so ctrl+n in the search still makes a note.
-  property var shortcutHandler: null
   // The bar sits flush against the top of whatever hosts it. In the overlay
   // that host is a rounded card whose border is painted under the content,
   // so the bar's top corners must curve with it or they square it off.
   property real cornerRadius: 0
 
+  signal sectionActivated(string key)
   signal filterEdited(string text)
   signal clearRequested()
-  // Up/down in the field walk the note list without leaving it.
   signal moveRequested(int delta)
-  // Return or Tab: the search has done its job, the editor takes over.
   signal acceptRequested()
-  signal sectionActivated(string key)
   signal settingsRequested()
   signal keysRequested()
   signal detachToggled()
 
-  readonly property bool searchFocused: searchField.activeFocus
-  function focusSearch() { searchField.forceActiveFocus(); searchField.selectAll() }
-  function setSearchText(text) { searchField.text = text }
+  height: tabStrip.implicitHeight + tabStrip.verticalInset * 2
 
-  height: Style.space(44)
+  // Match the mockup's darker tab strip while retaining the theme's hue.
+  // The background and overflow fades share this fill.
+  readonly property color fill: Qt.darker(root.background, 1.12)
 
-  // The bar's own fill, named once: the background paints it and the tab
-  // strip's overflow fades fade into it.
-  readonly property color fill: Qt.tint(root.background, Util.alpha(root.foreground, 0.015))
+  ChromePopupStyle {
+    id: popupStyle
+    background: root.background
+    foreground: root.foreground
+  }
 
   Rectangle {
     anchors.fill: parent
@@ -78,136 +70,50 @@ Item {
   Item {
     id: inner
     anchors.fill: parent
-    anchors.leftMargin: Style.spacing.lg
-    anchors.rightMargin: Style.spacing.lg
+    anchors.leftMargin: tabStrip.verticalInset
+    anchors.rightMargin: tabStrip.horizontalPadding
 
-    // The search, just before the window actions — the tabs own the left of
-    // the bar. It names its own shortcut: a keycap in the field where the
-    // clear button will stand once there is something to clear, so the right
-    // edge always says the one thing you can do.
-    //
-    // Gone while a page is up: it filters the notes, and the notes are not
-    // what is on screen then. A field that took typing and showed nothing
-    // for it would be worse than an absent one.
-    TextField {
-      id: searchField
-      visible: !root.pageOpen
-      anchors.right: menuButton.left
-      anchors.rightMargin: Style.spacing.lg
-      anchors.verticalCenter: parent.verticalCenter
-      // On a narrow window the field gives way first — down to where typing
-      // is still comfortable — and the strip keeps room enough to scroll,
-      // so nothing ever runs under anything.
-      width: Math.max(Style.space(140),
-                      Math.min(Style.space(300),
-                               menuButton.x - Style.spacing.lg * 2 - Style.space(160)))
-      placeholderText: "Search notes…"
-      foreground: root.foreground
-      accent: root.accent
-      font.family: root.fontFamily
-      verticalPadding: Style.spacing.sm
-      onTextEdited: root.filterEdited(text)
-      rightPadding: root.filterText.length > 0
-        ? clearSearchButton.width + Style.spacing.xs
-        : searchKeycap.width + (searchField.height - searchKeycap.height) / 2 + Style.spacing.xs
-      leftPadding: searchGlyph.width + Style.spacing.xxl + Style.spacing.xs
-
-      Rectangle {
-        id: searchKeycap
-        visible: root.filterText.length === 0
-        anchors.right: parent.right
-        // The same air to the right edge as above and below it, so the
-        // keycap sits centered in the field's corner.
-        anchors.rightMargin: (searchField.height - height) / 2
-        anchors.verticalCenter: parent.verticalCenter
-        width: searchKeycapText.width + Style.spacing.sm * 2
-        height: searchKeycapText.height + Style.spacing.xxs * 2
-        // A square theme keeps its corners; a round one is capped where
-        // a keycap stops looking like a key.
-        radius: Math.min(Style.cornerRadius, height / 3)
-        color: Util.alpha(root.foreground, 0.06)
-        border.width: 1
-        border.color: Util.alpha(root.foreground, 0.22)
-
-        Text {
-          id: searchKeycapText
-          textFormat: Text.PlainText
-          anchors.centerIn: parent
-          text: "ctrl+k"
-          color: Util.alpha(root.foreground, 0.6)
-          font.family: root.fontFamily
-          font.pixelSize: Style.font.caption
-        }
-      }
-
-      // The magnifier says what the field is for, and stays while you
-      // type — dimmed the standard way, a fade toward any background.
-      Text {
-        id: searchGlyph
-        textFormat: Text.PlainText
-        anchors.left: parent.left
-        // In step with the taller field: the magnifier keeps its
-        // distance from the rounded edge (leftPadding above follows).
-        anchors.leftMargin: Style.spacing.xxl
-        anchors.verticalCenter: parent.verticalCenter
-        text: "󰍉"
-        color: Util.alpha(root.foreground, 0.55)
-        font.family: Style.fontFamily
-        font.pixelSize: Style.font.iconSmall
-      }
-
-      Button {
-        id: clearSearchButton
-        visible: root.filterText.length > 0
-        anchors.right: parent.right
-        anchors.rightMargin: Style.spacing.xxs
-        anchors.verticalCenter: parent.verticalCenter
-        iconText: "󰅖"
-        tooltipText: "Clear the search (esc)"
-        foreground: root.foreground
-        accent: root.accent
-        iconSize: Style.font.iconSmall
-        horizontalPadding: Style.spacing.xs
-        verticalPadding: Style.spacing.xxs
-        onClicked: root.clearRequested()
-      }
-
-      Keys.priority: Keys.BeforeItem
-      Keys.onPressed: function(event) {
-        var action = KeyBindings.match(event, "search")
-        if (action === "nextSearch") {
-          root.moveRequested(1)
-          event.accepted = true
-        } else if (action === "previousSearch") {
-          root.moveRequested(-1)
-          event.accepted = true
-        } else if (action === "acceptSearch") {
-          root.acceptRequested()
-          event.accepted = true
-        } else if (root.shortcutHandler && root.shortcutHandler(event)) {
-          event.accepted = true
-        }
-      }
-    }
-
-    // The strip takes whatever the search leaves it, and all of it once the
-    // search steps aside — the tabs are the way back out of any page, so
-    // they must not shrink to make room for a field that is gone.
     TabStrip {
+      id: tabStrip
+      objectName: "notebookTabs"
       anchors.left: parent.left
-      anchors.right: searchField.visible ? searchField.left : menuButton.left
-      anchors.rightMargin: Style.spacing.lg
+      anchors.right: search.visible ? search.left : menuButton.left
+      anchors.rightMargin: horizontalPadding
       anchors.verticalCenter: parent.verticalCenter
-      height: Style.spacing.controlHeight
+      anchors.alignWhenCentered: false
+      height: implicitHeight
       sections: root.sections
       matchCounts: root.matchCounts
       activeKey: root.activeKey
       filtering: root.filterText.length > 0
       background: root.fill
+      activeBackground: Qt.tint(root.background, Util.alpha(root.foreground, 0.07))
       foreground: root.foreground
       fontFamily: root.fontFamily
       fontSize: root.tabFontSize
       onActivated: function(key) { root.sectionActivated(key) }
+    }
+
+    NoteSearch {
+      id: search
+      objectName: "noteSearch"
+      visible: !root.pageOpen
+      anchors.right: menuButton.left
+      anchors.rightMargin: Style.spacing.lg
+      anchors.verticalCenter: parent.verticalCenter
+      anchors.alignWhenCentered: false
+      width: Math.min(Style.space(220), Math.max(Style.space(140), root.width * 0.24))
+      height: implicitHeight
+      filterText: root.filterText
+      background: root.background
+      foreground: root.foreground
+      accent: root.accent
+      fontFamily: root.fontFamily
+      shortcutHandler: root.shortcutHandler
+      onFilterEdited: function(text) { root.filterEdited(text) }
+      onClearRequested: root.clearRequested()
+      onMoveRequested: function(delta) { root.moveRequested(delta) }
+      onAcceptRequested: root.acceptRequested()
     }
 
     // Everything you do to note-note rather than to the note in front of you
@@ -217,8 +123,10 @@ Item {
     // name; the menu spends none until it is asked.
     Button {
       id: menuButton
+      objectName: "applicationMenu"
       anchors.right: parent.right
       anchors.verticalCenter: parent.verticalCenter
+      anchors.alignWhenCentered: false
       // A tooltip under an open menu is one label too many, and it would
       // stand over the very rows it describes.
       tooltipText: menu.opened ? "" : "Detach the window, settings, key bindings"
@@ -266,11 +174,12 @@ Item {
       Text {
         id: menuGlyph
         anchors.centerIn: parent
+        anchors.alignWhenCentered: false
         anchors.horizontalCenterOffset: implicitWidth / 2
           - (menuMetrics.tightBoundingRect.x + menuMetrics.tightBoundingRect.width / 2)
         anchors.verticalCenterOffset: implicitHeight / 2
           - (baselineOffset + menuMetrics.tightBoundingRect.y + menuMetrics.tightBoundingRect.height / 2)
-        text: "󰍜"
+        text: "󰇘"
         font.family: Style.fontFamily
         font.pixelSize: menuMetrics.font.pixelSize
         renderType: Text.NativeRendering
@@ -295,21 +204,9 @@ Item {
         // pixels further right, and a menu growing that way would run off it.
         x: menuButton.width - width
         y: menuButton.height + Style.spacing.xs
-        readonly property var borderSpec: Border.localOrSurfaceSpec("popups", "border", Color.popups.border, Color.popups.border, Style.normalBorderWidth)
-
-        // Three radii that have to agree, or the menu reads as a lozenge with
-        // pills inside it. The card is held back from the theme's full
-        // rounding, and a row's corner is the card's own less the padding
-        // between them — the standard nesting — then capped short of the
-        // point where a row this short would round into a pill.
-        readonly property real inset: Style.spacing.xs
-        readonly property real cardRadius: Math.min(Style.cornerRadius, Style.space(10))
-        readonly property real rowHeight: Style.spacing.popupRowHeight
-        readonly property real rowRadius: Math.max(0, Math.min(cardRadius - inset, rowHeight / 4))
-
         readonly property real iconWidth: Math.ceil(Style.font.icon * 1.2)
-        readonly property real rowWidth: Style.spacing.controlPaddingX * 2 + iconWidth
-          + Style.spacing.md + Math.ceil(widestLabel.width)
+        readonly property real rowWidth: popupStyle.horizontalPadding * 2 + iconWidth
+          + Style.spacing.controlGap + Math.ceil(widestLabel.width)
         // Detaching first, as the one reached for often; the settings page
         // after it.
         readonly property var rows: [
@@ -324,15 +221,11 @@ Item {
             label: "Key bindings" }
         ]
 
-        padding: menu.inset
-        leftPadding: Border.left(borderSpec) + menu.inset
-        rightPadding: Border.right(borderSpec) + menu.inset
-        topPadding: Border.top(borderSpec) + menu.inset
-        bottomPadding: Border.bottom(borderSpec) + menu.inset
+        padding: popupStyle.padding + Border.left(popupStyle.borderSpec)
         background: BorderSurface {
-          color: Color.popups.background
-          borderSpec: menu.borderSpec
-          radius: menu.cardRadius
+          color: popupStyle.fill
+          borderSpec: popupStyle.borderSpec
+          radius: popupStyle.radius
         }
         contentItem: Column {
           // Flush, not spaced: a gap between rows makes each read as its own
@@ -345,22 +238,22 @@ Item {
               id: menuRow
               required property var modelData
               width: menu.rowWidth
-              height: menu.rowHeight
-              radius: menu.rowRadius
-              color: rowMouse.containsMouse ? Style.hoverFillFor(Color.popups.text, root.accent) : "transparent"
+              height: popupStyle.rowHeight
+              radius: popupStyle.rowRadius
+              color: rowMouse.containsMouse ? Style.hoverFillFor(root.foreground, root.accent) : "transparent"
 
               // The row's ink, named once: the glyph and the label are one
               // thing lighting up, not two that agree by accident. The glyph
               // carries it a shade lighter — it labels the row, the word is
               // the row.
               readonly property color ink: rowMouse.containsMouse
-                ? Style.hoverStateColor(Color.popups.text, root.accent) : Color.popups.text
+                ? Style.hoverStateColor(root.foreground, root.accent) : root.foreground
 
               Text {
                 id: rowIcon
                 textFormat: Text.PlainText
                 anchors.left: parent.left
-                anchors.leftMargin: Style.spacing.controlPaddingX
+                anchors.leftMargin: popupStyle.horizontalPadding
                 anchors.verticalCenter: parent.verticalCenter
                 width: menu.iconWidth
                 horizontalAlignment: Text.AlignHCenter
@@ -374,7 +267,7 @@ Item {
                 id: rowLabel
                 textFormat: Text.PlainText
                 anchors.left: rowIcon.right
-                anchors.leftMargin: Style.spacing.md
+                anchors.leftMargin: Style.spacing.controlGap
                 anchors.verticalCenter: parent.verticalCenter
                 text: menuRow.modelData.label
                 color: menuRow.ink

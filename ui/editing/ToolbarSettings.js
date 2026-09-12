@@ -4,6 +4,21 @@
 // as direct buttons; placement belongs to settings, never to a tool file.
 function defaults() {
   return [
+    ["heading"],
+    ["bold", "italic", "underline", "strikeout"],
+    ["ul", "ol", "todo", "outdent", "indent"],
+    ["quote", "codeblock", "table", "link"],
+    [{ dropdown: "insert", items: [
+      "textColor", "highlight", "code",
+      { dropdown: "insertMonth", items: ["currentMonth", "nextMonth", "customMonth"] },
+      "rule", "addRow", "delRow", "addCol", "delCol"
+    ] }]
+  ]
+}
+
+// Upgrade only the uncustomized previous layout. User arrangements are retained.
+function previousDefaults() {
+  return [
     ["bold", "italic", "underline", "strikeout"],
     ["textColor", "highlight", "code", "heading"],
     ["ul", "ol", "todo", "outdent", "indent"],
@@ -73,7 +88,7 @@ function validateConfig(config) {
 function editorDefaults(settings) {
   var result = settings && typeof settings === "object" && !Array.isArray(settings)
     ? Object.assign({}, settings) : {}
-  if (validate(result.toolbar)) {
+  if (validate(result.toolbar) || JSON.stringify(result.toolbar) === JSON.stringify(previousDefaults())) {
     result.toolbar = defaults()
   }
   return result

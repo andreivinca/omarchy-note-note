@@ -2,12 +2,8 @@ import QtQuick
 import QtQml.Models
 import qs.Commons
 import qs.Ui
-import "TabColors.js" as TabColors
 
-// The left-hand navigation: the open tab's note tree. The tabs themselves
-// live across the title bar now (TabStrip.qml); what remains here keeps the
-// provider's colour as a restrained surface tint and selection accent, so
-// note titles remain the visual focus.
+// The active notebook: header, grouped previews or provider tree, and actions.
 //
 // Model rows carry { kind, notebook, path, title, preview }:
 //   kind "note"        a note (fixed: true → not draggable)
@@ -40,8 +36,18 @@ Item {
   // panel's label.
   property var sections: []
   property string activeKey: ""
-  // Only a provider that can make notebooks offers the row that makes them.
-  property bool canCreateNotebook: false
+  property real headerHeight: Style.space(45)
+  property real headerContentHeight: headerHeight - Style.spacing.hairline
+  property color background: Color.menu.background
+  readonly property bool hasTree: root.model.some(function(row) { return row.kind === "tree" })
+  readonly property int noteCount: {
+    for (var i = 0; i < root.sections.length; i++) {
+      if (root.sections[i].key === root.activeKey) {
+        return root.sections[i].count || 0
+      }
+    }
+    return 0
+  }
   readonly property string activeName: {
     for (var i = 0; i < root.sections.length; i++) {
       if (root.sections[i].key === root.activeKey) {
@@ -50,20 +56,10 @@ Item {
     }
     return ""
   }
-  // The open tab's colour, resolved the way the strip resolves it, so the
-  // page wash below and the tab above cannot disagree.
-  readonly property color activeBase: {
-    for (var i = 0; i < root.sections.length; i++) {
-      if (root.sections[i].key === root.activeKey) {
-        return TabColors.baseFor(root.sections[i].color || "", root.sections[i].name || "")
-      }
-    }
-    return Color.menu.background
-  }
+  readonly property color activeBase: root.accent
   property color foreground: Color.menu.text
   property color accent: Color.accent
-  // The accent written as ink: the theme's text pulled toward the accent, the
-  // same trick as a tab's label (see TabColors.inkAlpha). The accent itself is
+  // The accent written as ink: the theme's text pulled toward its accent. It
   // the theme's to choose and may sit anywhere; starting from the foreground
   // is what guarantees it reads on that theme's background — a dark theme's
   // white becomes a pale cast of it, a light theme's black a deep one. Never
@@ -81,7 +77,7 @@ Item {
   signal newRequested(string target)
   signal treeToggled(string path)
   signal actionRequested(string id)
-  signal newNotebookRequested(string name)
+  signal footerActionRequested(var action, string value)
   signal deleteRequested(string path)
   // `paths` is the notebook's notes in the order the drag left them on
   // screen — the model has not heard about the moves yet (see visualModel).
@@ -91,24 +87,16 @@ Item {
   // sits inside the slot with this much between it and its neighbours, so
   // the gap reads the same whether or not a row is lit.
   readonly property int rowGap: Style.spacing.xs
-  readonly property int rowHeight: Style.spacing.controlHeight + rowGap
+  readonly property int rowHeight: Math.max(Style.space(52), root.noteFontSize * 2 + Style.space(20)) + rowGap
   // The page's own margin. The rows sit inside it, so a title never starts on
   // the panel's edge and the list has air above and below it.
-  readonly property real pagePadding: Style.spacing.lg
-  readonly property real textInset: Style.spacing.md
+  readonly property real pagePadding: Style.spacing.sm
+  readonly property real textInset: Style.spacing.lg
   // Rows draw as rounded pills; the search panel's rows measure the same way.
   readonly property real rowRadius: Math.min(Style.cornerRadius, Style.space(6))
 
-  // The panel carries a restrained wash of the open source's colour — a shade
-  // over the theme's background rather than a surface, so the theme's own text
-  // goes on it unchanged and nothing here has to know whether the theme is
-  // dark or light. The selection fill is the same wash said once more, one
-  // step deeper.
-  readonly property real pageWashAlpha: 0.075
-  readonly property real selectionWashAlpha: 0.14
-  readonly property color page: Qt.tint(Color.menu.background,
-                                        Util.alpha(root.activeBase, pageWashAlpha))
-  readonly property color selectionFill: Qt.tint(page, Util.alpha(root.activeBase, selectionWashAlpha))
+  readonly property color page: Qt.tint(root.background, Util.alpha(root.foreground, 0.018))
+  readonly property color selectionFill: Qt.tint(page, Util.alpha(root.accent, 0.22))
 
   // Whichever list is on screen: the search panel replaces the main list
   // while a filter is on, and a keyboard move must scroll the one visible.
@@ -146,8 +134,35 @@ Item {
     return paths
   }
 
-  function startNewNotebook() {
-    newNotebookRow.startEditing()
+  function activateFooterAction(provider, path) {
+    for (var i = 0; i < footerButtons.count; i++) {
+      var button = footerButtons.itemAt(i)
+      if (button.modelData.provider === provider && button.modelData.path === path) {
+        if (button.editable) {
+          button.startEditing()
+        } else {
+          button.clicked()
+        }
+        return true
+      }
+    }
+    return false
+  }
+
+  // Different font sizes share the toolbar's center by their visible letters,
+  // independent of baseline spacing or the header's bottom divider.
+  component HeaderLabel: Text {
+    id: label
+    readonly property rect inkBounds: metrics.tightBoundingRect(
+      metrics.elidedText(text, elide, width))
+    y: (root.headerContentHeight - inkBounds.height) / 2 - baselineOffset - inkBounds.y
+    textFormat: Text.PlainText
+    font.family: root.fontFamily
+
+    FontMetrics {
+      id: metrics
+      font: label.font
+    }
   }
 
   Item {
@@ -164,10 +179,46 @@ Item {
         color: panel.fill
       }
 
+    Rectangle {
+      id: notebookHeader
+      width: parent.width
+      height: root.headerHeight
+      color: Qt.tint(root.background, Util.alpha(root.foreground, 0.07))
+      HeaderLabel {
+        id: notebookName
+        objectName: "notebookHeaderTitle"
+        anchors.left: parent.left
+        anchors.leftMargin: root.pagePadding + root.textInset
+        anchors.right: countLabel.left
+        anchors.rightMargin: Style.spacing.sm
+        text: root.activeName || "Notes"
+        color: root.foreground
+        font.pixelSize: root.noteFontSize + 1
+        font.bold: true
+        elide: Text.ElideRight
+      }
+      HeaderLabel {
+        id: countLabel
+        objectName: "notebookHeaderCount"
+        anchors.right: parent.right
+        anchors.rightMargin: Style.spacing.lg
+        text: root.noteCount + (root.noteCount === 1 ? " note" : " notes")
+        color: Util.alpha(root.foreground, 0.45)
+        font.pixelSize: Style.font.bodySmall
+      }
+      Rectangle {
+        anchors.bottom: parent.bottom
+        width: parent.width
+        height: Style.spacing.hairline
+        color: Util.alpha(root.foreground, 0.1)
+      }
+    }
+
     Item {
       id: contentArea
       anchors.fill: parent
       anchors.margins: root.pagePadding
+      anchors.topMargin: root.headerHeight + root.pagePadding
 
       // Search and the note tree share the area above the fixed footer.
       SearchResults {
@@ -231,17 +282,27 @@ Item {
             readonly property int indent: (modelData.level || 0)
               * (Style.font.icon + Style.space(2) + Style.spacing.md - Style.spacing.sm)
             readonly property bool draggable: isNote && !modelData.fixed
+            readonly property string sectionLabel: {
+              // A retiring delegate can still have its old index while a
+              // shorter provider snapshot is being installed.
+              var previous = index > 0 ? root.model[index - 1] : null
+              return modelData.group && (!previous || previous.group !== modelData.group) ? modelData.group : ""
+            }
+            readonly property real sectionHeight: sectionLabel ? Style.space(34) : 0
+            readonly property real itemHeight: isNote ? root.rowHeight : Style.spacing.controlHeight + root.rowGap
             // Where this row sits on screen right now — diverges from `index`
             // while a drag is shuffling the visual order.
             readonly property int visualIndex: slot.DelegateModel.itemsIndex
             width: listView.width
-            height: root.rowHeight
+            height: isNew && !root.hasTree ? 0 : itemHeight + sectionHeight
+            visible: height > 0
 
             DropArea {
               anchors.fill: parent
               enabled: !root.filtering && slot.draggable
               onEntered: function(drag) {
-                if (drag.source.modelData.notebook !== slot.modelData.notebook) {
+                if (drag.source.modelData.notebook !== slot.modelData.notebook
+                    || drag.source.modelData.group !== slot.modelData.group) {
                   return
                 }
                 if (drag.source.visualIndex !== slot.visualIndex) {
@@ -250,17 +311,30 @@ Item {
               }
             }
 
+            Text {
+              visible: slot.sectionLabel.length > 0
+              x: root.textInset
+              y: Style.space(12)
+              text: slot.sectionLabel
+              color: Util.alpha(root.foreground, 0.45)
+              font.family: root.fontFamily
+              font.pixelSize: Style.font.bodySmall
+              font.bold: true
+            }
+
             Rectangle {
               id: row
+              objectName: "noteRow-" + slot.modelData.path
               x: Style.spacing.xxs
               width: slot.width - Style.spacing.xxs * 2
-              height: root.rowHeight - root.rowGap
+              height: slot.itemHeight - root.rowGap
               anchors.verticalCenter: parent.verticalCenter
+              anchors.verticalCenterOffset: slot.sectionHeight / 2
               radius: root.rowRadius
               readonly property bool current: slot.isNote
                 ? slot.modelData.path === root.currentPath
                 : slot.isTree && slot.modelData.path === root.treeCursor
-              color: current || rowHover.hovered ? Style.hoverFill : "transparent"
+              color: current ? root.selectionFill : (rowHover.hovered ? Util.alpha(root.foreground, 0.05) : "transparent")
               // Action rows ("New note…", sign in/out, settings) are dimmed so
               // notes stand out from the things you can do; hover lifts them.
               // Dimmed, not faint: opacity fades toward whichever background
@@ -269,45 +343,48 @@ Item {
 
               HoverHandler { id: rowHover }
 
+              NoteSummary {
+                visible: slot.isNote
+                anchors.left: parent.left
+                anchors.right: parent.right
+                anchors.leftMargin: root.textInset + slot.indent
+                anchors.rightMargin: Style.spacing.sm + (closeButton.opacity > 0 ? closeButton.width : 0)
+                anchors.verticalCenter: parent.verticalCenter
+                title: root.titleFor(slot.modelData.title, slot.modelData.preview)
+                preview: slot.modelData.preview || ""
+                modified: slot.modelData.modified || ""
+                foreground: root.foreground
+                fontFamily: root.fontFamily
+                fontSize: root.noteFontSize
+              }
+
               Row {
-                anchors.fill: parent
+                visible: !slot.isNote
+                anchors.left: parent.left
+                anchors.right: parent.right
                 anchors.leftMargin: root.textInset + slot.indent
                 anchors.rightMargin: Style.spacing.sm
+                anchors.verticalCenter: parent.verticalCenter
                 spacing: Style.spacing.md
-
                 Text {
-                  textFormat: Text.PlainText
-                  anchors.verticalCenter: parent.verticalCenter
-                  width: Style.font.icon + Style.space(2)
                   text: slot.isNew ? "+" : (slot.isAction ? (slot.modelData.icon || "󰊻")
-                    : (slot.isTree ? (slot.modelData.expanded ? "󰅀" : "󰅂") : "󰎞"))
-                  // Every note carries the same glyph, so it says nothing a
-                  // title does not — kept for the column it holds, dimmed so
-                  // the eye goes to the words.
-                  color: slot.isNew || slot.isAction ? root.accentInk
-                    : (slot.isTree ? root.accentInk
-                    : Util.alpha(root.foreground, 0.4))
+                    : (slot.modelData.expanded ? "󰅀" : "󰅂"))
+                  color: root.accentInk
                   font.family: Style.fontFamily
-                  font.pixelSize: (slot.isNew || slot.isAction) ? Style.font.iconSmall : Style.font.icon
-                  horizontalAlignment: Text.AlignHCenter
+                  font.pixelSize: Style.font.iconSmall
                 }
-
                 Text {
+                  width: Math.max(0, parent.width - Style.font.iconSmall - parent.spacing)
+                  text: slot.isNew ? "New note…" : slot.modelData.title
                   textFormat: Text.PlainText
-                  anchors.verticalCenter: parent.verticalCenter
-                  width: parent.width - Style.font.icon - Style.space(2) - Style.spacing.md
-                    - (closeButton.visible ? closeButton.width + Style.spacing.xs : 0)
-                  text: slot.isNew ? "New note…"
-                    : (slot.isAction || slot.isTree ? slot.modelData.title : root.titleFor(slot.modelData.title, slot.modelData.preview))
-                  color: slot.isTree && !row.current ? root.accentInk : root.foreground
-                  font.bold: slot.isTree && (slot.modelData.level || 0) === 0
+                  color: root.foreground
+                  font.bold: slot.isTree
                   font.family: root.fontFamily
-                  // Actions ("New note…", sign in/out, settings) read as chrome,
-                  // not as notes: dimmed above, and a size smaller here.
-                  font.pixelSize: (slot.isNew || slot.isAction) ? Style.font.bodySmall : root.noteFontSize
+                  font.pixelSize: slot.isTree ? root.noteFontSize : Style.font.bodySmall
                   elide: Text.ElideRight
                 }
               }
+
 
               MouseArea {
                 id: dragArea
@@ -336,8 +413,7 @@ Item {
                 }
               }
 
-              // Faint until the row is current or under the cursor, like
-              // Toolroll's pin; never hidden, so it stays clickable.
+              // Available on the current or hovered row, without shifting it.
               Button {
                 id: closeButton
                 anchors.right: parent.right
@@ -420,48 +496,33 @@ Item {
         Text {
           textFormat: Text.PlainText
           anchors.centerIn: parent
-          visible: listView.count === 0
-          text: root.filtering ? "No note matches" : "No notebooks yet"
+          visible: !root.model.some(function(item) { return item.kind === "note" || item.kind === "tree" || item.kind === "action" })
+          text: root.activeName ? "No notes yet" : "No notebooks yet"
           color: Util.alpha(root.foreground, 0.65)
           font.family: root.fontFamily
           font.pixelSize: Style.font.body
         }
       }
 
-      // Notebook creation and provider actions use one footer and row component.
+      // Providers supply every footer action; all share one row component.
       Column {
         id: footer
         anchors.left: parent.left
         anchors.right: parent.right
         anchors.bottom: parent.bottom
 
-        SidebarAction {
-          id: newNotebookRow
-          visible: root.canCreateNotebook && !root.filtering
-          width: parent.width
-          height: root.rowHeight
-          text: "New notebook…"
-          iconText: editing ? "󰉋" : "+"
-          editable: true
-          placeholderText: "Notebook name"
-          foreground: root.foreground
-          accent: root.accent
-          iconColor: root.accentInk
-          fontFamily: root.fontFamily
-          textInset: root.textInset
-          rowGap: root.rowGap
-          rowRadius: root.rowRadius
-          onSubmitted: function(name) { root.newNotebookRequested(name) }
-        }
-
         Repeater {
+          id: footerButtons
           model: root.footerActions
           delegate: SidebarAction {
             required property var modelData
+            objectName: "footerAction-" + modelData.provider + "-" + modelData.path
             width: footer.width
-            height: root.rowHeight
+            height: Style.space(32)
             text: modelData.title
-            iconText: modelData.icon || "󰊻"
+            iconText: modelData.icon || ""
+            editable: !!modelData.inputPlaceholder
+            placeholderText: modelData.inputPlaceholder || ""
             foreground: root.foreground
             accent: root.accent
             iconColor: root.accentInk
@@ -469,7 +530,8 @@ Item {
             textInset: root.textInset
             rowGap: root.rowGap
             rowRadius: root.rowRadius
-            onClicked: root.actionRequested(modelData.path)
+            onClicked: root.footerActionRequested(modelData, "")
+            onSubmitted: function(value) { root.footerActionRequested(modelData, value) }
           }
         }
       }

@@ -5,6 +5,7 @@ import "../Dialect.js" as Dialect
 Tool {
   id: tool
   toolId: "italic"
+  checked: editor.italic
   label: "Italic"
   icon: "󰉷"
   shortcutKey: Qt.Key_I

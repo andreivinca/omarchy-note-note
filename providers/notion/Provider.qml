@@ -86,19 +86,22 @@ Item {
 
   function rebuild() {
     var rows = []
+    var footerActions = []
     if (!root.configured) {
       rows.push({ kind: "action", path: "setup", title: "Set up…", icon: "󰒓" })
     } else {
       for (var i = 0; i < root.pages.length; i++) {
-        rows.push({ kind: "note", path: pathOf(root.pages[i].id), title: root.pages[i].title, preview: "", fixed: true, version: root.pages[i].edited || "" })
+        rows.push({ kind: "note", path: pathOf(root.pages[i].id), title: root.pages[i].title, preview: "", fixed: true, version: root.pages[i].edited || "", modified: root.pages[i].edited || "" })
       }
-      rows.push({ kind: "new", path: "new" })
-      rows.push({ kind: "action", path: "refresh", title: "Refresh", icon: "󰑐" })
-      rows.push({ kind: "action", path: "settings", title: "Settings…" + (root.workspace ? " (" + root.workspace + ")" : ""), icon: "󰒓" })
+      if (root.pages.length > 0) {
+        footerActions.push({ path: "newNote", title: "New Note", icon: "󰐕", shortcut: "newNote" })
+      }
+      footerActions.push({ path: "refresh", title: "Refresh", icon: "󰑐" })
+      footerActions.push({ path: "settings", title: "Settings…" + (root.workspace ? " (" + root.workspace + ")" : ""), icon: "󰒓" })
     }
     // Notion is black and white, which has no hue to soften; a warm
     // neutral is the honest answer.
-    root.sections = [{ key: "notion", name: "Notion", color: "#B8B0A8", rows: rows }]
+    root.sections = [{ key: "notion", name: "Notion", color: "#B8B0A8", rows: rows, footerActions: footerActions }]
     root.updated()
   }
 
@@ -108,6 +111,7 @@ Item {
   // would be fetching every page's blocks on every query. The titles are
   // already in the listing, where the host matches them itself.
   function crumb(path) { return root.workspace ? "Notion › " + root.workspace : "Notion" }
+  function storageLabel(path) { return "synced online" }
   // New pages go under the page you are on; otherwise under the first page
   // (the API cannot create top-level pages).
   function createTargetFor(path) {
@@ -135,7 +139,9 @@ Item {
   }
 
   function action(id) {
-    if (id === "setup" || id === "settings") {
+    if (id === "newNote" && root.configured) {
+      root.host.newNote(root.id, createTargetFor(root.host.currentPath))
+    } else if (id === "setup" || id === "settings") {
       root.viewRequested(root.configured ? "Notion — settings" : "Set up Notion", setupView, {})
     } else if (id === "refresh") {
       root.listPages(true)

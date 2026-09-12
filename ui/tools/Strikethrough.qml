@@ -5,6 +5,7 @@ import "../Dialect.js" as Dialect
 Tool {
   id: tool
   toolId: "strikeout"
+  checked: editor.strikeout
   label: "Strikethrough"
   icon: "󰊁"
   shortcutKey: Qt.Key_S

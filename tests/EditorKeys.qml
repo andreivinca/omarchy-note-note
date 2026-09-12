@@ -1,6 +1,7 @@
 import QtQuick
 import QtTest
 import Quickshell
+import qs.Commons
 import "../ui" as Ui
 import "../ui/editing/ToolbarSettings.js" as ToolbarSettings
 import "../ui/editing/Calendar.js" as Calendar
@@ -58,6 +59,76 @@ Window {
     hoveredLink: editor.hoveredLink
   }
   TestCase { id: keys; name: "editor keys"; when: false }
+
+  Ui.NoteList {
+    id: notebookPreview
+    anchors.fill: parent
+    visible: false
+    activeKey: "custom/test"
+    sections: [{ key: "custom/test", name: "Test", count: 2 }]
+    footerActions: [
+      { provider: "custom", section: "test", path: "create", title: "New Note", icon: "+" },
+      { provider: "custom", section: "test", path: "notebook", title: "New notebook", icon: "󰉗", inputPlaceholder: "Notebook name" },
+      { provider: "custom", section: "test", path: "logout", title: "Sign out", icon: "󰍃" }
+    ]
+    property int created: 0
+    property string notebook: ""
+    onNewRequested: created++
+    onFooterActionRequested: function(action, value) {
+      if (action.path === "create") {
+        created++
+      } else if (action.path === "notebook") {
+        notebook = value
+      }
+    }
+  }
+
+  function notebookChrome() {
+    editor.visible = false
+    viewBar.visible = false
+    notebookPreview.visible = true
+    notebookPreview.model = [
+      { kind: "note", path: "a", title: "Older note", group: "Older" },
+      { kind: "note", path: "b", title: "Recent note", group: "Today", modified: Date.now() }
+    ]
+    keys.waitForRendering(notebookPreview)
+    keys.wait(50)
+    var newNote = keys.findChild(notebookPreview, "footerAction-custom-create")
+    var newNotebook = keys.findChild(notebookPreview, "footerAction-custom-notebook")
+    var signOut = keys.findChild(notebookPreview, "footerAction-custom-logout")
+    require(newNote.width === notebookPreview.width - notebookPreview.pagePadding * 2 && newNote.width === newNotebook.width
+            && newNote.width === signOut.width && newNote.height === newNotebook.height
+            && newNote.height === signOut.height, "footer actions do not share full-width row geometry")
+    require(newNotebook.y === newNote.y + newNote.height && signOut.y === newNotebook.y + newNotebook.height,
+            "footer actions are not stacked vertically")
+    keys.mouseClick(newNote)
+    require(notebookPreview.created === 1, "footer did not request a new note")
+    keys.mouseClick(newNotebook)
+    typeText("Travel")
+    keys.keyClick(Qt.Key_Return)
+    require(notebookPreview.notebook === "Travel", "new notebook field did not accept its name")
+    notebookPreview.filtering = true
+    require(notebookPreview.activateFooterAction("custom", "notebook"), "input action cannot be activated during search")
+    typeText("Cancelled")
+    keys.keyClick(Qt.Key_Escape)
+    require(notebookPreview.notebook === "Travel" && !newNotebook.editing, "Escape submitted a footer input")
+    require(newNote.visible && newNotebook.visible && signOut.visible, "search hid provider footer actions")
+    notebookPreview.filtering = false
+
+    // Repeated shorter snapshots retire delegates while section bindings run.
+    for (var i = 0; i < 5; i++) {
+      notebookPreview.model = [
+        { kind: "note", path: "first", title: "First", group: "Today" },
+        { kind: "note", path: "last", title: "Last", group: "Older" }
+      ]
+      keys.wait(10)
+      notebookPreview.model = notebookPreview.model.slice(0, 1)
+      keys.wait(10)
+      notebookPreview.model = []
+      keys.wait(10)
+    }
+    require(notebookPreview.noteCount === 2, "header lost the provider's complete count")
+  }
 
   QtObject {
     id: mergeProvider
@@ -494,6 +565,48 @@ Window {
     }
   }
 
+  function listRowPositions() {
+    var body = keys.findChild(editor, "noteBody")
+    var text = editor.plainText()
+    var rows = [body.positionToRectangle(0).y]
+    for (var i = 0; i < text.length; i++) {
+      if (text.charAt(i) === "\u2029") {
+        rows.push(body.positionToRectangle(i + 1).y)
+      }
+    }
+    return JSON.stringify(rows)
+  }
+
+  function editNestedList(data) {
+    // NoteSession loads real notes read-only, then enables editing. Keep
+    // that sequence so normalization first runs on the user's keystroke.
+    editor.readOnly = true
+    load(data)
+    editor.readOnly = false
+    var original = editor.documentHtml()
+    var positions = listRowPositions()
+    editor.setCursorPosition(editor.plainText().indexOf(data.word) + 2)
+    keys.keyClick(data.split ? Qt.Key_Return : Qt.Key_X)
+    var edited = editor.documentHtml()
+    require(edited !== original, "keystroke did not edit the note")
+    var editedPositions = listRowPositions()
+    if (!data.split) {
+      require(editedPositions === positions, "typing changed list spacing: " + positions + " -> " + editedPositions)
+    }
+    for (var i = 0; i < 2; i++) {
+      editor.undo()
+      require(editor.documentHtml() === original, "undo did not restore the list and its margins")
+      editor.redo()
+      require(editor.documentHtml() === edited, "redo changed the edited list or its margins")
+    }
+    var saved = read()
+    editor.readOnly = true
+    load({ source: saved })
+    editor.readOnly = false
+    require(listRowPositions() === editedPositions, "saving and reloading changed list spacing")
+    require(read() === saved, "list content changed after reloading")
+  }
+
   function links() {
     var destination = "https://example.com/path?q=notes&lang=en#section"
     load({ source: "Before [Example link](" + destination + ") after\n" })
@@ -771,9 +884,16 @@ Window {
     selectText("Mushrooms")
     var tool = editor.tools.find("textColor")
     var original = savedMarkdown()
-    var button = keys.findChild(editor, "editingTool-textColor")
-    require(button && button.visible, "text color button missing")
+    var button = keys.findChild(editor, "editingTool-insert")
+    require(button && button.visible, "Insert button missing")
+    var insertMenu = Array.from(button.data).find(function(object) {
+      return object.objectName === "editingPopup-insert"
+    })
     keys.mouseClick(button)
+    keys.tryVerify(function() { return insertMenu.opened }, 1000)
+    var colorAction = keys.findChild(insertMenu.contentItem, "editingMenu-textColor")
+    require(colorAction && colorAction.visible, "text color missing from Insert")
+    keys.mouseClick(colorAction)
     keys.tryVerify(function() { return tool.panelOpen }, 1000)
     var holder = keys.findChild(editor, "editingPopupHolder-textColor")
     var popup = Array.from(holder.data).find(function(object) {
@@ -965,7 +1085,7 @@ Window {
       var option = keys.findChild(popup.contentItem, "editingMenu-" + choice.id)
       require(option && option.visible && option.width > 50, "heading option has no usable menu row")
       keys.waitForRendering(option)
-      require(option.font.pixelSize === Math.round(editor.bodyFontSize * choice.scale)
+      require(option.font.pixelSize === Math.round(Style.font.body * choice.scale)
               && option.font.bold === (choice.id !== "p"), "heading preview does not match its style")
       var original = editor.documentHtml()
       keys.mouseClick(option, option.width / 2, option.height / 2)
@@ -1010,12 +1130,12 @@ Window {
     load({ source: "word\n" })
     require(editor.tools.menuTools("insert").map(function(tool) {
       return tool.toolId
-    }).join(",") === "insertMonth,rule", "default Insert menu does not put the month group before the separator")
+    }).join(",") === "textColor,highlight,code,insertMonth,rule", "default Insert menu is missing its formatting and insertion tools")
     require(editor.tools.menuTools("insertMonth").map(function(tool) {
       return tool.toolId
     }).join(",") === "currentMonth,nextMonth,customMonth", "Insert month does not contain the calendar tools in order")
-    require(editor.tools.topLevelTools.length === editor.tools.tools.length - 5,
-            "default layout should keep other tools directly on the toolbar")
+    require(editor.tools.topLevelTools.length === editor.tools.tools.length - 12,
+            "default layout should keep secondary tools inside Insert")
     editor.toolbarLayout = [[{ dropdown: "insert", items: [] }]]
     var insert = keys.findChild(editor, "editingTool-insert")
     require(insert && insert.visible && !insert.enabled, "empty Insert should be visible and disabled")
@@ -1340,6 +1460,12 @@ Window {
     var expected = "Before\n\n" + Calendar.markdown(2024, 1, Qt.locale()) + "\n\nAfter\n"
     keys.tryVerify(function() { return editor.plainText().indexOf("29") >= 0 }, 3000)
     require(savedMarkdown() === expected, "selected month or year was not inserted at the captured position")
+    // A stationary pointer must not hit-test a table layout midway through
+    // Undo while the syntax highlighter reports changed links.
+    var body = keys.findChild(editor, "noteBody")
+    var cell = body.positionToRectangle(editor.plainText().indexOf("29"))
+    keys.mouseMove(body, cell.x + 2, cell.y + cell.height / 2)
+    keys.wait(50)
     editor.undo()
     require(savedMarkdown() === source, "custom month was not one undo step")
     editor.redo()
@@ -1546,6 +1672,7 @@ Window {
       }
     }
     var behavior = [
+      { name: "notebook controls and grouped list refreshes remain usable", run: notebookChrome },
       { name: "Right after inserting blocks leaves an empty line through typing and undo", run: insertedBlockLanding },
       { name: "text color palette applies, resets, saves, undoes and rejects stale contexts", run: textColorTool },
       { name: "tools enforce provider and document permissions on every entry point", run: toolPermissions },
@@ -1574,6 +1701,9 @@ Window {
       } catch (error) {
         test.checked(behavior[j].name, false, error.message)
       } finally {
+        notebookPreview.visible = false
+        editor.visible = true
+        viewBar.visible = true
         editor.toolbarLayout = ToolbarSettings.defaults()
         editor.enabledTools = null
         editor.plain = false
@@ -1780,6 +1910,25 @@ Window {
         test.checked(deletions[d].name, true, "")
       } catch (error) {
         test.checked(deletions[d].name, false, error.message)
+      }
+    }
+    var shopping = "Before\n\n- Coffee beans\n- Oat milk\n  - the barista one\n- Bread\n\nAfter\n"
+    var listEdits = [
+      { name: "typing before a nested list preserves spacing", source: shopping, word: "Before" },
+      { name: "typing in a nested item preserves spacing", source: shopping, word: "barista" },
+      { name: "typing after a nested list preserves spacing", source: shopping, word: "After" },
+      { name: "splitting a nested item preserves canonical spacing", source: shopping, word: "barista", split: true },
+      { name: "splitting the first outer item preserves canonical spacing", source: shopping, word: "Coffee", split: true },
+      { name: "splitting the last outer item preserves canonical spacing", source: shopping, word: "Bread", split: true },
+      { name: "typing preserves spacing when a list ends with deeper items",
+        source: "Before\n\n- parent\n  - child\n    - grandchild\n\nAfter\n", word: "After" }
+    ]
+    for (var l = 0; l < listEdits.length; l++) {
+      try {
+        editNestedList(listEdits[l])
+        test.checked(listEdits[l].name, true, "")
+      } catch (error) {
+        test.checked(listEdits[l].name, false, error.message)
       }
     }
     try {

@@ -97,6 +97,11 @@ Window {
         kindsScanned: QuoteBars.kinds(e.getFormattedText(0, e.length)),
         codeSpacing: codeSpacing()
       }
+      // Imported list spacing must already be canonical, including nested
+      // lists and items separated by continuation paragraphs or code.
+      var loaded = e.getFormattedText(0, e.length)
+      tb.normalizeListMargins()
+      out[key].listMarginsStable = e.getFormattedText(0, e.length) === loaded
     }
     // The image phase reads on a second tick, giving the document's
     // resource loading time to settle before natural sizes are asked for.
@@ -323,6 +328,9 @@ def main():
         elif not code_spacing_ok(result.get("codeSpacing") or {}):
             failures += 1
             print("  FAIL  %-24s code spacing %r" % (name, result.get("codeSpacing")))
+        elif not result.get("listMarginsStable"):
+            failures += 1
+            print("  FAIL  %-24s normalization changed imported list margins" % name)
         elif args.verbose and (native["quote"] or native["code"] or boxes_native):
             print("  ok    %-24s %r %r" % (name, native, boxes_native))
     print("  %d/%d cases" % (len(CASES) - failures, len(CASES)))

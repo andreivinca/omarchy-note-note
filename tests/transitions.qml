@@ -52,18 +52,39 @@ ShellRoot {
       footerActions: [{ path: "logout", title: "Sign out of first" }] }],
       action: function(id) { calls.push("first:" + id) } }
     var second = { id: "second", name: "Second", sections: [{ key: "s", name: "Second", rows: [],
-      footerActions: [{ path: "logout", title: "Sign out of second" }] }],
-      action: function(id) { calls.push("second:" + id) } }
+      footerActions: [{ path: "logout", title: "Sign out of second" },
+                      { path: "rename", title: "Name", inputPlaceholder: "Enter a name" }] }],
+      action: function(id, value, section) {
+        calls.push("second:" + id)
+        if (id === "rename") {
+          calls.push(value + ":" + section)
+        }
+      } }
     app.providers = [first, second]
     app.activeSection = "second/s"
     app.rebuildRows()
     check("host publishes the active provider footer", app.footerActions[0].title === "Sign out of second")
     check("footer clicks reach the active provider despite duplicate action ids",
           app.runAction("logout") && calls.join(",") === "second:logout")
+    var staleAction = app.footerActions[0]
+    app.runFooterAction(app.footerActions[1], "Travel")
+    check("arbitrary provider input actions receive their value and section",
+          calls.slice(-2).join(",") === "second:rename,Travel:s")
+    calls = ["second:logout"]
     app.activeSection = "first/s"
     app.rebuildRows()
     app.runAction("logout")
     check("switching tabs switches footer action ownership", calls.join(",") === "second:logout,first:logout")
+    check("a retired footer cannot invoke a different tab's matching action", !app.runFooterAction(staleAction, ""))
+    var empty = { id: "empty", name: "Empty", sections: [],
+      footerActions: [{ path: "first", title: "First notebook", inputPlaceholder: "Notebook name", shortcut: "newNotebook" }],
+      action: function(id, value) { calls.push(id + ":" + value) } }
+    app.providers = [empty]
+    app.rebuildRows()
+    check("providers without tabs can supply their first creation action",
+          app.footerActions.length === 1 && app.footerActions[0].provider === "empty")
+    app.runFooterAction(app.footerActions[0], "First")
+    check("first-notebook input reaches its owning provider", calls[calls.length - 1] === "first:First")
     app.providers = []
     app.rebuildRows()
     check("removing providers clears footer actions", app.footerActions.length === 0 && !app.runAction("logout"))
@@ -452,6 +473,11 @@ ShellRoot {
     check("removing a dropdown tool returns its members to the toolbar", fallback.toolbar.length === tools.length)
     check("older settings get the full default layout",
           JSON.stringify(ToolbarSettings.editorDefaults().toolbar) === JSON.stringify(ToolbarSettings.defaults()))
+    check("the previous default toolbar upgrades to the new arrangement",
+          JSON.stringify(ToolbarSettings.editorDefaults({ toolbar: ToolbarSettings.previousDefaults() }).toolbar)
+          === JSON.stringify(ToolbarSettings.defaults()))
+    check("a customized previous toolbar stays in its chosen arrangement",
+          JSON.stringify(ToolbarSettings.editorDefaults({ toolbar: layout }).toolbar) === JSON.stringify(layout))
     check("explicit empty layouts and unknown editor settings survive default merging",
           ToolbarSettings.editorDefaults({ toolbar: [], future: 42 }).toolbar.length === 0
           && ToolbarSettings.editorDefaults({ future: 42 }).future === 42)
@@ -470,18 +496,52 @@ ShellRoot {
     check("malformed toolbar defaults preserve unrelated editor settings",
           JSON.stringify(ToolbarSettings.editorDefaults({ toolbar: ["bold"], future: 42 }).toolbar) === JSON.stringify(ToolbarSettings.defaults())
           && ToolbarSettings.editorDefaults({ toolbar: ["bold"], future: 42 }).future === 42)
-    var source = [{ id: "test", canReorder: true, sections: [{ key: "s", name: "Section", rows: [],
-      footerActions: [{ path: "logout", title: "Sign out" }],
+    var source = [{ id: "test", canReorder: true, sections: [{ key: "s", name: "Section", rows: [], groupByDate: false,
+      footerActions: [{ path: "logout", title: "Sign out", inputPlaceholder: "Confirm", shortcut: "custom" }],
       notes: [{ kind: "note", path: "test:A", title: "Hidden note" }] }] }]
     var before = JSON.stringify(source)
     var model = Sidebar.build(source, "test/s", "hidden", {})
     check("sidebar search includes notes inside folded trees", model.rows.length === 1 && model.hits["test/s"] === 1)
     check("sidebar footer survives search without becoming a result", model.footerActions.length === 1 &&
           model.footerActions[0].path === "logout" && model.tabs[0].count === 1)
+    check("sidebar preserves provider action ownership and input metadata",
+          model.footerActions[0].provider === "test" && model.footerActions[0].section === "s"
+          && model.footerActions[0].inputPlaceholder === "Confirm" && model.footerActions[0].shortcut === "custom")
+    check("any provider can turn off date grouping", !model.groupByDate)
+    check("creation capability does not inject hardcoded footer buttons",
+          Sidebar.build([{ id: "custom", canCreate: true, canCreateSection: true,
+            sections: [{ key: "s", rows: [] }] }], "custom/s", "", {}).footerActions.length === 0)
     var logoutSearch = Sidebar.build(source, "test/s", "sign out", {})
     check("footer labels do not count as matching notes", logoutSearch.rows.length === 0 && logoutSearch.hits["test/s"] === 0)
     check("leaving a provider clears its footer", Sidebar.build(source, "other/s", "", {}).footerActions.length === 0)
     check("sidebar builder does not mutate provider input", JSON.stringify(source) === before)
+    var today = new Date(2026, 8, 12, 14, 0).getTime()
+    var flat = [
+      { kind: "note", path: "old", modified: new Date(2026, 7, 1).getTime() },
+      { kind: "note", path: "first", modified: today - 1000 },
+      { kind: "note", path: "second", modified: today },
+      { kind: "note", path: "unknown", modified: "invalid" },
+      { kind: "new", path: "create" }
+    ]
+    var originalFlat = JSON.stringify(flat)
+    var arranged = Sidebar.organize(flat, today)
+    check("date grouping does not change the provider snapshot", JSON.stringify(flat) === originalFlat)
+    check("date groups preserve custom ordering and keep creation after notes",
+          arranged.map(function(item) { return item.path }).join(",") === "first,second,old,unknown,create"
+          && arranged[0].group === "Today" && arranged[2].group === "Older" && arranged[3].group === "Notes")
+    var ungrouped = Sidebar.organize(flat, today, false)
+    check("ungrouped local notes preserve provider order across modification dates",
+          ungrouped === flat
+          && ungrouped.map(function(item) { return item.path }).join(",") === "old,first,second,unknown,create"
+          && ungrouped.every(function(item) { return !item.group })
+          && JSON.stringify(flat) === originalFlat)
+    var hierarchy = [{ kind: "tree", path: "section" }].concat(flat)
+    check("date grouping leaves provider hierarchies intact", Sidebar.organize(hierarchy, today) === hierarchy)
+    check("date groups use local calendar boundaries",
+          Sidebar.dateGroup(new Date(2026, 8, 11, 23, 59).getTime(), today) === "Yesterday"
+          && Sidebar.dateGroup(new Date(2026, 8, 5).getTime(), today) === "Previous 7 Days"
+          && Sidebar.dateGroup(new Date(2026, 8, 4).getTime(), today) === "Previous 30 Days"
+          && Sidebar.timestamp("invalid") === 0)
     check("provider setting order does not cause replacement", Settings.plan(
       { providers: { a: { path: "x", enabled: true } } },
       { providers: { a: { enabled: true, path: "x" } } }, ["a"]).length === 0)
@@ -614,14 +674,37 @@ ShellRoot {
     }
   }
   Component { id: oneNoteFactory; OneNote.Provider {} }
+  Component { id: localFactory; Local.Provider {} }
   Microsoft.Account {
     id: scopeAccount
     scopes: "offline_access User.Read Notes.ReadWrite"
     optionalScopes: "Files.Read"
   }
   function oneNoteCases() {
+    var creations = []
+    var creationHost = {
+      currentPath: "local:/notes/Other/note.md", treeCursor: "",
+      newNote: function(provider, target) { creations.push(provider + ":" + target) },
+      newNotebook: function(name, provider) { creations.push(provider + ":" + name) }
+    }
+    var folders = localFactory.createObject(test, { host: creationHost })
+    folders.rebuild()
+    check("empty local provider supplies its first notebook action",
+          folders.sections.length === 0 && folders.footerActions[0].inputPlaceholder === "Notebook name")
+    folders.notebooks = [{ key: "Work", name: "Work" }, { key: "Other", name: "Other" }]
+    folders.notes = [{ key: "Other", path: creationHost.currentPath, title: "Other note" }]
+    folders.rebuild()
+    folders.action("newNote", "", "Work")
+    folders.action("newNotebook", "Travel", "Work")
+    check("local creation actions retain the active notebook and submitted name",
+          creations.join(",") === "local:section:Work,local:Travel")
+    check("local supplies both footer actions and its grouping policy",
+          folders.sections[0].footerActions.map(function(action) { return action.path }).join(",") === "newNote,newNotebook"
+          && folders.sections[0].groupByDate === false)
+    folders.destroy()
+
     var created = oneNoteFactory.createObject(test, {
-      host: { currentPath: "onenote:page" }, ms: oneNoteAccount
+      host: creationHost, ms: oneNoteAccount
     })
     check("OneNote search waits for inventory during dynamic provider startup",
           created && created.searchStatus("onenote") === "Preparing content search…")
@@ -630,6 +713,30 @@ ShellRoot {
     created.searchInventoryReady = true
     check("OneNote search scope follows the initialized inventory",
           JSON.stringify(created.searchSections("book")) === '["section"]')
+    created.notebookTabs = true
+    created.rebuild()
+    created.action("newsection:other-book")
+    check("OneNote footer section creation targets its own notebook",
+          created.newSectionNotebook === "other-book")
+    check("OneNote publishes section creation with its account footer and no New Note button",
+          created.sections.every(function(section) {
+            return section.footerActions.some(function(action) { return action.path === "newsection:" + section.key })
+                && section.footerActions.some(function(action) { return action.path === "logout" })
+                && !section.footerActions.some(function(action) { return action.path === "newNote" })
+          }))
+    created.expanded = ["section", "other"]
+    created.rebuild()
+    check("OneNote New Note remains inside sections and New section is absent from the tree",
+          created.sections.every(function(section) {
+            return section.rows.some(function(row) { return row.kind === "new" && row.level === 1 })
+                && !section.rows.some(function(row) { return row.path.indexOf("newsection:") === 0 })
+          }))
+    created.notebookTabs = false
+    created.rebuild()
+    check("combined OneNote tabs preserve each notebook's section-creation target",
+          created.sections[0].footerActions.filter(function(action) {
+            return action.path.indexOf("newsection:") === 0
+          }).map(function(action) { return action.path }).sort().join(",") === "newsection:book,newsection:other-book")
     created.destroy()
     oneNote.onSections = [{ id: "section", name: "Section", notebookId: "book", notebook: "Book" }]
     oneNote.pages = [{ id: "page", sectionId: "section", title: "Note" }]

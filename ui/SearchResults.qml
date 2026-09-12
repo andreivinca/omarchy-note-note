@@ -97,23 +97,23 @@ Item {
           anchors.verticalCenter: parent.verticalCenter
           radius: root.rowRadius
           color: hit.current ? root.selectedBackground : (hitHover.hovered ? Style.hoverFill : "transparent")
-          border.width: hit.current ? Style.spacing.hairline : 0
+          border.width: 0
           border.color: Util.alpha(root.selectionAccent, 0.62)
 
           HoverHandler { id: hitHover }
 
-          Text {
-            textFormat: Text.PlainText
+          NoteSummary {
             anchors.left: parent.left
             anchors.right: parent.right
             anchors.verticalCenter: parent.verticalCenter
             anchors.leftMargin: root.textInset
             anchors.rightMargin: Style.spacing.sm
-            text: root.titleFor(hit.modelData.title, hit.modelData.preview)
-            color: hit.current ? root.selectedText : root.foreground
-            font.family: root.fontFamily
-            font.pixelSize: root.noteFontSize
-            elide: Text.ElideRight
+            title: root.titleFor(hit.modelData.title, hit.modelData.preview)
+            preview: hit.modelData.preview || ""
+            modified: hit.modelData.modified || ""
+            foreground: hit.current ? root.selectedText : root.foreground
+            fontFamily: root.fontFamily
+            fontSize: root.noteFontSize
           }
 
           MouseArea {

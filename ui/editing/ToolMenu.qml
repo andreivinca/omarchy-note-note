@@ -3,6 +3,7 @@ import QtQml.Models
 import QtQuick.Controls as QQC
 import qs.Commons
 import qs.Ui
+import ".." as AppUi
 
 QQC.Menu {
   id: toolMenu
@@ -10,6 +11,7 @@ QQC.Menu {
   required property var tool
   required property Component submenuComponent
   required property real maximumWidth
+  required property AppUi.ChromePopupStyle popupStyle
   readonly property var rows: registry.menuTools(tool.toolId)
   readonly property real iconColumnWidth: {
     var widest = 0
@@ -20,7 +22,6 @@ QQC.Menu {
     }
     return widest
   }
-  readonly property var borderSpec: Border.localOrSurfaceSpec("popups", "border", Color.popups.border, Color.popups.border, Style.normalBorderWidth)
   objectName: "editingPopup-" + tool.toolId
   title: tool.label
   cascade: true
@@ -39,10 +40,10 @@ QQC.Menu {
   }
   width: Math.min(implicitWidth, Math.max(0, maximumWidth))
   implicitHeight: contentItem.implicitHeight + topPadding + bottomPadding
-  leftPadding: Border.left(borderSpec) + Style.spacing.xxs
-  rightPadding: Border.right(borderSpec) + Style.spacing.xxs
-  topPadding: Border.top(borderSpec) + Style.spacing.xxs
-  bottomPadding: Border.bottom(borderSpec) + Style.spacing.xxs
+  leftPadding: Border.left(popupStyle.borderSpec) + popupStyle.padding
+  rightPadding: Border.right(popupStyle.borderSpec) + popupStyle.padding
+  topPadding: Border.top(popupStyle.borderSpec) + popupStyle.padding
+  bottomPadding: Border.bottom(popupStyle.borderSpec) + popupStyle.padding
   onRowsChanged: close()
 
   FontMetrics {
@@ -52,21 +53,22 @@ QQC.Menu {
   }
 
   background: BorderSurface {
-    color: Color.popups.background
-    borderSpec: toolMenu.borderSpec
-    radius: Style.cornerRadius
+    color: toolMenu.popupStyle.fill
+    borderSpec: toolMenu.popupStyle.borderSpec
+    radius: toolMenu.popupStyle.radius
   }
   contentItem: ListView {
     implicitHeight: contentHeight
     model: toolMenu.contentModel
     currentIndex: toolMenu.currentIndex
-    spacing: Style.spacing.labelGap
+    spacing: 0
     clip: true
     boundsBehavior: Flickable.StopAtBounds
   }
   delegate: ToolMenuItem {
     editor: toolMenu.registry.editor
     iconColumnWidth: toolMenu.iconColumnWidth
+    popupStyle: toolMenu.popupStyle
   }
 
   Component {
@@ -74,6 +76,7 @@ QQC.Menu {
     ToolMenuItem {
       editor: toolMenu.registry.editor
       iconColumnWidth: toolMenu.iconColumnWidth
+      popupStyle: toolMenu.popupStyle
       onTriggered: {
         toolMenu.dismiss()
         toolMenu.registry.execute(tool.toolId)

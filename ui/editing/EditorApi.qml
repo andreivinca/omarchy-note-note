@@ -15,6 +15,10 @@ QtObject {
   readonly property bool inTable: host.inTable
   readonly property bool inList: host.inList
   readonly property bool inCode: host.inCode
+  readonly property bool bold: pending && pending.bold !== undefined ? pending.bold : textArea.cursorSelection.font.bold
+  readonly property bool italic: pending && pending.italic !== undefined ? pending.italic : textArea.cursorSelection.font.italic
+  readonly property bool underline: pending && pending.underline !== undefined ? pending.underline : textArea.cursorSelection.font.underline
+  readonly property bool strikeout: pending && pending.strikeout !== undefined ? pending.strikeout : textArea.cursorSelection.font.strikeout
   readonly property color foreground: host.foreground
   readonly property color accent: host.accent
   readonly property string fontFamily: host.fontFamily
@@ -357,7 +361,9 @@ QtObject {
     if (!pending) {
       pending = { bold: f.bold, italic: f.italic, underline: f.underline, strikeout: f.strikeout }
     }
-    pending[kind] = !(pending[kind] === undefined ? f[kind] : pending[kind])
+    var next = Object.assign({}, pending)
+    next[kind] = !(pending[kind] === undefined ? f[kind] : pending[kind])
+    pending = next
     pendingLen = textArea.length
     pendingCursor = textArea.cursorPosition
   }

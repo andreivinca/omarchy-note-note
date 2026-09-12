@@ -55,6 +55,19 @@ Item {
   // The sidebar width the user dragged the splitter to, in pixels, kept
   // across runs. 0 means they never did, and the default width stands.
   property real listWidth: 0
+  property double listDate: Date.now()
+  Timer {
+    interval: 60000
+    running: root.opened
+    repeat: true
+    onTriggered: {
+      var now = Date.now()
+      if (new Date(now).toDateString() !== new Date(root.listDate).toDateString()) {
+        root.listDate = now
+        root.rebuildRows()
+      }
+    }
+  }
   // The sidebar folded away behind the view bar's toggle, kept across runs.
   property bool listCollapsed: false
   property bool deleteConfirmOpen: false
@@ -66,11 +79,7 @@ Item {
   property string filterText: ""
   property string statusText: ""
 
-  // The view bar's source chip names the provider whose tab is open — the
-  // provider's own `name`, its logo when it ships one, in the open tab's
-  // ink. Set in rebuildRows beside the tabs themselves, so the chip and the
-  // rail cannot disagree about which tab that is. Before any provider has
-  // listed, the app's own name stands in.
+  // The status bar's provider badge follows the active notebook.
   property string sourceName: "Note Note"
   property url sourceLogo: ""
   property color sourceBase: "transparent"
@@ -106,9 +115,8 @@ Item {
   property color accent: Color.accent
   property color selectedBackground: Color.menu.selectedBackground
   property color selectedText: Color.menu.selectedText
-  // Two families: the note's own type, and the chrome around it. Both are
-  // bundled in all four faces so bold and italic work offline.
-  readonly property string noteFont: iaWriterMonoS.name
+  // The document and chrome share a bundled sans-serif family in four faces.
+  readonly property string noteFont: nimbusSans.name
   readonly property string interfaceFont: nimbusSans.name
   // The type scale, hung off the shell's base size so it follows the
   // theme. Three steps: the note's text stands a step above the chrome
@@ -118,19 +126,6 @@ Item {
   readonly property int chromeFontSize: Style.font.subtitle
   readonly property int captionFontSize: Style.font.bodySmall
 
-  FontLoader {
-    id: iaWriterMonoS
-    source: "assets/fonts/ia-writer-mono-s/iAWriterMonoS-Regular.ttf"
-  }
-  FontLoader {
-    source: "assets/fonts/ia-writer-mono-s/iAWriterMonoS-Bold.ttf"
-  }
-  FontLoader {
-    source: "assets/fonts/ia-writer-mono-s/iAWriterMonoS-Italic.ttf"
-  }
-  FontLoader {
-    source: "assets/fonts/ia-writer-mono-s/iAWriterMonoS-BoldItalic.ttf"
-  }
   FontLoader {
     id: nimbusSans
     source: "assets/fonts/nimbus-sans/NimbusSans-Regular.otf"
@@ -148,6 +143,7 @@ Item {
   // ── shell contract ──────────────────────────────────────────────────
   function open(payloadJson) {
     root.opened = true
+    root.listDate = Date.now()
     root.deleteConfirmOpen = false
     root.page = ""
     root.pauseQueues(false)
@@ -328,14 +324,8 @@ Item {
   }
   Component { id: accountComponent; Microsoft.Account {} }
 
-  // A link is blue, the one colour convention every reader already knows —
-  // but no single blue is readable on both a light and a dark theme: the
-  // best one manages 3.7:1 against white and black alike, short of the 4.5
-  // body text wants. So the hue is fixed and the lightness is not. The
-  // theme's own text colour, leaned four-fifths of the way to blue, reads as
-  // blue on any theme and brings the foreground's contrast with it — the
-  // same rule as a tab's ink, and no question asked about which theme is on.
-  readonly property string linkColour: Qt.tint(root.foreground, Util.alpha("#4282d7", 0.8)).toString()
+  // Links use the theme accent blended with its text color for readable ink.
+  readonly property string linkColour: Qt.tint(root.foreground, Util.alpha(root.accent, 0.65)).toString()
 
   // A quote keeps the theme's own ink at reduced strength; the editor draws
   // the classic bar beside it and the rounded slab behind a code block
@@ -351,7 +341,7 @@ Item {
   // in the document (never the note: the reader reads a mono span as code
   // before it looks at any background). The slab's own recipe, made opaque
   // because Qt's HTML writer keeps a colour but drops its alpha.
-  readonly property string codeChipColour: Qt.tint(root.background, Util.alpha(root.foreground, 0.07)).toString()
+  readonly property string codeChipColour: Qt.darker(root.background, 1.16).toString()
 
   // Markdown on disk, rich text in the editor: everything the note pane shows
   // or saves passes through here (services/markdown/Markdown.qml).
@@ -474,20 +464,6 @@ Item {
   function providerById(id) { return providerOf(id + ":") }
   // The provider of the open tab. Section keys start with the provider's id.
   function activeProvider() { var k = activeKey(); return k ? providerOfKey(k) : null }
-  // The provider a "New notebook…" would go to: the open tab's — or, when it
-  // cannot and the local provider has no notebook at all yet (a fresh
-  // ~/Notes), the local one. Without that a fresh install has no tab that can
-  // create, so no path to the first notebook.
-  function notebookMaker() {
-    var p = activeProvider()
-    if (p && p.canCreateSection === true) {
-      return p
-    }
-    var local = providerById("local")
-    return local && local.canCreateSection === true && local.sections.length === 0 ? local : null
-  }
-  function canCreateNotebook() { return notebookMaker() !== null }
-
   // A provider's entry in config.providers is the host's file, but most of
   // its keys are the provider's own settings — local's notesDir, a
   // notebookTabs flag. Every key that names a property the provider declares
@@ -1121,7 +1097,10 @@ Item {
     var keep = root.switchingTab ? 0 : list.scrollOffset(), active = activeKey()
     root.switchingTab = false
     var model = Sidebar.build(root.providers, active, root.filterText, root.contentHits)
-    var out = model.rows, tabs = model.tabs, hits = model.hits
+    var sourceProv = active ? providerOfKey(active) : null
+    var out = root.filterText ? model.rows
+      : Sidebar.organize(model.rows, root.listDate, model.groupByDate)
+    var tabs = model.tabs, hits = model.hits
     // The tabs themselves change rarely (a notebook made, a colour given); the
     // hit counts change per keystroke. Keeping the model still while only the
     // counts move is what keeps the rail from rebuilding its delegates.
@@ -1147,16 +1126,9 @@ Item {
     if (rowsChanged) {
       setRows(out)
     }
-    // The view bar's source chip follows the open tab: its provider's name
-    // and logo, and the tab's own colour — read from newTabs, where decollide
-    // has just settled the colours the rail will wear.
-    var sourceProv = active ? providerOfKey(active) : null, sourceTab = null
-    for (var ti = 0; ti < newTabs.length; ti++) {
-      if (newTabs[ti].key === active) {
-        sourceTab = newTabs[ti]
-        break
-      }
-    }
+    var sourceTab = newTabs.find(function(tab) {
+      return tab.key === active
+    })
     root.sourceName = sourceProv ? sourceProv.name : "Note Note"
     root.sourceLogo = sourceProv ? (sourceProv.logo || "") : ""
     root.sourceBase = sourceTab ? TabColors.baseFor(sourceTab.color || "", sourceTab.name || "") : "transparent"
@@ -1370,11 +1342,40 @@ Item {
     return onActive || anywhere
   }
   function runAction(id) {
+    var footer = root.footerActions.find(function(action) {
+      return action.path === id
+    })
+    if (footer) {
+      return list.activateFooterAction(footer.provider, footer.path)
+    }
     var p = providerWithRow("action", id)
     if (p) {
       p.action(id)
     }
     return !!p
+  }
+  function runFooterAction(action, value) {
+    var current = root.footerActions.find(function(item) {
+      return item.provider === action.provider && item.section === action.section && item.path === action.path
+    })
+    var p = current ? providerById(current.provider) : null
+    if (!p || session.locked) {
+      return false
+    }
+    p.action(current.path, value, current.section)
+    return true
+  }
+  function activateFooterShortcut(shortcut) {
+    var action = root.footerActions.find(function(item) {
+      return item.shortcut === shortcut
+    })
+    if (!action) {
+      return false
+    }
+    if (action.inputPlaceholder) {
+      root.listCollapsed = false
+    }
+    return list.activateFooterAction(action.provider, action.path)
   }
   function rowsOf(providerId) {
     return JSON.stringify(root.rows.filter(function(r) { return r.provider === providerId }).map(function(r) { return r.kind + ":" + r.path.substring(0, 24) }))
@@ -1518,17 +1519,22 @@ Item {
     if (session.locked) {
       return
     }
+    if (!providerId && root.activateFooterShortcut("newNote")) {
+      return
+    }
     root.flushSave()
     if (root.filterText) {
       titleBar.setSearchText("")
       setFilter("")
     }
-    var p = providerId ? providerById(providerId) : providerOf(root.currentPath)
+    var p = providerId ? providerById(providerId) : activeProvider()
     if (p && target === undefined) {
       target = p.createTargetFor(root.currentPath)
     }
-    if (!p || !target) {
-      p = providerById("local")
+    if (!providerId && (!p || !target)) {
+      p = root.providers.find(function(candidate) {
+        return candidate.canCreate && candidate.createTargetFor("")
+      })
       target = p ? p.createTargetFor("") : ""
     }
     if (!p || !target) {
@@ -1580,12 +1586,12 @@ Item {
   // tab the new notebook opens as is the provider's answer, not assumed here:
   // a tab of its own when the provider spreads notebooks into tabs, the one
   // tab that holds them all when it folds them (createSection's cb).
-  function newNotebook(name) {
+  function newNotebook(name, providerId) {
     if (session.locked) {
       return
     }
-    var p = notebookMaker()
-    if (!p) {
+    var p = providerId ? providerById(providerId) : activeProvider()
+    if (!p || !p.canCreateSection) {
       return
     }
     p.createSection(name, function(r) {
@@ -1607,8 +1613,7 @@ Item {
       clearSearch()
     }
     var p = activeProvider()
-    if (canCreateNotebook()) {
-      list.startNewNotebook()
+    if (root.activateFooterShortcut("newNotebook")) {
       return
     }
     showStatus((p ? p.name : "This tab") + ": notebooks are made where they live, not here")
@@ -1878,8 +1883,8 @@ Item {
           // otherwise — clamped either way, so neither the list nor the note
           // can be squeezed out of use by a drag or a narrow window.
           width: {
-            var w = root.listWidth > 0 ? root.listWidth : Style.space(230)
-            return Math.max(Style.space(150), Math.min(w, body.width - Style.space(320)))
+            var w = root.listWidth > 0 ? root.listWidth : Style.space(300)
+            return Math.max(Style.space(220), Math.min(w, body.width - Style.space(320)))
           }
           height: parent.height
           model: root.rows
@@ -1891,7 +1896,9 @@ Item {
           searchStatus: root.searchRevision >= 0 && root.revision >= 0 ? root.activeSearchStatus() : ""
           sections: root.tabs
           activeKey: root.revision < 0 ? "" : root.activeKey()
-          canCreateNotebook: root.revision < 0 ? false : root.canCreateNotebook()
+          headerHeight: editor.toolbarHeight
+          headerContentHeight: editor.toolbarRowHeight
+          background: root.background
           foreground: root.foreground
           accent: root.accent
           fontFamily: root.interfaceFont
@@ -1907,7 +1914,7 @@ Item {
             }
             root.newNote()
           }
-          onNewNotebookRequested: function(name) { root.newNotebook(name) }
+          onFooterActionRequested: function(action, value) { root.runFooterAction(action, value) }
           onActionRequested: function(id) { root.runAction(id) }
           onTreeToggled: function(id) { root.treeToggle(id) }
           onDeleteRequested: function(path) { root.requestDelete(path) }
@@ -2020,6 +2027,16 @@ Item {
             hasTitle: { var p = root.providerOf(root.currentPath); return p ? p.hasTitle : true }
             enabledTools: { var p = root.providerOf(root.currentPath); return (p && p.tools !== undefined) ? p.tools : null }
             toolbarLayout: root.config.editor.toolbar
+            modifiedText: {
+              for (var i = 0; i < root.rows.length; i++) {
+                var row = root.rows[i]
+                if (row.kind === "note" && row.path === root.currentPath) {
+                  var time = Sidebar.timestamp(row.modified)
+                  return time ? Qt.formatDateTime(new Date(time), "d MMMM yyyy 'at' HH:mm") : ""
+                }
+              }
+              return ""
+            }
             placeholder: root.loadingPath && root.loadingPath === root.currentPath ? "Loading…"
               : (root.rows.length === 0 && !root.filterText ? "No notes yet — press ctrl+n to create one." : "")
             foreground: root.foreground
@@ -2057,9 +2074,7 @@ Item {
             sourceInk: root.sourceInk
             sourceBase: root.sourceBase
             crumb: root.currentCrumb
-            // The storage word: what the open note is, on the host's authority —
-            // a local note is its file, a remote one is "synced online", and the
-            // two transient states name themselves.
+            // Providers describe storage; the host supplies transient states.
             storage: {
               if (!root.currentPath) {
                 return ""
@@ -2071,7 +2086,7 @@ Item {
                 return "read-only here"
               }
               var p = root.providerOf(root.currentPath)
-              return p && p.id === "local" ? root.currentPath.substring(root.currentPath.lastIndexOf("/") + 1) : "synced online"
+              return p && typeof p.storageLabel === "function" ? p.storageLabel(root.currentPath) : ""
             }
             unsaved: root.dirty || (root.saveRevision >= 0 && root.saveInFlight(root.currentPath))
             statusText: root.statusText
@@ -2175,8 +2190,8 @@ Item {
     BorderSurface {
       id: card
       anchors.centerIn: parent
-      width: Math.min(Math.max(Style.space(900), Math.round(panel.width * 0.72)), panel.width - Style.gapsOut * 2)
-      height: Math.min(Math.max(Style.space(600), Math.round(panel.height * 0.82)), panel.height - Style.gapsOut * 2)
+      width: Math.min(Math.max(Style.space(900), Math.round(panel.width * 0.90)), panel.width - Style.gapsOut * 2)
+      height: Math.min(Math.max(Style.space(600), Math.round(panel.height * 0.90)), panel.height - Style.gapsOut * 2)
       radius: Style.cornerRadius
       color: root.background
       borderSpec: root.borderSpec

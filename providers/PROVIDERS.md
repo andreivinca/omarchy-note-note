@@ -19,21 +19,19 @@ host's config (see "Settings from the host's config").
 | `canCreate`         | bool   | `create()` is supported |
 | `canDelete`         | bool   | `remove()` is supported |
 | `canReorder`        | bool   | rows may be dragged within a section; `setOrder()` persists |
-| `canCreateSection`  | bool   | `createSection()` is supported. The "New notebook…" row is shown only while a tab of yours is open, and makes the notebook in *your* provider |
+| `canCreateSection`  | bool   | `createSection()` is supported; the provider supplies its creation action in `footerActions` |
 | `canImages`         | bool   | a pasted picture can be stored: the editor writes it into the note as `![](file:///…)` and `save()` must carry it to the backend. False (the default) makes ctrl+v say so rather than swallow the paste. An image may carry a display width the author set with the editor's corner handle, written as `![alt](src){width=N}` — a provider stores it with the image if the backend can, and must at least round-trip the marker |
 | `tools`             | list   | optional: formatting-toolbar tool ids the backend can store — `bold italic underline strikeout highlight code h1 h2 h3 p ul ol todo indent outdent quote codeblock table rule link`; omitted = all (when `markdown`), `[]` = no toolbar |
 | `microsoftScopes`   | list   | Graph scopes the provider asks for when it creates its own Microsoft account |
 | `microsoftClientId` | string | the provider's own Microsoft app registration — the application (client) id of an Entra public client that allows personal and work accounts — that its Microsoft account signs in through. Every provider brings its own; none is shared |
 | `logo`              | url    | optional: a mark shown at the head of every one of this provider's tabs, and beside the header title while one of them is open |
-| `sections`          | list   | `[{ key, name, rows, color?, count?, notes?, footerActions? }]` — one binder tab each; `count` overrides the tab's note count. `notes` (`[{ path, title, preview }]`) is every note the section holds, for search: give it when `rows` can hide notes (a folded tree); left out, the note rows are taken to be all of them |
+| `sections`          | list   | `[{ key, name, rows, color?, count?, notes?, footerActions?, groupByDate? }]` — one binder tab each; `count` overrides the tab's note count. `notes` (`[{ path, title, preview }]`) is every note the section holds, for search: give it when `rows` can hide notes (a folded tree); left out, the note rows are taken to be all of them |
+| `footerActions`     | list   | optional actions available before any tabs exist, such as creating the first notebook; otherwise each section supplies its own footer |
 
-`name` is the tab's label, turned a quarter turn and elided if it is long, so
-keep it short. `color` is your brand's, given raw as `#rrggbb`: the rail softens
-it into a pastel and lays it on as a shade — on the tab, and on the panel beside
-it from the same number — so you state your identity and never think about the
-theme, and a loud brand cannot arrive loud. Leave `color` out and the tab takes
-a pastel of its own from `name` — which is what a provider with many notebooks
-wants, since each one then looks different.
+`name` labels a horizontal notebook tab and is elided when long. The tab uses
+`logo` when supplied; tabs without a logo show text alone. Chrome and
+selection fills follow Omarchy’s theme. `color` remains accepted as provider
+metadata for existing integrations.
 
 The editor discovers its tools from `ui/tools/`; see the
 [editing-tool contract](../docs/editing-tools.md) to add one. The `tools`
@@ -57,7 +55,7 @@ do — a folder is not a brand.
 time and which one is open is the user's, kept between runs. Passing it is
 harmless.
 
-A row is `{ kind, path, title, preview, icon, level, expanded, fixed, version }` with
+A row is `{ kind, path, title, preview, icon, level, expanded, fixed, version, modified }` with
 `kind` one of `note`, `new` (path = create target), `action` (path = action
 id), `tree` (path = tree id, `expanded`).
 
@@ -65,18 +63,59 @@ Action and tree ids are plain strings and several providers use the same ones
 (`login`, `logout`, `refresh`): the host resolves a click against the open
 tab first, so a shared name never reaches another provider's row.
 
-`footerActions` is an optional list of `{ path, title, icon? }` actions pinned
-to the bottom of the sidebar, alongside the host's "New notebook…" control.
-They use the same row component and call `action(path)` just like inline
-action rows. Keep them out of `rows`: footer actions do not scroll, contribute
-to note counts, or appear as search matches. They remain available during
-search; notebook creation remains hidden until search ends. Providers without
-footer actions can omit the list. OneNote and Sticky Notes put Sign out here.
+`footerActions` supplies **every** button pinned to the bottom of the sidebar,
+in display order. Each descriptor is `{ path, title, icon?, inputPlaceholder?, shortcut? }`.
+The app renders all of them with one shared, full-width row component, stacked
+vertically with identical height, padding, hover fill, radius and icon styling.
+It does not add creation buttons based on provider identity or capabilities.
+Keep footer actions out of `rows`: they do not scroll, contribute to note
+counts, or become search matches. They remain available during search.
+
+A click calls the owning provider's `action(path, value, sectionKey)`, where
+`value` is normally `""` and `sectionKey` is the provider's own section key.
+When `inputPlaceholder` is supplied, the same row collects text first: Enter
+submits a nonempty trimmed value, and Escape cancels. No special notebook
+input exists in the host. Action ids need only be unique within the section;
+the host carries ownership explicitly, so another provider's identical id
+cannot receive the click. Existing `action(path)` handlers can ignore the
+additional arguments.
+
+The optional `shortcut` names a shared keyboard action, currently `newNote`
+or `newNotebook`, connecting Ctrl+N or Ctrl+Shift+N to that same footer row.
+Creation handlers can call `host.newNote(id, target)` or
+`host.newNotebook(value, id)` to use the common save, creation and selection
+flow. Providers choose their own target and when to offer each action.
+For example:
+
+```qml
+footerActions: [
+  { path: "add", title: "New Note", icon: "󰐕", shortcut: "newNote" },
+  { path: "collection", title: "New notebook", icon: "󰉗",
+    inputPlaceholder: "Notebook name", shortcut: "newNotebook" }
+]
+```
+
+Local supplies New Note and New notebook. OneNote supplies New section and
+account actions; its New Note rows appear only inside sections. In a combined
+OneNote tab, each notebook's New section action names its destination.
+Sticky Notes supplies New Note and account actions. An external provider uses
+the same contract.
 
 `version` (optional) is an opaque change marker for a note — a file mtime,
 a `lastModifiedDateTime`, an etag. The host compares it with the `version`
 returned by `load()`: when a listing shows a newer version for the note that
 is open (and it has no unsaved edits), the host reloads it.
+
+`modified` (optional) is an ISO 8601 timestamp with timezone or milliseconds
+since the Unix epoch. It supplies the note preview’s date and the editor’s
+modification caption. A section with `groupByDate: false` keeps its provider
+order without date groups; local opts into this.
+Other flat lists are grouped into
+Today, Yesterday, Previous 7 Days, Previous 30 Days, Older and undated Notes.
+Order within each group remains the provider’s, and dragging stays within one group. Tree rows
+retain their original hierarchy. Supply `modified` in `notes` as well as `rows`
+when publishing a separate search inventory. It is display metadata, independent
+of the opaque `version` used for change detection.
 
 ## Settings from the host's config
 
@@ -185,7 +224,9 @@ them.
   create target for a first note in it (the same string your `new` row carries),
   and the host makes that note when you give one. Have the section listed before
   you call back, or the tab it opens will be empty.
-- `action(id)`, `toggleTree(id)`
+- `action(id, value, sectionKey)` — footer actions include input and section
+  context; inline actions supply only the id. Extra arguments can be ignored.
+- `toggleTree(id)`
 - `revealPath(path)` (optional) — unfold whatever tree state hides this
   note's row, and rebuild, so the row exists on screen. The host calls it
   when a search ends on a note, then scrolls to the row; a provider whose
@@ -218,6 +259,8 @@ them.
   initial indexing, refreshes, unavailable pages and pauses here.
 - `setOrder(sectionKey, paths)`
 - `crumb(path)` → string for the editor's description line
+- `storageLabel(path)` (optional) → status-bar storage description, such as a
+  filename or "synced online"; omitted means no storage label
 - `createTargetFor(path)` → target for Ctrl+N while `path` is open, or ""
 - `restoreState(obj)`, `saveState()` → obj (kept in the host's state file)
 - `watch(on)` (optional) — the app became visible / hidden; start or stop

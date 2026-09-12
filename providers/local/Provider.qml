@@ -85,6 +85,15 @@ Item {
   property var notebooks: []
   property var notes: []
   property var sections: []
+  // Available before the first notebook exists as well as on every tab.
+  readonly property var footerActions: [
+    { path: "newNotebook", title: "New notebook", icon: "󰉗",
+      inputPlaceholder: "Notebook name", shortcut: "newNotebook" }
+  ]
+
+  function notebookActions() {
+    return [{ path: "newNote", title: "New Note", icon: "󰐕", shortcut: "newNote" }].concat(root.footerActions)
+  }
 
   function dirOf(key) { return key ? root.notesRoot + "/" + key : root.notesRoot }
   function baseName(p) { return p.substring(p.lastIndexOf("/") + 1) }
@@ -140,9 +149,11 @@ Item {
       if (n.key !== nb.key) {
         continue
       }
-      rows.push({ kind: "note", path: n.path, title: n.title, preview: n.preview, level: level, fixed: fixed, version: n.version || "" })
+      rows.push({ kind: "note", path: n.path, title: n.title, preview: n.preview, level: level, fixed: fixed, version: n.version || "", modified: Math.floor(Number(n.version || 0) / 1000000) })
     }
-    rows.push({ kind: "new", path: "section:" + nb.key, level: level })
+    if (level > 0) {
+      rows.push({ kind: "new", path: "section:" + nb.key, level: level })
+    }
     return rows
   }
   // Two shapes, one setting (notebookTabs): a binder tab per notebook
@@ -156,7 +167,8 @@ Item {
         var nb = root.notebooks[b]
         // No colour: a notebook takes its own from its name, so Work and
         // Personal never look alike.
-        out.push({ key: nb.key, name: nb.name, rows: notebookRows(nb, 0, false) })
+        out.push({ key: nb.key, name: nb.name, rows: notebookRows(nb, 0, false),
+                   groupByDate: false, footerActions: notebookActions() })
       }
       root.sections = out
     } else {
@@ -171,13 +183,15 @@ Item {
       // Folded trees hide note rows, so the tab's count and the searchable
       // list are given whole (`count` and `notes` in PROVIDERS.md).
       root.sections = [{ key: "notes", name: "Notes", count: root.notes.length,
-                         notes: root.notes.map(function(n) { return { path: n.path, title: n.title, preview: n.preview } }),
-                         rows: rows }]
+                         notes: root.notes.map(function(n) { return { path: n.path, title: n.title, preview: n.preview, modified: Math.floor(Number(n.version || 0) / 1000000) } }),
+                         rows: rows, groupByDate: false,
+                         footerActions: root.notebooks.length ? notebookActions() : root.footerActions }]
     }
     root.updated()
   }
 
   function crumb(path) { var n = noteAt(path); return n ? nameOf(n.key) : root.name }
+  function storageLabel(path) { return baseName(fileOf(path)) }
   function createTargetFor(path) { var n = noteAt(path); return n ? "section:" + n.key : (root.notebooks.length ? "section:" + root.notebooks[root.notebooks.length - 1].key : "") }
   function restoreState(obj) {
     if (obj && Array.isArray(obj.folded)) {
@@ -185,7 +199,14 @@ Item {
     }
   }
   function saveState() { return { folded: root.folded } }
-  function action(id) {}
+  function action(id, value, sectionKey) {
+    if (id === "newNote") {
+      var target = root.notebookTabs ? "section:" + sectionKey : createTargetFor(root.host.currentPath)
+      root.host.newNote(root.id, target)
+    } else if (id === "newNotebook") {
+      root.host.newNotebook(value, root.id)
+    }
+  }
   function toggleTree(id) {
     if (id.indexOf("book:") !== 0) {
       return
