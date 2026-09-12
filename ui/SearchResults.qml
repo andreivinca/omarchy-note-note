@@ -109,6 +109,7 @@ Item {
             anchors.leftMargin: root.textInset
             anchors.rightMargin: Style.spacing.sm
             title: root.titleFor(hit.modelData.title, hit.modelData.preview)
+            hasTitle: hit.modelData.hasTitle !== false
             preview: hit.modelData.preview || ""
             modified: hit.modelData.modified || ""
             foreground: hit.current ? root.selectedText : root.foreground

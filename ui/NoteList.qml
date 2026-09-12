@@ -3,7 +3,7 @@ import QtQml.Models
 import qs.Commons
 import qs.Ui
 
-// The active notebook: header, grouped previews or provider tree, and actions.
+// The active notebook: header, note previews or provider tree, and actions.
 //
 // Model rows carry { kind, notebook, path, title, preview }:
 //   kind "note"        a note (fixed: true → not draggable)
@@ -256,7 +256,6 @@ Item {
           // ---- rows
           delegate: Item {
             id: slot
-            required property int index
             required property var modelData
             readonly property bool isNote: modelData.kind === "note"
             readonly property bool isNew: modelData.kind === "new"
@@ -269,44 +268,24 @@ Item {
             readonly property int indent: (modelData.level || 0)
               * (Style.font.icon + Style.space(2) + Style.spacing.md - Style.spacing.sm)
             readonly property bool draggable: isNote && !modelData.fixed
-            readonly property string sectionLabel: {
-              // A retiring delegate can still have its old index while a
-              // shorter provider snapshot is being installed.
-              var previous = index > 0 ? root.model[index - 1] : null
-              return modelData.group && (!previous || previous.group !== modelData.group) ? modelData.group : ""
-            }
-            readonly property real sectionHeight: sectionLabel ? Style.space(34) : 0
             readonly property real itemHeight: isNote ? root.rowHeight : Style.spacing.controlHeight + root.rowGap
-            // Where this row sits on screen right now — diverges from `index`
-            // while a drag is shuffling the visual order.
+            // Where this row sits on screen while a drag shuffles the order.
             readonly property int visualIndex: slot.DelegateModel.itemsIndex
             width: listView.width
-            height: isNew && !root.hasTree ? 0 : itemHeight + sectionHeight
+            height: isNew && !root.hasTree ? 0 : itemHeight
             visible: height > 0
 
             DropArea {
               anchors.fill: parent
               enabled: !root.filtering && slot.draggable
               onEntered: function(drag) {
-                if (drag.source.modelData.notebook !== slot.modelData.notebook
-                    || drag.source.modelData.group !== slot.modelData.group) {
+                if (drag.source.modelData.notebook !== slot.modelData.notebook) {
                   return
                 }
                 if (drag.source.visualIndex !== slot.visualIndex) {
                   visualModel.items.move(drag.source.visualIndex, slot.visualIndex)
                 }
               }
-            }
-
-            Text {
-              visible: slot.sectionLabel.length > 0
-              x: root.textInset
-              y: Style.space(12)
-              text: slot.sectionLabel
-              color: Util.alpha(root.foreground, 0.45)
-              font.family: root.fontFamily
-              font.pixelSize: Style.font.bodySmall
-              font.bold: true
             }
 
             Rectangle {
@@ -316,7 +295,6 @@ Item {
               width: slot.width - Style.spacing.xxs * 2
               height: slot.itemHeight - root.rowGap
               anchors.verticalCenter: parent.verticalCenter
-              anchors.verticalCenterOffset: slot.sectionHeight / 2
               radius: root.rowRadius
               readonly property bool current: slot.isNote
                 ? slot.modelData.path === root.currentPath
@@ -338,6 +316,7 @@ Item {
                 anchors.rightMargin: Style.spacing.sm + (closeButton.opacity > 0 ? closeButton.width : 0)
                 anchors.verticalCenter: parent.verticalCenter
                 title: root.titleFor(slot.modelData.title, slot.modelData.preview)
+                hasTitle: slot.modelData.hasTitle !== false
                 preview: slot.modelData.preview || ""
                 modified: slot.modelData.modified || ""
                 foreground: root.foreground
@@ -558,8 +537,7 @@ Item {
         radius: width / 2
         height: Math.max(Style.space(24),
                          scrollTrack.height * (listView.height / Math.max(1, listView.contentHeight)))
-        // contentY is measured from originY, which a ListView with section
-        // headers does not keep at 0 — subtract it or the thumb sits low.
+        // ListView's origin can shift when rows change above the viewport.
         y: (scrollTrack.height - height)
            * Math.max(0, Math.min(1, (listView.contentY - listView.originY) / Math.max(1, listView.contentHeight - listView.height)))
         color: Util.alpha(root.foreground, listView.moving ? 0.45 : 0.2)

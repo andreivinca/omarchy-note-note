@@ -88,8 +88,8 @@ Window {
     viewBar.visible = false
     notebookPreview.visible = true
     notebookPreview.model = [
-      { kind: "note", path: "a", title: "Older note", group: "Older" },
-      { kind: "note", path: "b", title: "Recent note", group: "Today", modified: Date.now() }
+      { kind: "note", path: "a", title: "Older note" },
+      { kind: "note", path: "b", title: "Recent note", modified: Date.now() }
     ]
     keys.waitForRendering(notebookPreview)
     keys.wait(50)
@@ -115,11 +115,11 @@ Window {
     require(newNote.visible && newNotebook.visible && signOut.visible, "search hid provider footer actions")
     notebookPreview.filtering = false
 
-    // Repeated shorter snapshots retire delegates while section bindings run.
+    // Repeated shorter snapshots retire delegates while row bindings run.
     for (var i = 0; i < 5; i++) {
       notebookPreview.model = [
-        { kind: "note", path: "first", title: "First", group: "Today" },
-        { kind: "note", path: "last", title: "Last", group: "Older" }
+        { kind: "note", path: "first", title: "First" },
+        { kind: "note", path: "last", title: "Last" }
       ]
       keys.wait(10)
       notebookPreview.model = notebookPreview.model.slice(0, 1)
@@ -1672,7 +1672,7 @@ Window {
       }
     }
     var behavior = [
-      { name: "notebook controls and grouped list refreshes remain usable", run: notebookChrome },
+      { name: "notebook controls and list refreshes remain usable", run: notebookChrome },
       { name: "Right after inserting blocks leaves an empty line through typing and undo", run: insertedBlockLanding },
       { name: "text color palette applies, resets, saves, undoes and rejects stale contexts", run: textColorTool },
       { name: "tools enforce provider and document permissions on every entry point", run: toolPermissions },

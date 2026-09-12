@@ -496,7 +496,7 @@ ShellRoot {
     check("malformed toolbar defaults preserve unrelated editor settings",
           JSON.stringify(ToolbarSettings.editorDefaults({ toolbar: ["bold"], future: 42 }).toolbar) === JSON.stringify(ToolbarSettings.defaults())
           && ToolbarSettings.editorDefaults({ toolbar: ["bold"], future: 42 }).future === 42)
-    var source = [{ id: "test", canReorder: true, sections: [{ key: "s", name: "Section", rows: [], groupByDate: false,
+    var source = [{ id: "test", canReorder: true, sections: [{ key: "s", name: "Section", rows: [],
       footerActions: [{ path: "logout", title: "Sign out", inputPlaceholder: "Confirm", shortcut: "custom" }],
       notes: [{ kind: "note", path: "test:A", title: "Hidden note" }] }] }]
     var before = JSON.stringify(source)
@@ -507,7 +507,6 @@ ShellRoot {
     check("sidebar preserves provider action ownership and input metadata",
           model.footerActions[0].provider === "test" && model.footerActions[0].section === "s"
           && model.footerActions[0].inputPlaceholder === "Confirm" && model.footerActions[0].shortcut === "custom")
-    check("any provider can turn off date grouping", !model.groupByDate)
     check("creation capability does not inject hardcoded footer buttons",
           Sidebar.build([{ id: "custom", canCreate: true, canCreateSection: true,
             sections: [{ key: "s", rows: [] }] }], "custom/s", "", {}).footerActions.length === 0)
@@ -524,23 +523,18 @@ ShellRoot {
       { kind: "new", path: "create" }
     ]
     var originalFlat = JSON.stringify(flat)
-    var arranged = Sidebar.organize(flat, today)
-    check("date grouping does not change the provider snapshot", JSON.stringify(flat) === originalFlat)
-    check("date groups preserve custom ordering and keep creation after notes",
-          arranged.map(function(item) { return item.path }).join(",") === "first,second,old,unknown,create"
-          && arranged[0].group === "Today" && arranged[2].group === "Older" && arranged[3].group === "Notes")
-    var ungrouped = Sidebar.organize(flat, today, false)
-    check("ungrouped local notes preserve provider order across modification dates",
-          ungrouped === flat
-          && ungrouped.map(function(item) { return item.path }).join(",") === "old,first,second,unknown,create"
-          && ungrouped.every(function(item) { return !item.group })
+    var flatProvider = { id: "flat", sections: [{ key: "notes", rows: flat }] }
+    var flatModel = Sidebar.build([flatProvider], "flat/notes", "", {})
+    check("flat lists preserve provider order across modification dates",
+          flatModel.rows.map(function(item) { return item.path }).join(",") === "old,first,second,unknown,create"
           && JSON.stringify(flat) === originalFlat)
     var hierarchy = [{ kind: "tree", path: "section" }].concat(flat)
-    check("date grouping leaves provider hierarchies intact", Sidebar.organize(hierarchy, today) === hierarchy)
-    check("date groups use local calendar boundaries",
-          Sidebar.dateGroup(new Date(2026, 8, 11, 23, 59).getTime(), today) === "Yesterday"
-          && Sidebar.dateGroup(new Date(2026, 8, 5).getTime(), today) === "Previous 7 Days"
-          && Sidebar.dateGroup(new Date(2026, 8, 4).getTime(), today) === "Previous 30 Days"
+    flatProvider.sections[0].rows = hierarchy
+    var treeModel = Sidebar.build([flatProvider], "flat/notes", "", {})
+    check("sidebar preserves provider hierarchies",
+          treeModel.rows.map(function(item) { return item.path }).join(",") === "section,old,first,second,unknown,create")
+    check("modification captions accept numeric and ISO dates and reject invalid dates",
+          Sidebar.timestamp(today) === today && Sidebar.timestamp(new Date(today).toISOString()) === today
           && Sidebar.timestamp("invalid") === 0)
     check("provider setting order does not cause replacement", Settings.plan(
       { providers: { a: { path: "x", enabled: true } } },
@@ -698,9 +692,8 @@ ShellRoot {
     folders.action("newNotebook", "Travel", "Work")
     check("local creation actions retain the active notebook and submitted name",
           creations.join(",") === "local:section:Work,local:Travel")
-    check("local supplies both footer actions and its grouping policy",
-          folders.sections[0].footerActions.map(function(action) { return action.path }).join(",") === "newNote,newNotebook"
-          && folders.sections[0].groupByDate === false)
+    check("local supplies both footer actions",
+          folders.sections[0].footerActions.map(function(action) { return action.path }).join(",") === "newNote,newNotebook")
     folders.destroy()
 
     var created = oneNoteFactory.createObject(test, {

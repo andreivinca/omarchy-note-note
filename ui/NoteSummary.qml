@@ -6,6 +6,7 @@ import "../services/notes/sidebar.js" as Sidebar
 Column {
   id: root
   property string title: ""
+  property bool hasTitle: true
   property string preview: ""
   property var modified: ""
   property color foreground: Color.menu.text
@@ -20,7 +21,7 @@ Column {
     color: root.foreground
     font.family: root.fontFamily
     font.pixelSize: root.fontSize
-    font.bold: true
+    font.bold: root.hasTitle
     elide: Text.ElideRight
   }
 

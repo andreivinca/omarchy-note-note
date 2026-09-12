@@ -55,19 +55,6 @@ Item {
   // The sidebar width the user dragged the splitter to, in pixels, kept
   // across runs. 0 means they never did, and the default width stands.
   property real listWidth: 0
-  property double listDate: Date.now()
-  Timer {
-    interval: 60000
-    running: root.opened
-    repeat: true
-    onTriggered: {
-      var now = Date.now()
-      if (new Date(now).toDateString() !== new Date(root.listDate).toDateString()) {
-        root.listDate = now
-        root.rebuildRows()
-      }
-    }
-  }
   // The sidebar folded away behind the view bar's toggle, kept across runs.
   property bool listCollapsed: false
   property bool deleteConfirmOpen: false
@@ -143,7 +130,6 @@ Item {
   // ── shell contract ──────────────────────────────────────────────────
   function open(payloadJson) {
     root.opened = true
-    root.listDate = Date.now()
     root.deleteConfirmOpen = false
     root.page = ""
     root.pauseQueues(false)
@@ -1098,8 +1084,6 @@ Item {
     root.switchingTab = false
     var model = Sidebar.build(root.providers, active, root.filterText, root.contentHits)
     var sourceProv = active ? providerOfKey(active) : null
-    var out = root.filterText ? model.rows
-      : Sidebar.organize(model.rows, root.listDate, model.groupByDate)
     var tabs = model.tabs, hits = model.hits
     // The tabs themselves change rarely (a notebook made, a colour given); the
     // hit counts change per keystroke. Keeping the model still while only the
@@ -1122,9 +1106,9 @@ Item {
     // differs in nothing the list shows is not handed over. That is what
     // the sidebar builder carrying only what the list shows buys: a field the delegates
     // never read would make equal lists unequal.
-    var rowsChanged = JSON.stringify(out) !== JSON.stringify(root.rows)
+    var rowsChanged = JSON.stringify(model.rows) !== JSON.stringify(root.rows)
     if (rowsChanged) {
-      setRows(out)
+      setRows(model.rows)
     }
     var sourceTab = newTabs.find(function(tab) {
       return tab.key === active

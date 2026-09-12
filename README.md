@@ -113,9 +113,7 @@ setting; your local folders spread by default, OneNote folds. Local notes offer
 in its footer and **New Note** only inside each section.
 Providers supply all footer actions, including creation
 and account controls; every action uses the same full-width, stacked row.
-Local notebooks keep your note order without date
-headings; other flat notebooks group notes by modification date.
-Drag local notes to reorder them, or rows within a date group. Notebook trees keep
+Lists keep their provider’s note order. Drag local notes to reorder them. Notebook trees keep
 their provider’s hierarchy and order. Delete a note with the `×` on
 its row. Rename or remove a notebook by renaming or removing its folder.
 

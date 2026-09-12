@@ -168,7 +168,7 @@ Item {
         // No colour: a notebook takes its own from its name, so Work and
         // Personal never look alike.
         out.push({ key: nb.key, name: nb.name, rows: notebookRows(nb, 0, false),
-                   groupByDate: false, footerActions: notebookActions() })
+                   footerActions: notebookActions() })
       }
       root.sections = out
     } else {
@@ -184,7 +184,7 @@ Item {
       // list are given whole (`count` and `notes` in PROVIDERS.md).
       root.sections = [{ key: "notes", name: "Notes", count: root.notes.length,
                          notes: root.notes.map(function(n) { return { path: n.path, title: n.title, preview: n.preview, modified: Math.floor(Number(n.version || 0) / 1000000) } }),
-                         rows: rows, groupByDate: false,
+                         rows: rows,
                          footerActions: root.notebooks.length ? notebookActions() : root.footerActions }]
     }
     root.updated()

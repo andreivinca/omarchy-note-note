@@ -15,7 +15,7 @@ host's config (see "Settings from the host's config").
 | `id`                | string | unique, lowercase; every note path starts with `id + ":"` |
 | `name`              | string | the provider's display name: the header titles it (with `logo`) while one of its tabs is open, and status messages start with it |
 | `markdown`          | bool   | bodies are Markdown (rendered); false = plain text |
-| `hasTitle`          | bool   | notes have a separate editable title |
+| `hasTitle`          | bool   | notes have a separate editable title; false also uses normal text weight for the first-line label in the list and search results |
 | `canCreate`         | bool   | `create()` is supported |
 | `canDelete`         | bool   | `remove()` is supported |
 | `canReorder`        | bool   | rows may be dragged within a section; `setOrder()` persists |
@@ -25,7 +25,7 @@ host's config (see "Settings from the host's config").
 | `microsoftScopes`   | list   | Graph scopes the provider asks for when it creates its own Microsoft account |
 | `microsoftClientId` | string | the provider's own Microsoft app registration — the application (client) id of an Entra public client that allows personal and work accounts — that its Microsoft account signs in through. Every provider brings its own; none is shared |
 | `logo`              | url    | optional: a mark shown at the head of every one of this provider's tabs, and beside the header title while one of them is open |
-| `sections`          | list   | `[{ key, name, rows, color?, count?, notes?, footerActions?, groupByDate? }]` — one binder tab each; `count` overrides the tab's note count. `notes` (`[{ path, title, preview }]`) is every note the section holds, for search: give it when `rows` can hide notes (a folded tree); left out, the note rows are taken to be all of them |
+| `sections`          | list   | `[{ key, name, rows, color?, count?, notes?, footerActions? }]` — one binder tab each; `count` overrides the tab's note count. `notes` (`[{ path, title, preview }]`) is every note the section holds, for search: give it when `rows` can hide notes (a folded tree); left out, the note rows are taken to be all of them |
 | `footerActions`     | list   | optional actions available before any tabs exist, such as creating the first notebook; otherwise each section supplies its own footer |
 
 `name` labels a horizontal notebook tab and is elided when long. The tab uses
@@ -108,11 +108,7 @@ is open (and it has no unsaved edits), the host reloads it.
 
 `modified` (optional) is an ISO 8601 timestamp with timezone or milliseconds
 since the Unix epoch. It supplies the note preview’s date and the editor’s
-modification caption. A section with `groupByDate: false` keeps its provider
-order without date groups; local opts into this.
-Other flat lists are grouped into
-Today, Yesterday, Previous 7 Days, Previous 30 Days, Older and undated Notes.
-Order within each group remains the provider’s, and dragging stays within one group. Tree rows
+modification caption. Lists keep the provider’s note order, and tree rows
 retain their original hierarchy. Supply `modified` in `notes` as well as `rows`
 when publishing a separate search inventory. It is display metadata, independent
 of the opaque `version` used for change detection.
