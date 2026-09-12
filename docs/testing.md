@@ -1,6 +1,6 @@
 # Testing and development
 
-The aggregate runner exercises all thirteen suites without real accounts or note
+The aggregate runner exercises all fourteen suites without real accounts or note
 contents:
 
 ```bash
@@ -30,7 +30,7 @@ omarchy plugin enable io.github.andreivinca.note-note
   reload a `keepLoaded` plugin). Expect ~4 s.
 - **Python changed** → nothing; the next call picks it up. That includes the
   editor's converters, which run as a process per conversion.
-- Always lint first: `qmllint -I /usr/share/omarchy/shell Notes.qml ui/*.qml
+- Always lint first: `qmllint -I /usr/share/omarchy/shell Notes.qml ui/*.qml ui/statusbar/*.qml
   ui/editing/*.qml ui/tools/*.qml providers/*/Provider.qml providers/onenote/SearchCache.qml services/*/*.qml`, and `python3 -m py_compile` the
   scripts. For Python there is also `uvx ruff check .`, configured in
   `pyproject.toml` — it needs nothing installed and it is narrowed to the
@@ -73,6 +73,10 @@ For real keystrokes `wtype` works (`wtype "text"`, `wtype -k Return`,
 run it while the user may be using the machine.
 
 ## Testing Qt behaviour in isolation
+
+The status bar has a focused suite, `python3 tests/statusbar_selftest.py`, for
+registration, left/right layouts, visibility, font sizes, narrow windows and
+custom dropdown interaction. See [the component contract](status-bar.md).
 
 Faster and safer than testing inside the shell:
 
@@ -163,6 +167,9 @@ Pointer events check link previews in the view bar, directly opening editable
 and read-only links, selecting link text without opening it, and clearing the
 preview when the pointer leaves or the note changes. These checks capture
 open requests without launching a browser.
+Converter checks cover balanced, nested and unmatched parentheses in link
+and image destinations, including OneNote notebook links, through saving and
+Qt reloads without changing the destinations.
 URL cases type new addresses after a linked list item, check their destinations
 as they grow and through undo/redo, and cover punctuation, code spans, named
 links and plain-text notes. These run with the actual iA Writer Mono S note font

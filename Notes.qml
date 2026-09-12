@@ -2023,6 +2023,7 @@ Item {
             clipboard: clipboardService
             canImages: { var p = root.providerOf(root.currentPath); return p ? p.canImages === true : false }
             hasNote: root.currentPath !== ""
+            loading: root.loadingNote && root.loadingPath === root.currentPath
             plain: { var p = root.providerOf(root.currentPath); return p ? !p.markdown : false }
             hasTitle: { var p = root.providerOf(root.currentPath); return p ? p.hasTitle : true }
             enabledTools: { var p = root.providerOf(root.currentPath); return (p && p.tools !== undefined) ? p.tools : null }
@@ -2037,8 +2038,6 @@ Item {
               }
               return ""
             }
-            placeholder: root.loadingPath && root.loadingPath === root.currentPath ? "Loading…"
-              : (root.rows.length === 0 && !root.filterText ? "No notes yet — press ctrl+n to create one." : "")
             foreground: root.foreground
             accent: root.accent
             background: root.background

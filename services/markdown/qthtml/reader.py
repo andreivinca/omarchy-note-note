@@ -20,6 +20,7 @@ from . import dialect
 from ._vendor import parse, walk_text, htmltree, htmltables, textcolor
 from .imagesize import local_path, width_of
 from .mdtext import escape_inline, escape_line_start, escape_table_cell, code_span, code_fence
+from .mdtext import escape_link_destination
 
 # Four non-breaking spaces per level: Markdown has no paragraph indent, and
 # this is the form the providers already translate into a real one.
@@ -427,7 +428,8 @@ class _Reader:
             elif node.tag == "a":
                 out.append(self.anchor(node, active))
             elif node.tag == "img":
-                out.append(_Run("![%s](%s)%s" % (node.attrs.get("alt", ""), node.attrs.get("src", ""),
+                source = escape_link_destination(node.attrs.get("src", ""))
+                out.append(_Run("![%s](%s)%s" % (node.attrs.get("alt", ""), source,
                                                  self.image_width(node)), active))
             elif node.tag == "span":
                 style = dialect.style_map(node.style)
@@ -451,7 +453,7 @@ class _Reader:
         shared = frozenset.intersection(*[run.styles for run in inner]) if inner else frozenset()
         shared -= {"link"}
         text = _emit(inner, active | shared | {"link"}).strip()
-        return _Run("[%s](%s)" % (text or href, href.replace(")", "%29")), active | shared)
+        return _Run("[%s](%s)" % (text or href, escape_link_destination(href)), active | shared)
 
     def image_width(self, node):
         """A width the author gave the image, as `{width=N}` after it — the

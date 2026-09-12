@@ -17,6 +17,7 @@ LINE_START = re.compile(r"^(\s*)([#>]|[-+*](?=\s)|[-=]{3,}\s*$|\|)")
 LINE_NUMBER = re.compile(r"^(\s*\d+)([.)])")
 STRICT = re.compile(r"([\\*_`~=\[\]<>|])")
 UNESCAPED_PIPE = re.compile(r"(?<!\\)((?:\\\\)*)\|")
+LINK_DESTINATION_MARKERS = re.compile(r"([\\()])")
 
 
 def escape_inline(text, strict=False):
@@ -73,6 +74,16 @@ def escape_table_cell(text):
     represents literal backslashes and still needs an escape for the pipe.
     """
     return UNESCAPED_PIPE.sub(r"\1\\|", text).replace("\n", " ")
+
+
+def escape_link_destination(url):
+    """Protect Markdown delimiters while preserving the URL after parsing.
+
+    Escaping only a closing parenthesis leaves an unmatched opening one,
+    so Markdown reads the entire link as text. Backslashes must be escaped
+    too, or they can consume the escape intended for a following delimiter.
+    """
+    return LINK_DESTINATION_MARKERS.sub(r"\\\1", url)
 
 
 def code_span(text):

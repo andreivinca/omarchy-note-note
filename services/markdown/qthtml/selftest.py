@@ -124,6 +124,14 @@ CASES = {
     "indent": "plain\n\n    indented once\n",
     "highlight in bold": "**bold with ==highlight== inside**\n",
     "link with text": "see [the docs](https://example.com/a%29b)\n",
+    "link with parentheses": r"see [the docs](https://example.com/a\(b\))" "\n",
+    "link with nested parentheses": r"[nested](https://example.com/a\(b\(c\)\))" "\n",
+    "link with unmatched opening parenthesis": r"[open](https://example.com/a\(b)" "\n",
+    "link with unmatched closing parenthesis": r"[close](https://example.com/a\)b)" "\n",
+    "link with encoded parentheses": "[encoded](https://example.com/a%28b%29)\n",
+    "OneNote link with notebook parentheses": (
+        r"See [Household](onenote:Household.one#Receipts&section-id=%7B123%7D"
+        r"&base-path=https://example.com/Notebooks/Family%20Notebook%20\(Design\)) today." "\n"),
     "link in bold": "**see [the docs](https://example.com)**\n",
     "link in a list": "- see [docs](https://example.com)\n- plain\n",
     "bare URL after a linked item": "- [First](https://example.com/first)\n- https://example.org/second?q=one&n=2\n",
@@ -142,6 +150,8 @@ CASES = {
     "mixed list": "1. first\n2. second\n\n- bullet\n",
     "hard break": "line one  \nline two\n",
     "image": "![a picture](file:///tmp/note-note-test.png)\n",
+    "image with parentheses": r"![a picture](file:///tmp/note-note-\(test\).png)" "\n",
+    "image with unmatched parenthesis": r"![a picture](file:///tmp/note-note-\(test.png)" "\n",
     "image between text": "before\n\n![](file:///tmp/note-note-test.png)\n\nafter\n",
     "image with a width": "![a picture](file:///tmp/note-note-test.png){width=320}\n",
     "sized image between text": "before\n\n![](file:///tmp/note-note-test.png){width=200}\n\nafter\n",

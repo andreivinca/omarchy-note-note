@@ -185,23 +185,10 @@ Item {
       height: root.headerHeight
       color: Qt.tint(root.background, Util.alpha(root.foreground, 0.07))
       HeaderLabel {
-        id: notebookName
-        objectName: "notebookHeaderTitle"
-        anchors.left: parent.left
-        anchors.leftMargin: root.pagePadding + root.textInset
-        anchors.right: countLabel.left
-        anchors.rightMargin: Style.spacing.sm
-        text: root.activeName || "Notes"
-        color: root.foreground
-        font.pixelSize: root.noteFontSize + 1
-        font.bold: true
-        elide: Text.ElideRight
-      }
-      HeaderLabel {
         id: countLabel
         objectName: "notebookHeaderCount"
-        anchors.right: parent.right
-        anchors.rightMargin: Style.spacing.lg
+        anchors.left: parent.left
+        anchors.leftMargin: root.pagePadding + root.textInset
         text: root.noteCount + (root.noteCount === 1 ? " note" : " notes")
         color: Util.alpha(root.foreground, 0.45)
         font.pixelSize: Style.font.bodySmall
