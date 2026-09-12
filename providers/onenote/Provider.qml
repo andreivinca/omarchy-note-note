@@ -239,7 +239,6 @@ Item {
   }
 
   function crumb(path) { var pg = pageAt(path); return pg ? sectionName(pg.sectionId) : "OneNote" }
-  function storageLabel(path) { return "synced online" }
   function createTargetFor(path) { var pg = pageAt(path); return pg ? "section:" + pg.sectionId : "" }
   function restoreState(obj) {
     if (!obj) {

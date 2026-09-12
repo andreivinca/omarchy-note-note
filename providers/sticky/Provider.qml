@@ -118,7 +118,6 @@ Item {
   }
 
   function crumb(path) { return "Microsoft Sticky Notes" }
-  function storageLabel(path) { return "synced online" }
   function createTargetFor(path) { return root.ready ? "new" : "" }
   function restoreState(obj) {}
   function saveState() { return {} }

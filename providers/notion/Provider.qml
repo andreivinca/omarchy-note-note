@@ -111,7 +111,6 @@ Item {
   // would be fetching every page's blocks on every query. The titles are
   // already in the listing, where the host matches them itself.
   function crumb(path) { return root.workspace ? "Notion › " + root.workspace : "Notion" }
-  function storageLabel(path) { return "synced online" }
   // New pages go under the page you are on; otherwise under the first page
   // (the API cannot create top-level pages).
   function createTargetFor(path) {

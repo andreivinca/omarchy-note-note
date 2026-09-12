@@ -259,8 +259,8 @@ them.
   initial indexing, refreshes, unavailable pages and pauses here.
 - `setOrder(sectionKey, paths)`
 - `crumb(path)` → string for the editor's description line
-- `storageLabel(path)` (optional) → status-bar storage description, such as a
-  filename or "synced online"; omitted means no storage label
+- `storageLabel(path)` (optional) → status-bar storage location, such as a
+  local filename; omitted means no storage label. Save state is shown separately.
 - `createTargetFor(path)` → target for Ctrl+N while `path` is open, or ""
 - `restoreState(obj)`, `saveState()` → obj (kept in the host's state file)
 - `watch(on)` (optional) — the app became visible / hidden; start or stop

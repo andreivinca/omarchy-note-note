@@ -2074,20 +2074,17 @@ Item {
             sourceInk: root.sourceInk
             sourceBase: root.sourceBase
             crumb: root.currentCrumb
-            // Providers describe storage; the host supplies transient states.
+            // Storage describes the location; loading and save state belong
+            // to the status on the right.
             storage: {
               if (!root.currentPath) {
                 return ""
               }
-              if (root.loadingPath === root.currentPath) {
-                return "loading…"
-              }
-              if (editor.readOnly) {
-                return "read-only here"
-              }
               var p = root.providerOf(root.currentPath)
               return p && typeof p.storageLabel === "function" ? p.storageLabel(root.currentPath) : ""
             }
+            loading: root.currentPath !== "" && root.loadingPath === root.currentPath
+            readOnly: editor.readOnly
             unsaved: root.dirty || (root.saveRevision >= 0 && root.saveInFlight(root.currentPath))
             statusText: root.statusText
             hoveredLink: editor.hoveredLink

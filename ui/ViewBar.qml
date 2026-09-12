@@ -24,6 +24,8 @@ Item {
   }
   // The note holds edits not yet confirmed saved: dirty, or a save in flight.
   property bool unsaved: false
+  property bool loading: false
+  property bool readOnly: false
   property string statusText: ""
   property string hoveredLink: ""
   readonly property bool previewingLink: hoveredLink.length > 0
@@ -47,14 +49,27 @@ Item {
   property real rightRadius: 0
   // Every control and caption occupies the same row, including icon fonts
   // whose line metrics differ from the caption font.
-  readonly property real verticalPadding: Style.space(4)
+  readonly property real controlMargin: 2
+  readonly property real labelPadding: 5
+  readonly property real rowY: topDivider.height + controlMargin
+  readonly property real controlBorderWidth: 1
   readonly property real controlHeight: Math.max(Style.space(20),
-    Math.ceil(captionMetrics.height) + Style.space(4) + 2)
+    Math.ceil(captionMetrics.height) + Style.space(4) + controlBorderWidth * 2)
   readonly property real controlRadius: Math.min(Style.cornerRadius, Style.space(4))
-  height: controlHeight + verticalPadding * 2
+  height: rowY + controlHeight + controlMargin
 
   FontMetrics {
     id: captionMetrics
+    font.family: root.fontFamily
+    font.pixelSize: root.fontSize
+  }
+
+  component StatusLabel: Text {
+    height: root.controlHeight
+    leftPadding: root.labelPadding
+    rightPadding: root.labelPadding
+    verticalAlignment: Text.AlignVCenter
+    textFormat: Text.PlainText
     font.family: root.fontFamily
     font.pixelSize: root.fontSize
   }
@@ -94,6 +109,7 @@ Item {
     bottomRightRadius: root.rightRadius
   }
   Rectangle {
+    id: topDivider
     width: parent.width
     height: Style.spacing.hairline
     color: Util.alpha(root.foreground, 0.09)
@@ -102,12 +118,12 @@ Item {
     id: toggle
     objectName: "sidebarToggle"
     anchors.left: parent.left
-    anchors.leftMargin: Style.spacing.md
-    y: root.verticalPadding
+    anchors.leftMargin: root.controlMargin
+    y: root.rowY
     height: root.controlHeight
     width: Math.max(Style.space(24), height)
     radius: root.controlRadius
-    borderSpec: Border.flat(Util.alpha(root.foreground, hot ? 0.45 : 0.2), 1)
+    borderSpec: Border.flat(Util.alpha(root.foreground, hot ? 0.45 : 0.2), root.controlBorderWidth)
     background: Util.alpha(root.foreground, 0.06)
     foreground: root.foreground
     accent: root.accent
@@ -124,18 +140,19 @@ Item {
     }
   }
 
-  Rectangle {
+  BorderSurface {
     id: sourceBlock
     objectName: "providerBadge"
     visible: root.sourceName.length > 0
     anchors.left: toggle.right
-    anchors.leftMargin: Style.spacing.xs
-    y: root.verticalPadding
+    anchors.leftMargin: root.controlMargin
+    y: root.rowY
     height: root.controlHeight
-    width: sourceContent.implicitWidth + Style.spacing.lg * 2
+    // Text advances can be fractional; keep both edges on whole pixels so
+    // the one-pixel outline is as sharp on the right as it is on the left.
+    width: Math.ceil(sourceContent.implicitWidth) + Style.spacing.lg * 2
     radius: root.controlRadius
-    border.width: 1
-    border.color: Util.alpha(root.sourceInk, 0.3)
+    borderSpec: Border.flat(Util.alpha(root.sourceInk, 0.3), root.controlBorderWidth)
     color: root.sourceBase.a > 0 ? Util.alpha(root.sourceBase, 0.16)
       : Util.alpha(root.foreground, 0.05)
 
@@ -158,90 +175,68 @@ Item {
         smooth: true
       }
 
-      Text {
+      StatusLabel {
         objectName: "providerLabel"
-        height: parent.height
-        verticalAlignment: Text.AlignVCenter
-        width: Math.min(implicitWidth, Style.space(160))
+        width: Math.min(implicitWidth, Style.space(160) + leftPadding + rightPadding)
         text: root.sourceName
-        textFormat: Text.PlainText
         color: root.sourceInk
-        font.family: root.fontFamily
-        font.pixelSize: root.fontSize
         elide: Text.ElideRight
       }
     }
   }
 
-  Text {
+  StatusLabel {
     id: context
     objectName: "statusContext"
     anchors.left: sourceBlock.visible ? sourceBlock.right : toggle.right
-    anchors.leftMargin: Style.spacing.lg
+    anchors.leftMargin: root.controlMargin
     anchors.right: details.left
-    anchors.rightMargin: Style.spacing.lg
-    y: root.verticalPadding
-    height: root.controlHeight
-    verticalAlignment: Text.AlignVCenter
+    anchors.rightMargin: root.controlMargin
+    y: root.rowY
     visible: !root.previewingLink
     text: root.statusText
       || [root.shownCrumb, root.storage].filter(function(part) { return !!part }).join(" › ")
     color: root.statusText ? Qt.tint(root.foreground, Util.alpha(root.accent, 0.55))
       : Util.alpha(root.foreground, 0.55)
-    textFormat: Text.PlainText
-    font.family: root.fontFamily
-    font.pixelSize: root.fontSize
     elide: Text.ElideRight
   }
 
-  Text {
+  StatusLabel {
     objectName: "linkPreview"
     visible: root.previewingLink
     anchors.fill: context
-    verticalAlignment: Text.AlignVCenter
     text: root.hoveredLink
     color: Qt.tint(root.foreground, Util.alpha(root.accent, 0.55))
-    textFormat: Text.PlainText
-    font.family: root.fontFamily
-    font.pixelSize: root.fontSize
     elide: Text.ElideMiddle
   }
 
   Row {
     id: details
     anchors.right: parent.right
-    anchors.rightMargin: Style.spacing.lg
-    y: root.verticalPadding
+    anchors.rightMargin: root.controlMargin
+    y: root.rowY
     height: root.controlHeight
-    spacing: Style.spacing.md
-    Text {
+    spacing: root.controlMargin
+    StatusLabel {
       objectName: "wordCount"
-      height: parent.height
-      verticalAlignment: Text.AlignVCenter
-      visible: root.countVisible && !root.previewingLink
+      visible: root.countVisible && !root.previewingLink && !root.loading
       text: root.wordCount + (root.wordCount === 1 ? " word" : " words")
       color: Util.alpha(root.foreground, 0.45)
-      font.family: root.fontFamily
-      font.pixelSize: root.fontSize
     }
     StatusGlyph {
       objectName: "saveIndicator"
       height: parent.height
-      visible: root.countVisible && !root.previewingLink && root.storage !== "loading…"
+      visible: root.countVisible && !root.previewingLink && !root.loading
       text: root.unsaved ? "●" : "󰄬"
       color: Qt.tint(root.foreground, Util.alpha(root.accent, 0.6))
       fontSize: root.fontSize
     }
-    Text {
+    StatusLabel {
       objectName: "saveStatus"
-      height: parent.height
-      verticalAlignment: Text.AlignVCenter
-      visible: root.previewingLink || root.countVisible
-      text: root.previewingLink ? "Click to open" : (root.unsaved ? "Unsaved" :
-        (root.storage === "loading…" ? "Loading…" : (root.storage === "read-only here" ? "Read-only" : "Saved")))
+      visible: root.loading || root.previewingLink || root.countVisible
+      text: root.loading ? "Loading…" : root.previewingLink ? "Click to open"
+        : root.unsaved ? "Unsaved" : root.readOnly ? "Read-only" : "Saved"
       color: Util.alpha(root.foreground, 0.5)
-      font.family: root.fontFamily
-      font.pixelSize: root.fontSize
     }
   }
 }

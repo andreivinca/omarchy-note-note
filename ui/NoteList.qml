@@ -511,6 +511,19 @@ Item {
         anchors.right: parent.right
         anchors.bottom: parent.bottom
 
+        Item {
+          visible: footerButtons.count > 0
+          width: parent.width
+          height: Style.spacing.hairline + Style.spacing.sm
+
+          Rectangle {
+            x: -root.pagePadding
+            width: parent.width + root.pagePadding * 2
+            height: Style.spacing.hairline
+            color: Util.alpha(root.foreground, 0.1)
+          }
+        }
+
         Repeater {
           id: footerButtons
           model: root.footerActions
