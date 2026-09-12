@@ -150,6 +150,10 @@ CASES = {
     "mixed list": "1. first\n2. second\n\n- bullet\n",
     "hard break": "line one  \nline two\n",
     "image": "![a picture](file:///tmp/note-note-test.png)\n",
+    "image with literal description markers": (
+        r"![Scan \[page\] and \] \*\*bold\*\* \_text\_ \`code\` \<tag\> \| C:\\scan]"
+        "(file:///tmp/note-note-test.png){width=624}\n"),
+    "image with literal description entities": "![Literal &copy; and &#10;](file:///tmp/note-note-test.png)\n",
     "image with parentheses": r"![a picture](file:///tmp/note-note-\(test\).png)" "\n",
     "image with unmatched parenthesis": r"![a picture](file:///tmp/note-note-\(test.png)" "\n",
     "image between text": "before\n\n![](file:///tmp/note-note-test.png)\n\nafter\n",

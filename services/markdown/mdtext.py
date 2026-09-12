@@ -67,6 +67,15 @@ def escape_text(text):
     return escape_inline(text, strict=True)
 
 
+def escape_image_alt(text):
+    """Keep a plain image description inside one Markdown label.
+
+    Generated descriptions can contain blank lines or Markdown delimiters.
+    Whitespace belongs to the label, not the surrounding document structure.
+    """
+    return escape_text(" ".join(text.split()))
+
+
 def escape_table_cell(text):
     """Protect pipes in serialized inline Markdown without escaping them twice.
 

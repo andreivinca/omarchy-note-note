@@ -13,6 +13,7 @@ import os as _os
 import sys as _sys
 _sys.path.insert(0, _os.path.join(_os.path.dirname(_os.path.abspath(__file__)), "..", "..", "services", "markdown"))
 from mdtext import escape_text, escape_line_start, escape_table_cell  # noqa: E402
+from mdtext import escape_image_alt, escape_link_destination  # noqa: E402
 from parse import parse as _parse  # noqa: E402
 import htmltables  # noqa: E402
 import textcolor  # noqa: E402
@@ -126,7 +127,7 @@ class Converter:
                     # back what the note says.
                     self.images.append({"src": src, "alt": alt, "width": width, "local": local})
                     size = "{width=%d}" % width if width > 0 else ""
-                    out.append("![%s](%s)%s" % (alt, local, size))
+                    out.append("![%s](%s)%s" % (escape_image_alt(alt), escape_link_destination(local), size))
                 else:
                     # Not shown means not held: editing could only lose it.
                     self.editable = False

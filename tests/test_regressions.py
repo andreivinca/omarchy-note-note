@@ -1,4 +1,5 @@
 """Content preservation and confirmed IO regressions; temporary files only."""
+import html
 import os
 from pathlib import Path
 import re
@@ -7,6 +8,7 @@ import sys
 import tempfile
 import unittest
 from unittest.mock import patch
+from xml.etree import ElementTree as ET
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path[:0] = [str(ROOT / path) for path in (
@@ -104,6 +106,33 @@ class Files(unittest.TestCase):
 
 
 class Content(unittest.TestCase):
+    def test_image_descriptions_remain_labels_through_editor_conversion(self):
+        descriptions = (
+            "Text alternativ generat automat:\n\n",
+            "First line\r\n\t\r\nsecond line",
+            "Scan [page] and ] unmatched [",
+            r"**bold** _underlined_ `code` ==mark== <tag> | C:\scan",
+            "Literal &copy; and &#10; & text",
+        )
+        for description in descriptions:
+            with self.subTest(description=description):
+                source = ('<p>Before</p><p><img src="file:///tmp/scan.png" alt="'
+                          + html.escape(description, quote=True) + '" width="624"/></p><p>After</p>')
+                converted = convert(source)
+                self.assertEqual(converted["count"], 3)
+                markdown = converted["markdown"]
+                for _ in range(3):
+                    rendered = to_html(markdown)
+                    tree = ET.fromstring("<body>" + rendered + "</body>")
+                    pictures = list(tree.iter("img"))
+                    self.assertEqual(len(pictures), 1)
+                    self.assertEqual(pictures[0].attrib, {
+                        "src": "file:///tmp/scan.png", "alt": " ".join(description.split()), "width": "624",
+                    })
+                    self.assertEqual(walk_text(parse(markdown)), "BeforeAfter")
+                    self.assertEqual(to_markdown(rendered), markdown)
+                    markdown = to_markdown(rendered)
+
     def test_notion_preserves_long_plain_styled_and_code_text(self):
         text = "漢" * 2101
         cases = [text, "**" + text + "**", code_span(text), "```\n" + text + "\n```"]

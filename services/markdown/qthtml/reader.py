@@ -20,7 +20,7 @@ from . import dialect
 from ._vendor import parse, walk_text, htmltree, htmltables, textcolor
 from .imagesize import local_path, width_of
 from .mdtext import escape_inline, escape_line_start, escape_table_cell, code_span, code_fence
-from .mdtext import escape_link_destination
+from .mdtext import escape_image_alt, escape_link_destination
 
 # Four non-breaking spaces per level: Markdown has no paragraph indent, and
 # this is the form the providers already translate into a real one.
@@ -429,8 +429,8 @@ class _Reader:
                 out.append(self.anchor(node, active))
             elif node.tag == "img":
                 source = escape_link_destination(node.attrs.get("src", ""))
-                out.append(_Run("![%s](%s)%s" % (node.attrs.get("alt", ""), source,
-                                                 self.image_width(node)), active))
+                alt = escape_image_alt(node.attrs.get("alt", ""))
+                out.append(_Run("![%s](%s)%s" % (alt, source, self.image_width(node)), active))
             elif node.tag == "span":
                 style = dialect.style_map(node.style)
                 color = textcolor.from_style(node.style)

@@ -20,6 +20,7 @@ os.environ["NOTE_NOTE_MS_TOKEN"] = str(Path(WORK.name) / "token.json")
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import onenote  # noqa: E402
 from notemerge import MergeStore, StaleRemote  # noqa: E402
+from qthtml import to_html, to_markdown  # noqa: E402
 
 
 def note(body, title="Title"):
@@ -34,6 +35,38 @@ def page_html(value):
         if node.tag in onenote.onenote_patch.REPLACEABLE or node.tag == "div":
             node.set("id", "%s:fixture%d" % (node.tag, index))
     return ET.tostring(tree, encoding="unicode")
+
+
+class ImageConversionTests(unittest.TestCase):
+    def test_generated_descriptions_preserve_images_in_every_container(self):
+        descriptions = (
+            "Text alternativ generat automat:\n\n",
+            "First line\r\n\t\r\nsecond line",
+            "Scan [page] and ] unmatched [",
+            r"**bold** _underlined_ `code` ==mark== <tag> | C:\scan",
+            "Literal &copy; and &#10; & text",
+        )
+        containers = ("%s", "<p>%s</p>", "<ul><li>%s</li></ul>",
+                      "<table><tr><td>%s</td></tr></table>")
+        local = "file:///tmp/scan-(page.png"
+        for description in descriptions:
+            for container in containers:
+                with self.subTest(description=description, container=container):
+                    image = '<img src="resource" alt="%s" width="624"/>' % html.escape(description, quote=True)
+                    source = "<body>" + container % image + "</body>"
+                    loaded = onenote.onenote_md.html_to_markdown(source, lambda src, width: local)
+                    self.assertTrue(loaded["editable"])
+                    self.assertTrue(loaded["images"])
+                    self.assertTrue(all(item["alt"] == description for item in loaded["images"]))
+                    for markdown in (loaded["body"], onenote.normalize_note(loaded)["body"]):
+                        rendered = to_html(markdown)
+                        pictures = list(ET.fromstring("<body>" + rendered + "</body>").iter("img"))
+                        self.assertEqual(len(pictures), 1, markdown)
+                        self.assertEqual(pictures[0].attrib, {
+                            "src": local, "alt": " ".join(description.split()), "width": "624",
+                        })
+                        saved = to_markdown(rendered)
+                        self.assertEqual(to_markdown(to_html(saved)), saved)
 
 
 class SaveTests(unittest.TestCase):
@@ -55,6 +88,10 @@ class SaveTests(unittest.TestCase):
                        + layout + heading + photos + '<p id="p:end">End</p></div></body></html>')
         original = ET.fromstring(self.remote)
         loaded = self.load()
+        displayed = ET.fromstring("<body>" + to_html(loaded["body"]) + "</body>")
+        pictures = list(displayed.iter("img"))
+        self.assertEqual(len(pictures), 2)
+        self.assertEqual(pictures[0].get("alt"), "Generated description:")
         desired = loaded["body"].replace('| Left |  | Right |', r'| Left | \| | Right |')
         desired = desired.replace('End', 'Edited ending')
         self.assertNotEqual(desired, loaded["body"])
