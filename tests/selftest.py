@@ -22,6 +22,7 @@ SUITES = [
     "services/markdown/qthtml/selftest.py",
     "cpp/selftest.py",
     "tests/test_regressions.py",
+    "tests/statusbar_selftest.py",
     "tests/transition_selftest.py",
 ]
 

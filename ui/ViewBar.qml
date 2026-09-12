@@ -1,6 +1,6 @@
 import QtQuick
 import qs.Commons
-import qs.Ui
+import "statusbar" as Status
 
 // Provider badge, breadcrumb, word count, save state and the sidebar toggle.
 Item {
@@ -47,59 +47,15 @@ Item {
   // one, against the sidebar, and reach the other.
   property real leftRadius: 0
   property real rightRadius: 0
-  // Every control and caption occupies the same row, including icon fonts
-  // whose line metrics differ from the caption font.
-  readonly property real controlMargin: 2
-  readonly property real labelPadding: 5
-  readonly property real rowY: topDivider.height + controlMargin
-  readonly property real controlBorderWidth: 1
-  readonly property real controlHeight: Math.max(Style.space(20),
-    Math.ceil(captionMetrics.height) + Style.space(4) + controlBorderWidth * 2)
-  readonly property real controlRadius: Math.min(Style.cornerRadius, Style.space(4))
-  height: rowY + controlHeight + controlMargin
+  implicitHeight: bar.implicitHeight + topDivider.height
+  height: implicitHeight
 
-  FontMetrics {
-    id: captionMetrics
-    font.family: root.fontFamily
-    font.pixelSize: root.fontSize
-  }
-
-  component StatusLabel: Text {
-    height: root.controlHeight
-    leftPadding: root.labelPadding
-    rightPadding: root.labelPadding
-    verticalAlignment: Text.AlignVCenter
-    textFormat: Text.PlainText
-    font.family: root.fontFamily
-    font.pixelSize: root.fontSize
-  }
-
-  // Center the visible icon, independent of its font's baseline and bearings.
-  component StatusGlyph: Item {
-    id: symbol
-    required property string text
-    required property color color
-    required property real fontSize
-    implicitWidth: fontSize
-
-    TextMetrics {
-      id: metrics
-      font: glyph.font
-      text: symbol.text
-    }
-
-    Text {
-      id: glyph
-      x: (parent.width - metrics.tightBoundingRect.width) / 2 - metrics.tightBoundingRect.x
-      y: (parent.height - metrics.tightBoundingRect.height) / 2
-        - baselineOffset - metrics.tightBoundingRect.y
-      text: symbol.text
-      textFormat: Text.PlainText
-      color: symbol.color
-      font.family: Style.fontFamily
-      font.pixelSize: symbol.fontSize
-      renderType: Text.NativeRendering
-    }
+  Status.StatusStyle {
+    id: statusStyle
+    foreground: root.foreground
+    accent: root.accent
+    fontFamily: root.fontFamily
+    fontSize: root.fontSize
   }
 
   Rectangle {
@@ -114,129 +70,84 @@ Item {
     height: Style.spacing.hairline
     color: Util.alpha(root.foreground, 0.09)
   }
-  Button {
-    id: toggle
-    objectName: "sidebarToggle"
-    anchors.left: parent.left
-    anchors.leftMargin: root.controlMargin
-    y: root.rowY
-    height: root.controlHeight
-    width: Math.max(Style.space(24), height)
-    radius: root.controlRadius
-    borderSpec: Border.flat(Util.alpha(root.foreground, hot ? 0.45 : 0.2), root.controlBorderWidth)
-    background: Util.alpha(root.foreground, 0.06)
-    foreground: root.foreground
-    accent: root.accent
-    tooltipText: root.listCollapsed ? "Show sidebar (ctrl+e)" : "Hide sidebar (ctrl+e)"
-    Accessible.role: Accessible.Button
-    Accessible.name: root.listCollapsed ? "Show sidebar" : "Hide sidebar"
-    onClicked: root.listToggled()
 
-    StatusGlyph {
-      anchors.fill: parent
-      text: root.listCollapsed ? "󰅂" : "󰅁"
-      color: root.foreground
-      fontSize: Style.font.iconSmall
-    }
-  }
+  Status.StatusBar {
+    id: bar
+    anchors.fill: parent
+    anchors.topMargin: topDivider.height
+    minimumContentHeight: statusStyle.controlHeight
 
-  BorderSurface {
-    id: sourceBlock
-    objectName: "providerBadge"
-    visible: root.sourceName.length > 0
-    anchors.left: toggle.right
-    anchors.leftMargin: root.controlMargin
-    y: root.rowY
-    height: root.controlHeight
-    // Text advances can be fractional; keep both edges on whole pixels so
-    // the one-pixel outline is as sharp on the right as it is on the left.
-    width: Math.ceil(sourceContent.implicitWidth) + Style.spacing.lg * 2
-    radius: root.controlRadius
-    borderSpec: Border.flat(Util.alpha(root.sourceInk, 0.3), root.controlBorderWidth)
-    color: root.sourceBase.a > 0 ? Util.alpha(root.sourceBase, 0.16)
-      : Util.alpha(root.foreground, 0.05)
-
-    Row {
-      id: sourceContent
-      anchors.centerIn: parent
-      height: parent.height
-      spacing: Style.spacing.xs
-
-      Image {
-        visible: status === Image.Ready
-        source: root.sourceLogo
-        anchors.verticalCenter: parent.verticalCenter
-        anchors.alignWhenCentered: false
-        width: root.fontSize
-        height: root.fontSize
-        sourceSize.width: width * 2
-        sourceSize.height: height * 2
-        fillMode: Image.PreserveAspectFit
-        smooth: true
+    leftItems: [
+      Status.StatusItem {
+        Status.StatusButton {
+          objectName: "sidebarToggle"
+          style: statusStyle
+          iconText: root.listCollapsed ? "󰅂" : "󰅁"
+          tooltipText: root.listCollapsed ? "Show sidebar (ctrl+e)" : "Hide sidebar (ctrl+e)"
+          Accessible.name: root.listCollapsed ? "Show sidebar" : "Hide sidebar"
+          onClicked: root.listToggled()
+        }
+      },
+      Status.StatusItem {
+        visible: root.sourceName.length > 0
+        ProviderBadge {
+          objectName: "providerBadge"
+          style: statusStyle
+          text: root.sourceName
+          logo: root.sourceLogo
+          foreground: root.sourceInk
+          base: root.sourceBase
+        }
+      },
+      Status.StatusItem {
+        fillWidth: true
+        visible: !root.previewingLink
+        Status.StatusLabel {
+          objectName: "statusContext"
+          style: statusStyle
+          text: root.statusText || [root.shownCrumb, root.storage].filter(function(part) {
+            return !!part
+          }).join(" › ")
+          color: root.statusText ? Qt.tint(root.foreground, Util.alpha(root.accent, 0.55))
+            : Util.alpha(root.foreground, 0.55)
+        }
+      },
+      Status.StatusItem {
+        fillWidth: true
+        visible: root.previewingLink
+        Status.StatusLabel {
+          objectName: "linkPreview"
+          style: statusStyle
+          text: root.hoveredLink
+          color: Qt.tint(root.foreground, Util.alpha(root.accent, 0.55))
+          elide: Text.ElideMiddle
+        }
       }
+    ]
 
-      StatusLabel {
-        objectName: "providerLabel"
-        width: Math.min(implicitWidth, Style.space(160) + leftPadding + rightPadding)
-        text: root.sourceName
-        color: root.sourceInk
-        elide: Text.ElideRight
+    rightItems: [
+      Status.StatusItem {
+        visible: root.countVisible && !root.previewingLink && !root.loading
+        Status.StatusLabel {
+          objectName: "wordCount"
+          style: statusStyle
+          text: root.wordCount + (root.wordCount === 1 ? " word" : " words")
+          color: Util.alpha(root.foreground, 0.45)
+        }
+      },
+      Status.StatusItem {
+        visible: root.loading || root.previewingLink || root.countVisible
+        Status.StatusLabel {
+          objectName: "saveStatus"
+          style: statusStyle
+          iconText: root.countVisible && !root.previewingLink && !root.loading
+            ? (root.unsaved ? "●" : "󰄬") : ""
+          iconColor: Qt.tint(root.foreground, Util.alpha(root.accent, 0.6))
+          text: root.loading ? "Loading…" : root.previewingLink ? "Click to open"
+            : root.unsaved ? "Unsaved" : root.readOnly ? "Read-only" : "Saved"
+          color: Util.alpha(root.foreground, 0.5)
+        }
       }
-    }
-  }
-
-  StatusLabel {
-    id: context
-    objectName: "statusContext"
-    anchors.left: sourceBlock.visible ? sourceBlock.right : toggle.right
-    anchors.leftMargin: root.controlMargin
-    anchors.right: details.left
-    anchors.rightMargin: root.controlMargin
-    y: root.rowY
-    visible: !root.previewingLink
-    text: root.statusText
-      || [root.shownCrumb, root.storage].filter(function(part) { return !!part }).join(" › ")
-    color: root.statusText ? Qt.tint(root.foreground, Util.alpha(root.accent, 0.55))
-      : Util.alpha(root.foreground, 0.55)
-    elide: Text.ElideRight
-  }
-
-  StatusLabel {
-    objectName: "linkPreview"
-    visible: root.previewingLink
-    anchors.fill: context
-    text: root.hoveredLink
-    color: Qt.tint(root.foreground, Util.alpha(root.accent, 0.55))
-    elide: Text.ElideMiddle
-  }
-
-  Row {
-    id: details
-    anchors.right: parent.right
-    anchors.rightMargin: root.controlMargin
-    y: root.rowY
-    height: root.controlHeight
-    spacing: root.controlMargin
-    StatusLabel {
-      objectName: "wordCount"
-      visible: root.countVisible && !root.previewingLink && !root.loading
-      text: root.wordCount + (root.wordCount === 1 ? " word" : " words")
-      color: Util.alpha(root.foreground, 0.45)
-    }
-    StatusGlyph {
-      objectName: "saveIndicator"
-      height: parent.height
-      visible: root.countVisible && !root.previewingLink && !root.loading
-      text: root.unsaved ? "●" : "󰄬"
-      color: Qt.tint(root.foreground, Util.alpha(root.accent, 0.6))
-      fontSize: root.fontSize
-    }
-    StatusLabel {
-      objectName: "saveStatus"
-      visible: root.loading || root.previewingLink || root.countVisible
-      text: root.loading ? "Loading…" : root.previewingLink ? "Click to open"
-        : root.unsaved ? "Unsaved" : root.readOnly ? "Read-only" : "Saved"
-      color: Util.alpha(root.foreground, 0.5)
-    }
+    ]
   }
 }

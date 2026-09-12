@@ -28,6 +28,8 @@ ui/TitleBar.qml             the title bar, browser-shaped: the binder's tabs
 ui/TabStrip.qml             the binder's tabs across the title bar
 ui/ViewBar.qml              the view bar along the bottom: source segment, crumb,
                             save state, status messages, word count
+ui/statusbar/               generic status layout host, registrations and optional controls
+ui/ProviderBadge.qml        app-owned provider badge registered in the view bar
 ui/NoteList.qml             sidebar (rows, drag, scrolling, the coloured page)
 ui/TabColors.js             the tab palette, and the wash both it and the page use
 ui/NoteEditor.qml           the tools strip across the pane's top, the title,

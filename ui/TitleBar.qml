@@ -71,7 +71,8 @@ Item {
     id: inner
     anchors.fill: parent
     anchors.leftMargin: tabStrip.verticalInset
-    anchors.rightMargin: tabStrip.horizontalPadding
+    // Match the menu button's outside gap to its gap beside Search.
+    anchors.rightMargin: Style.spacing.lg
 
     TabStrip {
       id: tabStrip
@@ -142,10 +143,6 @@ Item {
       // the way the search keycap above caps its own: a square theme keeps
       // its corners, and a round one is held back short of the point where
       // a box this small stops being a box and becomes a circle.
-      //
-      // The bars are drawn as a plain Text rather than the button's own
-      // icon: an icon glyph's ink is not centered in its advance width, and
-      // in a box this tight that reads as off-center.
       width: Style.spacing.controlHeight
       height: Style.spacing.controlHeight
       radius: Math.min(Style.cornerRadius, height / 4)
@@ -156,34 +153,25 @@ Item {
         menu.close()
       }
 
-      // Centered on the glyph's painted ink, both axes. The kit's
-      // OpticalGlyph corrects only horizontally — it keeps a shared
-      // baseline for rows of glyphs — but a lone glyph in a circle
-      // has no neighbours, and its line box's own centering reads as
-      // vertical drift.
-      TextMetrics {
-        id: menuMetrics
-        font.family: Style.fontFamily
-        // The kit's large icon rather than its small one: three stacked bars
-        // are mostly the gaps between them, and at the size a lone glyph
-        // takes they close up into a smudge. Still short of the button's own
-        // height, so the hover ring has a margin to sit in.
-        font.pixelSize: Math.max(1, Math.round(Style.font.iconLarge))
-        text: menuGlyph.text
-      }
-      Text {
-        id: menuGlyph
+      // Center the dots themselves so font baselines and fallback glyphs
+      // cannot shift the icon inside its button.
+      Row {
+        id: menuIcon
         anchors.centerIn: parent
         anchors.alignWhenCentered: false
-        anchors.horizontalCenterOffset: implicitWidth / 2
-          - (menuMetrics.tightBoundingRect.x + menuMetrics.tightBoundingRect.width / 2)
-        anchors.verticalCenterOffset: implicitHeight / 2
-          - (baselineOffset + menuMetrics.tightBoundingRect.y + menuMetrics.tightBoundingRect.height / 2)
-        text: "󰇘"
-        font.family: Style.fontFamily
-        font.pixelSize: menuMetrics.font.pixelSize
-        renderType: Text.NativeRendering
-        color: menuButton.selected ? Style.selectedStateColor(root.foreground, root.accent) : root.foreground
+        readonly property real dotSize: Math.max(1, Style.font.iconLarge / 6)
+        spacing: dotSize
+
+        Repeater {
+          model: 3
+          Rectangle {
+            width: menuIcon.dotSize
+            height: width
+            radius: width / 2
+            antialiasing: true
+            color: menuButton.selected ? Style.selectedStateColor(root.foreground, root.accent) : root.foreground
+          }
+        }
       }
 
       // The widest label the menu is about to show, measured at the size it

@@ -17,6 +17,7 @@ Item {
   id: root
 
   property bool hasNote: false
+  property bool loading: false
   // Plain text for backends that store text (Sticky Notes): every newline
   // counts, and nothing is Markdown.
   property bool plain: false
@@ -26,7 +27,6 @@ Item {
   property bool readOnly: false
   // Tool ids the current provider supports (see PROVIDERS.md); null = all.
   property var enabledTools: null
-  property string placeholder: ""
   property color foreground: Color.menu.text
   property color accent: Color.accent
   // The surface the note sits on — what the checkbox cover paints in, so
@@ -142,6 +142,7 @@ Item {
   // length the user chose.
   readonly property int titleSize: Math.round(root.bodyFontSize * 2)
   readonly property bool showingNotice: noticeText.length > 0 || customView !== null
+  readonly property bool showingSkeleton: root.hasNote && root.loading && !root.showingNotice
   function showView(component, props) {
     // Loading a Component can finish synchronously. Supply its properties
     // first, and recreate even the same view so no previous state survives.
@@ -1636,6 +1637,7 @@ Item {
   // and no rule beside it — a box drawn around a page is one line too many.
   Column {
     id: sheet
+    visible: (root.hasNote || root.showingNotice) && !root.showingSkeleton
     anchors.top: toolStrip.bottom
     anchors.bottom: parent.bottom
     anchors.left: parent.left
@@ -1686,7 +1688,7 @@ Item {
           // Sticky Notes have no separate title (subject = first line).
           visible: !root.showingNotice && root.hasTitle
           enabled: root.hasNote && !root.readOnly
-          placeholderText: root.hasNote ? "Untitled" : "Note Note"
+          placeholderText: "Untitled"
           // The title sits a step behind the body: slightly faded.
           foreground: root.foreground
           accent: root.accent
@@ -1704,19 +1706,6 @@ Item {
           Keys.onReturnPressed: root.focusBody()
           Keys.onEnterPressed: root.focusBody()
           Keys.onDownPressed: root.focusBody()
-        }
-
-        // Only the empty-state hint lives here; where a note comes from is
-        // what the sidebar shows.
-        Text {
-          textFormat: Text.PlainText
-          visible: !root.showingNotice && !root.hasNote
-          width: parent.width
-          text: "Pick a note on the left, or press ctrl+n for a new one."
-          color: Util.alpha(root.foreground, 0.65)
-          font.family: root.fontFamily
-          font.pixelSize: Style.font.bodySmall
-          elide: Text.ElideRight
         }
       }
     }
@@ -1966,19 +1955,6 @@ Item {
             }
           }
 
-          Text {
-            anchors.fill: parent
-            anchors.leftMargin: Style.spacing.xs
-            anchors.topMargin: area.topPadding
-            visible: area.length === 0 && !!root.placeholder
-            text: root.placeholder
-            color: root.foreground
-            opacity: 0.45
-            font.family: root.noteFontFamily
-            font.pixelSize: root.bodyFontSize
-            wrapMode: Text.Wrap
-          }
-
           // The quote bars, drawn in the quotes' left margin — children of
           // the editor, so they scroll with it and share its coordinates.
           Repeater {
@@ -2141,6 +2117,14 @@ Item {
           }
         }
       }
+  }
+
+  NoteSkeleton {
+    anchors.fill: sheet
+    visible: root.showingSkeleton
+    foreground: root.foreground
+    titleSize: root.titleSize
+    bodyFontSize: root.bodyFontSize
   }
 
   // ---- there is more: the sidebar's thin track, on the note's own edge.
