@@ -1,3 +1,12 @@
+# Repository moved to [note-note](https://github.com/andreivinca/note-note)
+
+> [!IMPORTANT]
+> **Note Note has moved to [andreivinca/note-note](https://github.com/andreivinca/note-note).**
+>
+> Please use the new repository for the latest code, releases, documentation, and issues.
+
+---
+
 # Note Note
 
 A notes workspace for the Omarchy shell: notebook tabs across the top, a
