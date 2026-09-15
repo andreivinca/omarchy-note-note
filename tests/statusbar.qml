@@ -2,11 +2,15 @@ import QtQuick
 import QtQuick.Controls as QQC
 import QtTest
 import Quickshell
+import "app/hosts/omarchy" as Omarchy
 import "app/ui" as Ui
 import "app/ui/statusbar" as Status
 
 ShellRoot {
   id: test
+  Omarchy.Backend {
+    Component.onCompleted: install()
+  }
   property var results: []
 
   Component {

@@ -1,6 +1,7 @@
 import QtQuick
-import qs.Commons
-import qs.Ui
+import "../services/platform"
+import "../design"
+import "../design/controls"
 import "editing" as Editing
 import "QuoteBars.js" as QuoteBars
 import "EditContext.js" as EditContext
@@ -934,7 +935,7 @@ Item {
   }
   Loader {
     id: nativeBlocks
-    source: "NativeBlocks.qml"
+    source: Platform.textInspectorUrl
     onStatusChanged: if (status === Loader.Error) {
       console.log("note-note: native text inspector not built (sh cpp/build.sh); scanning HTML instead")
     }

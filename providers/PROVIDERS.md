@@ -3,10 +3,39 @@
 A provider is a QML `Item` (file `Provider.qml`) that supplies one or more
 sidebar sections and the notes in them. Built-in providers live under
 `providers/<id>/`; external ones under
-`~/.config/omarchy/note-note/providers/<id>/Provider.qml` (a plain git clone
-is enough). The host instantiates each with `host` and `services` set, and
+`~/.config/omarchy/note-note/providers/<id>/Provider.qml` for the plugin or
+`~/.config/notenote/providers/<id>/Provider.qml` for the standalone app (a
+plain git clone is enough). Both respect `XDG_CONFIG_HOME`.
+The workspace instantiates each with `host` and `services` set, and
 right after creation assigns any settings from the provider's entry in the
 host's config (see "Settings from the host's config").
+
+## Portable host services
+
+The provider contract works in both hosts. For portable setup views, import
+standard `QtQuick` and `QtQuick.Controls`, as `examples/hello/Provider.qml`
+does. A provider that imports `Quickshell` or `qs.*` directly requires Omarchy.
+
+The following injected services are available in addition to requests and
+Microsoft accounts:
+
+| Service | Contract |
+|---|---|
+| `services.platform` | `env(name)`, `copyText(text)`, `openUrl(url)`, `localPath(url)`, `fileUrl(path)`; `configDir`, `stateDir`, `cacheDir`, `pasteDir`, `providersDir` and `environment` |
+| `services.style`, `services.colors` | Shared theme dimensions and colors, using the active host's palette |
+| `services.processes.create(owner)` | Creates an owned process runner; `run(options, callback)` returns an idempotent `cancel()` handle |
+
+Process options include `command` (argv), `environment`, optional stdin
+`payload`, `timeoutMs` (default 30 seconds), `maxOutputBytes` (default 32 MiB)
+and `raw` (return `{text}` instead of decoding a JSON object). The callback
+settles once on success, failure, timeout or cancellation. Use the request
+queue for remote jobs as before. Every runner supplies the active host's
+storage environment to its scripts. Resolve paths from those services;
+do not hardcode an Omarchy cache directory in a portable provider.
+
+The existing paths shown later in this document are plugin defaults. See
+[the complete storage map](../docs/standalone.md#storage) for native paths
+and manual script environment overrides.
 
 ## Properties the host reads
 
@@ -476,6 +505,13 @@ request queue. The settings controller drains accepted writes and this busy
 state before destroying an instance; it leaves the instance intact if a note
 cannot be saved. `notebookTabs` is a presentation change and calls `rebuild()`
 on the existing provider. Other setting changes replace the drained instance.
+
+Expose `writeBusy` separately for accepted mutations, including queued writes.
+The standalone window waits for this state and host-queued writes when closing;
+background reads must not keep it open. Providers without `writeBusy` retain
+the conservative `busy` behavior. After saves settle, the native host disposes
+providers while their request lanes are still alive, stopping remaining read
+processes before exiting. Failed saves keep the window and draft open.
 
 Use `services/processes/ProcessRunner.qml` for framed script requests. It sends
 stdin after startup, waits for both output and exit, and settles failure,

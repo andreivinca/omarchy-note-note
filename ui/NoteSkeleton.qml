@@ -1,5 +1,5 @@
 import QtQuick
-import qs.Commons
+import "../design"
 
 Item {
   id: root

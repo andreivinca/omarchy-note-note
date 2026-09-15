@@ -1,8 +1,8 @@
 import QtQuick
 import QtQuick.Controls as QQC
 import QtQuick.Layouts
-import qs.Commons
-import qs.Ui
+import "../../design"
+import "../../design/controls"
 
 QQC.AbstractButton {
   id: root

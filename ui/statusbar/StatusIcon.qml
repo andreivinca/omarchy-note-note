@@ -1,5 +1,5 @@
 import QtQuick
-import qs.Commons
+import "../../design"
 
 // Center the painted glyph, independent of the icon font's bearings and
 // baseline. This is internal control geometry, never registration geometry.

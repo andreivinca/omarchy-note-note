@@ -8,6 +8,8 @@ are, and the mistakes that are expensive to repeat.
 |---|---|
 | [Business requirements](business-requirements.md) | deciding what the product should or should not do |
 | [Technical requirements](technical-requirements.md) | changing the architecture, adding a provider, touching the host |
+| [Standalone app and shared hosts](standalone.md) | building, installing or extending either launcher and its platform adapter |
+| [Flatpak](flatpak.md) | building or installing the standalone Linux bundle and configuring its sandbox |
 | [Editing tools](editing-tools.md) | adding a toolbar action, shortcut, menu or tool panel |
 | [Status bar](status-bar.md) | registering a status control or creating a custom one |
 | [Security rules](security.md) | writing any code that reads a file, spawns a process, or talks to a network — **and before every release** |
@@ -21,11 +23,12 @@ contract is [`../providers/PROVIDERS.md`](../providers/PROVIDERS.md).
 
 ## The short version
 
-Note Note is an Omarchy shell plugin: a summoned overlay (or a detached
-window) with a sidebar of notebooks and one always-editable note. Notes come
+Note Note shares one workspace between an Omarchy shell plugin (overlay or
+detached window) and a standalone Qt 6 Linux application. Both show a sidebar
+of notebooks and one always-editable note. Notes come
 from **providers** — local Markdown folders, Microsoft Sticky Notes, OneNote,
 Notion, and anything a user drops into
-`~/.config/omarchy/note-note/providers/`. The host knows nothing about any
+the host's external provider directory. The workspace knows nothing about any
 backend; providers know nothing about the UI.
 
 Three rules that everything else follows from:

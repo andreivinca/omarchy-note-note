@@ -1,6 +1,6 @@
 import QtQuick
-import qs.Commons
-import qs.Ui
+import "../../design"
+import "../../design/controls"
 import "../editing"
 import "../editing/Calendar.js" as Calendar
 

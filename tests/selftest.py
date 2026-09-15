@@ -35,7 +35,7 @@ def main():
         if suite == "tests/transition_selftest.py" and "--host" in sys.argv:
             command.append("--host")
         try:
-            result = subprocess.run(command, cwd=ROOT, env=env, capture_output=True, text=True, timeout=180)
+            result = subprocess.run(command, cwd=ROOT, env=env, capture_output=True, text=True, timeout=240)
             passed = result.returncode == 0
             output = result.stdout + result.stderr
         except (OSError, subprocess.SubprocessError) as error:

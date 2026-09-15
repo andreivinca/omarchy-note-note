@@ -8,6 +8,35 @@ python3 tests/selftest.py
 python3 tests/selftest.py --host   # also compile and instantiate the host on Wayland
 ```
 
+The standalone host has an additional CMake/CTest entry point, independent
+of Omarchy and Quickshell:
+
+```bash
+cmake -S . -B build
+cmake --build build --parallel
+ctest --test-dir build --output-on-failure
+```
+
+Theme tests cover desktop precedence, Omarchy surfaces and user overrides,
+KDE roles, fallback colors, live file replacement and theme symlink changes.
+A fake Settings portal runs on a private D-Bus session to check appearance
+signals and service restarts. Other native fixtures disconnect from the
+real session bus. The production launcher checks that shared UI colors and
+Qt Quick Controls both receive the detected palette.
+
+The suite also checks native clipboard MIME/text/image handling, process stdin,
+Unicode, cancellation and limits, the production launcher, a portable
+external provider, local saves and shutdown after a failed write. It also
+checks that a slow OneNote read cannot hold the window open after an accepted
+write completes, using synthetic processes without an account. Run
+`python3 tests/standalone_selftest.py --host` to send the close through
+Hyprland's actual window-close dispatcher on Wayland.
+
+The shared transition suite also runs through the native host. Run it directly
+with `python3 tests/transition_selftest.py --standalone`; the binary defaults
+to `build/note-note` and can be selected with `NOTE_NOTE_BINARY`.
+See [standalone development](standalone.md) for installed-layout checks.
+
 It requires Python, Qt's `qml6`, Quickshell (`qs`), `inotifywait`, the Omarchy
 shell components and the built native inspector (`sh cpp/build.sh`). Missing
 required dependencies, runtime crashes, QML errors and malformed results fail
@@ -30,13 +59,16 @@ omarchy plugin enable io.github.andreivinca.note-note
   reload a `keepLoaded` plugin). Expect ~4 s.
 - **Python changed** → nothing; the next call picks it up. That includes the
   editor's converters, which run as a process per conversion.
-- Always lint first: `qmllint -I /usr/share/omarchy/shell Notes.qml ui/*.qml ui/statusbar/*.qml
+- Always lint first: `qmllint -I /usr/share/omarchy/shell Workspace.qml design/*.qml design/controls/*.qml hosts/omarchy/*.qml ui/*.qml ui/statusbar/*.qml
   ui/editing/*.qml ui/tools/*.qml providers/*/Provider.qml providers/onenote/SearchCache.qml services/*/*.qml`, and `python3 -m py_compile` the
   scripts. For Python there is also `uvx ruff check .`, configured in
   `pyproject.toml` — it needs nothing installed and it is narrowed to the
   rules that catch defects (a stale import, an unused local) rather than to
   opinions about a deliberate house style. It should be silent; it found
   three pieces of dead code the first time it was run.
+- Native C++ changes need `cmake --build build`; native QML changes need
+  only an app restart. Types registered by C++ in `NoteNote.Native` are
+  checked by the executable's runtime suites.
 - Always check the log after a restart:
   ```bash
   journalctl --user --since "20 sec ago" --no-pager -o cat | grep -iE "Notes\.qml|Provider|NoteEditor"

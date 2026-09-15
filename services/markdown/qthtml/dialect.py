@@ -97,7 +97,7 @@ DEFAULT_CODE_BACKGROUND = "transparent"
 # states it beside the mono family, and `reader` answers backticks for any
 # mono span before it ever looks at a background (runs()), so the chip is
 # never mistaken for a highlight and never reaches the note. The app passes
-# the code slab's own recipe made opaque (Notes.qml, codeChipColour — Qt's
+# the code slab's own recipe made opaque (Workspace.qml, codeChipColour — Qt's
 # HTML writer keeps a colour but drops its alpha); this default writes no
 # background at all, so a bare conversion stays as it always was.
 DEFAULT_CODE_CHIP = "transparent"

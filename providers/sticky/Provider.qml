@@ -1,5 +1,4 @@
-import Quickshell
-import Quickshell.Io
+import "../../services/platform"
 import QtQuick
 import "../../services/processes"
 
@@ -58,7 +57,7 @@ Item {
     }
   }
 
-  readonly property string dir: Qt.resolvedUrl(".").toString().replace(/^file:\/\//, "").replace(/\/$/, "")
+  readonly property string dir: Platform.localPath(Qt.resolvedUrl(".")).replace(/\/$/, "")
   readonly property string script: dir + "/sticky.py"
 
   signal updated()
@@ -323,6 +322,7 @@ Item {
   // providers/onenote/Provider.qml).
   ProcessRunner { id: scriptRunner }
   readonly property bool busy: scriptRunner.active > 0
+  readonly property bool writeBusy: root.rq && root.rq.revision >= 0 ? root.rq.pendingFor(root, true) > 0 : false
 
   function runScript(args, payload, ctx) {
     scriptRunner.run({ command: ["python3", root.script].concat(args),
@@ -331,19 +331,18 @@ Item {
                        timeoutMs: 600000 }, function(result) { ctx.done(result) })
   }
 
-  Process {
+  ProcessTask {
     id: cachedProc
     environment: root.ms ? root.ms.env : ({})
     command: ["python3", root.script, "list", "--cached"]
-    stdout: StdioCollector {
-      onStreamFinished: {
-        var res = root.parse(this.text)
-        if (!res.error && Array.isArray(res.notes)) {
-          root.notes = res.notes
-        }
-        root.rebuild()
+    raw: true
+    onFinished: function(result) {
+      var res = root.parse(result.text || "")
+      if (!res.error && Array.isArray(res.notes)) {
+        root.notes = res.notes
       }
+      root.rebuild()
     }
   }
-  Process { id: clearProc; environment: root.ms ? root.ms.env : ({}); command: ["python3", root.script, "clear-cache"] }
+  ProcessTask { id: clearProc; environment: root.ms ? root.ms.env : ({}); command: ["python3", root.script, "clear-cache"] }
 }

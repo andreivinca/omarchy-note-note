@@ -3,19 +3,23 @@ show it, its text for the plain paste.
 
     python3 clipboard.py types              -> {"types": ["image/png", …]}
     python3 clipboard.py image <dir>        -> {"path": …, "mime": …, "bytes": n}
+    python3 clipboard.py image-stdin <dir>  -> same, from Qt's MIME/base64 JSON
     python3 clipboard.py text               -> {"text": "…"}
     python3 clipboard.py html               -> {"html": "…"}
 
-Wayland keeps the clipboard in the compositor, so this shells out to
-`wl-paste`. Only real image types are accepted, the read is bounded, and an
+The plugin reads through `wl-paste`; the native host supplies Qt clipboard
+images on stdin. Only supported image types are accepted, and an
 image too large for the backends is scaled down rather than refused — a
 pasted screenshot is usually far bigger than anything a note needs.
 """
 import json
+import base64
+import binascii
 import os
 import subprocess
 import sys
 import time
+import tempfile
 
 # What a backend will accept from us, and what a paste may cost on the way in.
 MIME_SUFFIX = {"image/png": ".png", "image/jpeg": ".jpg", "image/gif": ".gif",
@@ -98,25 +102,45 @@ def save_image(directory):
     mime = image_type(types())
     if not mime:
         return {"error": "the clipboard holds no image"}
-    os.makedirs(directory, mode=0o700, exist_ok=True)
-    path = os.path.join(directory, "paste-%d%s" % (int(time.time() * 1000), MIME_SUFFIX[mime]))
     try:
         proc = subprocess.run(["wl-paste", "--type", mime], capture_output=True, timeout=20)
     except (OSError, subprocess.SubprocessError) as error:
         return {"error": "could not read the clipboard: %s" % error}
-    data = proc.stdout
+    return stage_image(directory, mime, proc.stdout)
+
+
+def stage_image(directory, mime, data):
+    """Shared staging policy for native Qt and the Omarchy clipboard."""
+    if mime not in MIME_SUFFIX:
+        return {"error": "unsupported clipboard image type"}
     if not data:
         return {"error": "the clipboard image was empty"}
     if len(data) > MAX_CLIPBOARD:
         return {"error": "the clipboard image is too large"}
     # Owner-only, and never through a path someone else could have replaced.
-    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    os.makedirs(directory, mode=0o700, exist_ok=True)
+    fd, path = tempfile.mkstemp(prefix="paste-", suffix=MIME_SUFFIX[mime], dir=directory)
     with os.fdopen(fd, "wb") as handle:
         handle.write(data)
     import shutil
     scaled(path, shutil.which("magick") or shutil.which("convert"))
     prune(directory)
     return {"path": path, "mime": mime, "bytes": os.path.getsize(path)}
+
+
+def image_from_stdin(directory):
+    # Base64 expands by 4/3, plus a small JSON envelope. Read the bound once.
+    limit = ((MAX_CLIPBOARD + 2) // 3) * 4 + 4096
+    raw = sys.stdin.buffer.read(limit + 1)
+    if len(raw) > limit:
+        return {"error": "the clipboard image is too large"}
+    try:
+        payload = json.loads(raw)
+        mime = payload["mime"]
+        data = base64.b64decode(payload["data"], validate=True)
+    except (ValueError, TypeError, KeyError, binascii.Error):
+        return {"error": "invalid clipboard image"}
+    return stage_image(directory, mime, data)
 
 
 def clipboard_text():
@@ -163,12 +187,14 @@ def main(argv):
         out({"types": types(), "image": image_type(types())})
     elif command == "image" and len(argv) >= 3:
         out(save_image(argv[2]))
+    elif command == "image-stdin" and len(argv) >= 3:
+        out(image_from_stdin(argv[2]))
     elif command == "text":
         out(clipboard_text())
     elif command == "html":
         out(clipboard_html())
     else:
-        out({"error": "usage: clipboard.py types | image <dir> | text | html"})
+        out({"error": "usage: clipboard.py types | image <dir> | image-stdin <dir> | text | html"})
         return 2
     return 0
 

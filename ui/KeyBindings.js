@@ -3,6 +3,7 @@
 // Help and dispatch share these definitions. Aliases have no separate label.
 var CTRL = Qt.ControlModifier
 var SHIFT = Qt.ShiftModifier
+var ALT = Qt.AltModifier
 // These remain native document operations (undo/redo pass through the
 // editor's transaction handler). Tool files must not replace them.
 var EDITOR_KEYS = [
@@ -28,6 +29,15 @@ var ACTIONS = [
   { id: "previousTab", key: Qt.Key_Tab, modifiers: CTRL | SHIFT, group: "Getting around", label: "ctrl+shift+tab", description: "The notebook before it" },
   { id: "previousTab", key: Qt.Key_Backtab, modifiers: CTRL | SHIFT },
   { id: "previousTab", key: Qt.Key_Backtab, modifiers: CTRL },
+  { id: "selectTab", key: Qt.Key_1, modifiers: ALT, group: "Getting around", label: "alt+1…9", description: "Open notebook 1–9, from left to right" },
+  { id: "selectTab", key: Qt.Key_2, modifiers: ALT },
+  { id: "selectTab", key: Qt.Key_3, modifiers: ALT },
+  { id: "selectTab", key: Qt.Key_4, modifiers: ALT },
+  { id: "selectTab", key: Qt.Key_5, modifiers: ALT },
+  { id: "selectTab", key: Qt.Key_6, modifiers: ALT },
+  { id: "selectTab", key: Qt.Key_7, modifiers: ALT },
+  { id: "selectTab", key: Qt.Key_8, modifiers: ALT },
+  { id: "selectTab", key: Qt.Key_9, modifiers: ALT },
   { id: "openTree", key: Qt.Key_Right, modifiers: CTRL, group: "Getting around", label: "ctrl+right", description: "Open the notebook the cursor rests on" },
   { id: "closeTree", key: Qt.Key_Left, modifiers: CTRL, group: "Getting around", label: "ctrl+left", description: "Fold it, and climb to the one holding it" },
   { id: "toggleList", key: Qt.Key_E, modifiers: CTRL, group: "Getting around", label: "ctrl+e", description: "Hide the sidebar, or bring it back" },

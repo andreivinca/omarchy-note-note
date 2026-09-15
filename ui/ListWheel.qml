@@ -1,5 +1,5 @@
 import QtQuick
-import qs.Commons
+import "../design"
 
 // The one scroll feel, shared by every scrolling surface: a Flickable moves
 // touchpad scrolls pixel-for-pixel, which feels slow for a long list, so they

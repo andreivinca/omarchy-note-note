@@ -1,5 +1,5 @@
 import QtQuick
-import qs.Commons
+import "../design"
 import "../services/notes/sidebar.js" as Sidebar
 
 // Shared two-line note summary for the notebook and search results.

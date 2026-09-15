@@ -1,19 +1,11 @@
-# Note Note is an Omarchy shell plugin, not a distributable package: nothing
-# installs from this file and there is deliberately no [build-system] table.
-# It is here to state, once and in a place a tool can read, the two things
-# that were previously only inferable from 6,500 lines of source — which
-# Python the scripts are written against, and that the empty dependency list
-# is a rule rather than an accident.
-#
-# The Python review that asked for this file made the case concretely:
-# `getattr(st, "st_birthtime", 0)` shipped for as
-# long as providers/local/list.py existed, and nothing in the repository was
-# ever in a position to say a word about it.
+# The Python provider scripts are shared by both hosts. CMake builds and
+# installs the standalone application; this is not a Python distribution.
+# Providers use the standard library and the explicitly vendored libraries.
 
 [project]
 name = "note-note"
-version = "1.0.18"
-description = "Notes for the Omarchy shell: your Markdown notebooks on disk alongside Microsoft Sticky Notes, OneNote and Notion."
+version = "1.0.21"
+description = "Notes for Linux and the Omarchy shell: your Markdown notebooks on disk alongside Microsoft Sticky Notes, OneNote and Notion."
 # Nothing in the tree uses syntax newer than 3.8 — no match statement, no
 # walrus, no PEP 604 unions — so the floor is set by what is still supported
 # rather than by what the code needs.

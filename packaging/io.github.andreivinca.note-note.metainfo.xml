@@ -1,0 +1,49 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="desktop-application">
+  <id>io.github.andreivinca.note-note</id>
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>MIT</project_license>
+  <name>Note Note</name>
+  <summary>Edit local Markdown notes and connected notebooks</summary>
+  <developer id="io.github.andreivinca">
+    <name>Andrei Vinca</name>
+  </developer>
+  <description>
+    <p>Note Note brings local Markdown notebooks, Microsoft OneNote, Sticky Notes,
+    and Notion into one workspace. Local notebooks work without an account.</p>
+    <p>Organize notebooks in tabs, search notes, and edit rich text with Markdown
+    storage. The application follows available desktop colors and saves changes
+    before closing.</p>
+  </description>
+  <launchable type="desktop-id">io.github.andreivinca.note-note.desktop</launchable>
+  <url type="homepage">https://github.com/andreivinca/note-note</url>
+  <url type="bugtracker">https://github.com/andreivinca/note-note/issues</url>
+  <url type="vcs-browser">https://github.com/andreivinca/note-note</url>
+  <provides>
+    <binary>note-note</binary>
+  </provides>
+  <supports>
+    <control>keyboard</control>
+    <control>pointing</control>
+  </supports>
+  <content_rating type="oars-1.1"/>
+  <releases>
+    <release version="1.0.21" date="2026-09-14">
+      <description>
+        <p>Local Markdown notebooks, OneNote, Sticky Notes and Notion in one
+        workspace, available as a Linux app and an Omarchy plugin.</p>
+      </description>
+    </release>
+    <release version="1.0.20" date="2026-09-13">
+      <description>
+        <p>Switch directly to notebook tabs with Alt+1 through Alt+9.</p>
+      </description>
+    </release>
+    <release version="1.0.19" date="2026-09-13">
+      <description>
+        <p>Add the standalone Qt application, system colors, and safe shutdown
+        while background reads are active.</p>
+      </description>
+    </release>
+  </releases>
+</component>

@@ -1,3 +1,4 @@
+import "../platform"
 import "../processes"
 import QtQuick
 
@@ -12,7 +13,7 @@ import QtQuick
 Item {
   id: root
 
-  readonly property string dir: Qt.resolvedUrl(".").toString().replace(/^file:\/\//, "").replace(/\/$/, "")
+  readonly property string dir: Platform.localPath(Qt.resolvedUrl(".")).replace(/\/$/, "")
   readonly property string script: dir + "/qthtml/__main__.py"
 
   // The colours of ==highlighted== text. Neither reaches disk: the note keeps
@@ -23,21 +24,21 @@ Item {
   property string highlight: "#f9e2af"
   property string highlightInk: "#1e1e2e"
 
-  // The colour of a link. Set by the host from the theme (Notes.qml,
+  // The colour of a link. Set by the host from the theme (Workspace.qml,
   // linkColour); this default is only what a caller that names none gets.
   // The native display highlighter applies it without storing a foreground
   // brush. Authored text colors remain ordinary brushes and survive saving.
   property string link: "#4282d7"
 
   // A quote's ink and the slab behind a code block, both set by the host
-  // from the theme (Notes.qml). Neither reaches disk: the quote's meaning is
+  // from the theme (Workspace.qml). Neither reaches disk: the quote's meaning is
   // its margins (its bar is drawn by the editor, over the document), the
   // code block's is its monospace runs on *a* block background.
   property string quoteInk: "#9399b2"
   property string codeBackground: "transparent"
 
   // The chip behind inline code — the tinted patch that makes `code` read as
-  // code in prose. Set by the host from the theme (Notes.qml, codeChipColour);
+  // code in prose. Set by the host from the theme (Workspace.qml, codeChipColour);
   // it does not reach disk either: the reader answers backticks for any
   // monospace span before it looks at a colour.
   property string codeChip: "transparent"

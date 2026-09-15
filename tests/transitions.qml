@@ -1,5 +1,7 @@
 import QtQuick
 import Quickshell
+import "app/hosts/omarchy" as Omarchy
+import "app/services/platform"
 import "app/ui" as Ui
 import "app/services/notes" as Notes
 import "app/services/providers" as Providers
@@ -17,6 +19,9 @@ import "app/tests" as Tests
 
 ShellRoot {
   id: test
+  Omarchy.Backend {
+    id: backend
+  }
   property var results: []
   property int processes: 0
   property bool localFinished: false
@@ -94,9 +99,9 @@ ShellRoot {
   }
   ProcessRunner { id: runner }
   FileStore { id: files }
-  Local.Provider { id: local; notesDir: Quickshell.env("NOTE_NOTE_TEST_DIR") }
+  Local.Provider { id: local; notesDir: Platform.env("NOTE_NOTE_TEST_DIR") }
   Tests.EditorKeys {
-    runKeys: !Quickshell.env("NOTE_NOTE_TEST_HOST")
+    runKeys: !Platform.env("NOTE_NOTE_TEST_HOST")
     onChecked: function(name, ok, detail) { test.check(name, ok, detail) }
     onFinished: test.editorFinished = true
   }
@@ -541,13 +546,14 @@ ShellRoot {
       { providers: { a: { enabled: true, path: "x" } } }, ["a"]).length === 0)
     check("changing a resource requires replacement", Settings.plan(
       { providers: { a: { path: "x" } } }, { providers: { a: { path: "y" } } }, ["a"])[0].replace)
-    if (Quickshell.env("NOTE_NOTE_TEST_HOST") === "1") {
-      var component = Qt.createComponent("app/Notes.qml")
+    if (Platform.env("NOTE_NOTE_TEST_HOST") === "1" || Platform.env("NOTE_NOTE_TEST_STANDALONE") === "1") {
+      var component = Qt.createComponent(Platform.env("NOTE_NOTE_TEST_STANDALONE") ? "app/Workspace.qml" : "app/hosts/omarchy/Notes.qml")
       check("the complete host component compiles", component.status === Component.Ready, component.errorString())
       if (component.status === Component.Ready) {
         test.appHost = component.createObject(test)
         check("the host instantiates with its real controllers", !!test.appHost)
         if (test.appHost) {
+          test.appHost.initialize()
           var oldConfig = test.appHost.mergeConfigDefaults({ providers: {} })
           check("host adds toolbar settings to older configuration", JSON.stringify(oldConfig.editor.toolbar) === JSON.stringify(ToolbarSettings.defaults()))
           var customConfig = test.appHost.mergeConfigDefaults({ editor: { toolbar: layout, future: 42 } })
@@ -578,6 +584,18 @@ ShellRoot {
   }
   property var completionChecks: []
   function processCases() {
+    processCase("UTF-8 survives byte-sized pipe writes", {
+      command: ["python3", "-c", "import os,time; b='📝漢字'.encode(); [(os.write(1,bytes([v])),time.sleep(.002)) for v in b]"],
+      raw: true
+    }, function(result) {
+      return result.text === "📝漢字"
+    })
+    processCase("process output is bounded before delivery", {
+      command: ["python3", "-c", "print('x' * 4096)"],
+      maxOutputBytes: 64
+    }, function(result) {
+      return result.error && result.error.indexOf("byte limit") >= 0
+    })
     processCase("JSON process success", { command: ["python3", "-c", "import sys; print(sys.stdin.read())"], payload: '{"ok":true}' }, function(r) { return r.ok })
     processCase("process startup failure", { command: ["/note-note-command-does-not-exist"] }, function(r) { return !!r.error })
     processCase("nonzero process exit", { command: ["python3", "-c", "print('{}'); exit(3)"] }, function(r) { return !!r.error })
@@ -601,7 +619,7 @@ ShellRoot {
       local.create("section:Work", function(created) {
         check("local create commit", !!created.path, created.error)
         var path = created.path, order = []
-        var staged = "![](file://" + Quickshell.env("HOME") + "/.cache/omarchy/note-note-paste/image.png)"
+        var staged = "![](file://" + Platform.pasteDir + "/image.png)"
         local.save(path, "A", staged, function(saved) { order.push(1); check("image save commits", !saved.error, saved.error) })
         local.save(path, "B", "newest text", function(saved) {
           order.push(2)
@@ -807,6 +825,7 @@ ShellRoot {
     oneNote.rq = null
   }
   Component.onCompleted: {
+    backend.install()
     try {
       editorCases()
       sessionCases()
@@ -851,7 +870,7 @@ ShellRoot {
     // Real keyboard and pointer coverage takes around 20 seconds. Leave
     // room for the remaining cases and for slower desktop runs.
     // The editor suite includes a save/undo/redo round trip for every tool.
-    interval: 90000
+    interval: 180000
     running: true
     onTriggered: {
       test.check("all asynchronous scenarios finished", false, JSON.stringify({

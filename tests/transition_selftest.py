@@ -11,9 +11,11 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 def main():
+    standalone = "--standalone" in sys.argv
     with tempfile.TemporaryDirectory(prefix="note-note-transitions-") as directory:
         work = Path(directory)
         (work / "app").symlink_to(ROOT, target_is_directory=True)
+        (work / "design").symlink_to(ROOT / "design", target_is_directory=True)
         tool_ui = work / "ui"
         shutil.copytree(ROOT / "ui/tools", tool_ui / "tools")
         (tool_ui / "editing").symlink_to(ROOT / "ui/editing", target_is_directory=True)
@@ -38,13 +40,18 @@ def main():
             (invalid_tools / (name + ".qml")).write_text(
                 'import QtQuick\nimport "../editing"\nTool {\n  ' + properties + '\n}\n')
         shell = Path(os.environ.get("OMARCHY_PATH", "/usr/share/omarchy")) / "shell"
-        for name in ("Commons", "Ui", "Services"):
+        for name in (() if standalone else ("Commons", "Ui", "Services")):
             if (shell / name).is_dir():
                 (work / name).symlink_to(shell / name, target_is_directory=True)
         source = (ROOT / "tests/transitions.qml").read_text()
+        if standalone:
+            source = source.replace("import Quickshell\n", "")
+            source = source.replace('"app/hosts/omarchy" as Omarchy', '"app/hosts/standalone" as Native')
+            source = source.replace("ShellRoot {", "Tests.TestRoot {")
+            source = source.replace("Omarchy.Backend {", "Native.Backend {")
         source = source.replace('"app/', '"file:' + str(ROOT) + '/')
         (work / "shell.qml").write_text(source)
-        config = work / ".config/notenote"
+        config = work / "config/notenote"
         config.mkdir(parents=True)
         (config / "config.json").write_text(json.dumps({"providers": {
             name: {"enabled": False} for name in ("local", "notion", "onenote", "sticky")}}))
@@ -52,7 +59,7 @@ def main():
         (work / "notes/Broken").write_text("a file, not a notebook")
         (work / "notes/External.md").write_text("---\ntitle: External original\n---\noriginal")
         (work / "notes/Large.md").write_text("漢" * 700000, encoding="utf-8")
-        staging = work / ".cache/omarchy/note-note-paste"
+        staging = work / ("cache/notenote/note-note-paste" if standalone else "cache/omarchy/note-note-paste")
         staging.mkdir(parents=True)
         (staging / "image.png").write_bytes(b"synthetic image bytes")
         runtime = work / "runtime"
@@ -63,8 +70,14 @@ def main():
                    NOTE_NOTE_TEST_TOOLS=(tool_ui / "tools").as_uri(),
                    NOTE_NOTE_TEST_INVALID_TOOLS=invalid_tools.as_uri(),
                    NOTE_NOTE_TEST_TOOLS_ONLY="1" if "--tools" in sys.argv else "",
+                   NOTE_NOTE_TEST_STANDALONE="1" if standalone else "",
+                   QT_QUICK_BACKEND="software",
                    QT_QPA_PLATFORM="offscreen", QT_QPA_PLATFORMTHEME="generic", QT_FORCE_STDERR_LOGGING="1")
         env.pop("WAYLAND_DISPLAY", None)
+        if standalone:
+            env["DBUS_SESSION_BUS_ADDRESS"] = "unix:path=" + str(work / "no-session-bus")
+            env["HOST_XDG_CONFIG_HOME"] = str(work / "config")
+            env["HOST_XDG_STATE_HOME"] = str(work / "state")
         if "--host" in sys.argv:
             display = os.environ.get("WAYLAND_DISPLAY")
             if not display:
@@ -74,8 +87,9 @@ def main():
             env["QT_QPA_PLATFORM"] = "wayland"
             env["NOTE_NOTE_TEST_HOST"] = "1"
         try:
-            proc = subprocess.run(["qs", "-p", str(work / "shell.qml"), "--no-color"],
-                                  env=env, capture_output=True, text=True, timeout=120)
+            command = [os.environ.get("NOTE_NOTE_BINARY", str(ROOT / "build/note-note")), "--qml", str(work / "shell.qml")] if standalone else ["qs", "-p", str(work / "shell.qml"), "--no-color"]
+            proc = subprocess.run(command,
+                                  env=env, capture_output=True, text=True, timeout=210)
         except subprocess.TimeoutExpired as error:
             print("FAILED:", error)
             for captured in (error.stdout, error.stderr):

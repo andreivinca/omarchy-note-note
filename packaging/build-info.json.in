@@ -1,0 +1,8 @@
+{
+  "version": "@PROJECT_VERSION@",
+  "architecture": "@CMAKE_SYSTEM_PROCESSOR@",
+  "build_type": "@CMAKE_BUILD_TYPE@",
+  "qt_version": "@Qt6_VERSION@",
+  "compiler": "@CMAKE_CXX_COMPILER_ID@ @CMAKE_CXX_COMPILER_VERSION@",
+  "bundled_qt_runtime": false
+}

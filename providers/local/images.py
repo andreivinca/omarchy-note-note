@@ -29,7 +29,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."
 from readfile import read_capped  # noqa: E402
 
 # Where the clipboard service stages pastes (services/clipboard/Clipboard.qml).
-STAGING = os.path.join(os.path.expanduser("~"), ".cache", "omarchy", "note-note-paste")
+STAGING = os.environ.get("NOTE_NOTE_PASTE_DIR") or os.path.join(os.path.expanduser("~"), ".cache", "omarchy", "note-note-paste")
 ASSETS = ".assets"
 MAX_BODY = 4 * 1024 * 1024        # over the provider's own note cap
 MAX_IMAGE = 40 * 1024 * 1024      # what the clipboard stages at most

@@ -1,7 +1,7 @@
 import QtQuick
 import QtTest
-import Quickshell
-import qs.Commons
+import "../services/platform"
+import "../design"
 import "../ui" as Ui
 import "../ui/editing/ToolbarSettings.js" as ToolbarSettings
 import "../ui/editing/Calendar.js" as Calendar
@@ -42,7 +42,7 @@ Window {
     markdown: converter
     clipboard: clip
     noteFontFamily: noteFont.name
-    toolDirectory: Quickshell.env("NOTE_NOTE_TEST_TOOLS") || Qt.resolvedUrl("../ui/tools")
+    toolDirectory: Platform.env("NOTE_NOTE_TEST_TOOLS") || Qt.resolvedUrl("../ui/tools")
     onLinkOpenRequested: function(url) { test.openedLinks.push(url) }
     onEdited: test.editSignals++
   }
@@ -100,7 +100,8 @@ Window {
             && newNote.width === signOut.width && newNote.height === newNotebook.height
             && newNote.height === signOut.height, "footer actions do not share full-width row geometry")
     require(newNotebook.y === newNote.y + newNote.height && signOut.y === newNotebook.y + newNotebook.height,
-            "footer actions are not stacked vertically")
+            "footer actions are not stacked vertically: " + JSON.stringify([
+              [newNote.y, newNote.height], [newNotebook.y, newNotebook.height], [signOut.y, signOut.height]]))
     keys.mouseClick(newNote)
     require(notebookPreview.created === 1, "footer did not request a new note")
     keys.mouseClick(newNotebook)
@@ -1042,7 +1043,7 @@ Window {
   function toolRegistryValidation() {
     var original = editor.toolDirectory
     try {
-      editor.toolDirectory = Quickshell.env("NOTE_NOTE_TEST_INVALID_TOOLS")
+      editor.toolDirectory = Platform.env("NOTE_NOTE_TEST_INVALID_TOOLS")
       keys.tryVerify(function() { return editor.tools.find("okay") !== null }, 3000)
       require(editor.tools.ready && editor.tools.tools.length === 1,
               "invalid definitions prevented a valid tool from loading")
@@ -1718,7 +1719,7 @@ Window {
     keys.tryVerify(function() { return editor.tools.ready }, 3000)
     require(editor.tools.ready && editor.tools.errors.length === 0, "editing tools did not load: " + editor.tools.errors.join("; "))
     modularToolCases()
-    if (Quickshell.env("NOTE_NOTE_TEST_TOOLS_ONLY")) {
+    if (Platform.env("NOTE_NOTE_TEST_TOOLS_ONLY")) {
       test.finished()
       return
     }

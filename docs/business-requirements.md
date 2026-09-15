@@ -2,8 +2,9 @@
 
 ## What this is
 
-A notes plugin for the [Omarchy](https://omarchy.org) shell: press a key, the
-notes are there, keep typing, press Escape. Local notes are Markdown files you
+A Linux notes application with two hosts: a plugin for the
+[Omarchy](https://omarchy.org) shell and a standalone Qt 6 window for other
+desktops. Both share the same editor and providers. Local notes are Markdown files you
 own; the notes you already keep in Microsoft Sticky Notes, OneNote or Notion
 appear in the same list instead of in three other applications.
 
@@ -14,6 +15,7 @@ community marketplace at <https://omarchyplugins.com>.
 ## Who it is for
 
 - Omarchy / Hyprland users who want notes without leaving the keyboard.
+- Linux desktop users who want the same workspace without installing Omarchy.
 - People whose notes are already scattered across Microsoft or Notion
   accounts and who do not want a fourth silo.
 - Plugin authors who want to add their own note source without forking this
@@ -21,14 +23,15 @@ community marketplace at <https://omarchyplugins.com>.
 
 ## Goals
 
-1. **Instant.** Summoned from a keybind into an already-running shell process;
-   no cold start, no second application.
+1. **Quick to reach.** Summoned from a keybind into the running shell, or
+   opened from the desktop's application launcher. Repeated standalone
+   launches activate the existing window.
 2. **Never lose a note.** Autosave, no explicit save button, no modal dialogs
    between the user and their text; a note that cannot be written back safely
    opens read-only with a visible reason.
 3. **Your files stay yours.** Local notes are plain Markdown in `~/Notes`,
    readable and editable by any other tool, with no database and no lock-in.
-   Removing the plugin leaves the notes untouched.
+   Removing either host leaves the notes untouched.
 4. **One list for every source.** Local, Sticky Notes, OneNote, Notion — same
    sidebar, same editor, same shortcuts.
 5. **Online notes stay online.** Remote notes are read and written through

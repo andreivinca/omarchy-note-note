@@ -1,5 +1,5 @@
 import QtQuick
-import qs.Commons
+import "../design"
 import "statusbar" as Status
 
 // Provider badge, breadcrumb, word count, save state and the sidebar toggle.

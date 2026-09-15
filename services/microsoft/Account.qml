@@ -1,5 +1,5 @@
-import Quickshell
-import Quickshell.Io
+import "../processes"
+import "../platform"
 import QtQuick
 
 // A Microsoft sign-in for one provider: its own app registration, its own
@@ -8,14 +8,14 @@ import QtQuick
 Item {
   id: root
 
-  readonly property string scriptDir: Qt.resolvedUrl(".").toString().replace(/^file:\/\//, "").replace(/\/$/, "")
+  readonly property string scriptDir: Platform.localPath(Qt.resolvedUrl(".")).replace(/\/$/, "")
   readonly property string script: scriptDir + "/msgraph.py"
 
   // Who this sign-in belongs to (a provider id); names the token file, and
-  // the entry in ~/.config/omarchy/note-note.json where a user may put a
+  // the entry in the platform's account config where a user may put a
   // registration of their own for this provider alone.
   property string owner: "default"
-  readonly property string tokenPath: Quickshell.env("HOME") + "/.local/state/omarchy/note-note-ms-" + owner + ".json"
+  readonly property string tokenPath: Platform.stateDir + "/note-note-ms-" + owner + ".json"
   // The provider's own app registration — the application (client) id of an
   // Entra public client that allows personal and work accounts. Every user
   // of the provider signs in through it; empty, and nobody can.
@@ -77,51 +77,50 @@ Item {
 
   function logout() { logoutProc.running = true }
 
-  Process {
+  ProcessTask {
     id: statusProc
     command: ["python3", root.script, "status"]
     environment: root.env
-    stdout: StdioCollector {
-      onStreamFinished: {
-        try {
-          var st = JSON.parse(this.text)
-          root.configured = st.configured === true
-          root.signedIn = st.signedIn === true
-          root.account = st.account || ""
-          root.cacheSession = st.cacheSession || ""
-          root.grantedScope = st.scope || ""
-        } catch (e) { root.configured = false; root.signedIn = false; root.grantedScope = ""; root.cacheSession = "" }
-        root.updated()
-      }
+    raw: true
+    onFinished: function(result) {
+      try {
+        var st = JSON.parse(result.text || "")
+        root.configured = st.configured === true
+        root.signedIn = st.signedIn === true
+        root.account = st.account || ""
+        root.cacheSession = st.cacheSession || ""
+        root.grantedScope = st.scope || ""
+      } catch (e) { root.configured = false; root.signedIn = false; root.grantedScope = ""; root.cacheSession = "" }
+      root.updated()
     }
   }
 
-  Process {
+  ProcessTask {
     id: loginProc
+    timeoutMs: 600000
     command: ["python3", root.script, "login"]
     environment: Object.assign({}, root.env, { NOTE_NOTE_MS_SCOPES: root.loginScopes })
-    stdout: SplitParser {
-      onRead: function(line) {
-        var msg
-        try { msg = JSON.parse(line) } catch (e) { return }
-        if (msg.userCode) {
-          root.codeReceived(msg.userCode, msg.verificationUri)
-        } else if (msg.ok) {
-          root.loginSucceeded()
-          root.refresh()
-        } else if (msg.error) {
-          root.loginFailed(msg.error)
-        }
+    streaming: true
+    onLineReceived: function(line) {
+      var msg
+      try { msg = JSON.parse(line) } catch (e) { return }
+      if (msg.userCode) {
+        root.codeReceived(msg.userCode, msg.verificationUri)
+      } else if (msg.ok) {
+        root.loginSucceeded()
+        root.refresh()
+      } else if (msg.error) {
+        root.loginFailed(msg.error)
       }
     }
-    onExited: { root.loggingIn = false; root.updated() }
+    onFinished: { root.loggingIn = false; root.updated() }
   }
 
-  Process {
+  ProcessTask {
     id: logoutProc
     command: ["python3", root.script, "logout"]
     environment: root.env
-    onExited: {
+    onFinished: {
       root.signedIn = false; root.account = ""; root.grantedScope = ""; root.cacheSession = ""
       root.updated()
       if (root.reloginPending) {

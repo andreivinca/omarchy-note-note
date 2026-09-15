@@ -2,7 +2,7 @@
 
 Each editing tool lives in one QML file in `ui/tools/`. The editor discovers
 these files when it starts. Adding a tool does not require changing
-`Notes.qml`, `NoteEditor.qml`, the toolbar model, or the shortcut table.
+`Workspace.qml`, `NoteEditor.qml`, the toolbar model, or the shortcut table.
 Restart the app after adding or editing a file.
 
 `ui/editing/Tool.qml` defines the contract. `ToolRegistry.qml` creates a
@@ -282,5 +282,5 @@ inner and outer row/column changes, double Enter, caret placement and undo.
 Lint changes with:
 
 ```bash
-qmllint -I /usr/share/omarchy/shell ui/editing/*.qml ui/tools/*.qml ui/NoteEditor.qml Notes.qml
+qmllint -I /usr/share/omarchy/shell ui/editing/*.qml ui/tools/*.qml ui/NoteEditor.qml Workspace.qml hosts/omarchy/Notes.qml
 ```

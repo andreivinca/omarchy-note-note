@@ -4,13 +4,13 @@
 
 | Constraint | Detail |
 |---|---|
-| Host | `omarchy-shell` — one long-running [Quickshell](https://quickshell.org) (Qt 6 / QML) process; the plugin is loaded into it |
+| Hosts | Omarchy plugin loaded into [Quickshell](https://quickshell.org), and a standalone Qt 6.8+ / QML executable; both use `Workspace.qml` |
 | Language | QML + JavaScript (ES5-era engine, see [engine-notes](engine-notes.md)), plus Python 3 for backends |
-| Dependencies | No runtime `pip` installation. Markdown parsing bundles mistune (BSD-3, `services/markdown/mistune/`); shared note merging bundles merge3 (GPL-2.0-or-later, `lib/notemerge/_vendor/merge3/`). The optional native text inspector (`cpp/`) is compiled locally against system Qt (`sh cpp/build.sh`); the editor has a script fallback |
-| External binaries | `python3`, `sh`, `rm`, `mkdir`, `inotifywait`, `wl-copy`, `wl-paste`, `xdg-open`; ImageMagick optional |
+| Dependencies | No runtime `pip` installation. Markdown parsing bundles mistune (BSD-3); shared note merging bundles merge3 (GPL-2.0-or-later). The standalone executable links the native text inspector; the plugin builds it with `sh cpp/build.sh` and retains a script fallback |
+| External binaries | Both: `python3`, `sh`, `rm`, `mkdir`, `inotifywait`; ImageMagick optional. Plugin clipboard: `wl-copy`, `wl-paste`. URL opening uses Qt desktop integration |
 | Privileges | none — no sudo, no pkexec, no services, no config files of other apps |
-| Sandbox | none: an Omarchy plugin runs unsandboxed inside the shell. Behave accordingly |
-| Reloading | QML changes need `omarchy-restart-shell`; Python changes take effect on the next call |
+| Sandbox | Both hosts run as the current user, without an application sandbox |
+| Reloading | Plugin QML changes need `omarchy-restart-shell`; restart the standalone executable for its QML changes. Python changes take effect on the next call |
 | Editor format | the document is **rich text** (HTML); notes and the provider contract are **Markdown**, converted at both ends by `services/markdown/qthtml/` ([decisions](decisions.md)) |
 
 ## Layout
@@ -19,7 +19,13 @@
 manifest.json               plugin id, kinds: ["overlay"], entry point, keepLoaded
 pyproject.toml              the Python floor, the empty dependency list, and ruff;
                             nothing is built or installed from it
-Notes.qml                   the host
+Workspace.qml               shared application state and UI composition
+CMakeLists.txt              standalone executable, install layout and native tests
+hosts/omarchy/              Notes.qml plugin entry point, shell windows, theme and process transport
+hosts/standalone/           Qt window, native process/clipboard/activation services
+design/                    shared controls and theme adapters
+services/platform/         runtime services and XDG storage policy
+services/processes/        common process contract and lifecycle
 lib/ratelimit.py            cross-process request pacing (+ its selftest)
 lib/provider_io.py          the JSON error/IO shape every provider answers with,
                             and the one table saying which HTTP statuses retry
@@ -54,12 +60,13 @@ examples/hello/             minimal external provider, incl. its own setup scree
 docs/                       these documents
 ```
 
-External providers are loaded from
-`~/.config/omarchy/note-note/providers/<id>/Provider.qml` at startup.
+External providers are loaded from the selected host's provider directory at
+startup. See [the host architecture and storage map](standalone.md).
 
 ## Responsibilities
 
-**The host (`Notes.qml`) owns** the overlay/detached window, the title bar
+**The launchers own** windows, activation and runtime-specific adapters.
+**The workspace (`Workspace.qml`) owns** the title bar
 (search, the binder's tabs, the menu holding Detach, Settings and Key
 bindings), the pages that stand in for the workspace, the view bar (whose notes, where they
 live, save state, status, word count), the sidebar model, selection, the
@@ -109,6 +116,11 @@ people write against: change it additively, never silently.
 
 ## Storage
 
+The following table shows the plugin defaults. The standalone host uses
+`notenote` in place of the `omarchy` state/cache directory. Both share
+`~/.config/notenote/config.json` and respect absolute XDG directory overrides.
+See [all paths and environment overrides](standalone.md#storage).
+
 | What | Where |
 |---|---|
 | Local notes | `~/Notes/<Notebook>/<note-*.md>`; order in `.order`, notebook order in `.notebooks` (override root with `NOTE_NOTE_DIR`) |
@@ -124,8 +136,9 @@ shared temp directory (see [security.md](security.md)).
 
 ## Performance rules
 
-- **Nothing runs while the window is hidden**: no timers, no watchers, no
-  requests. `watch(false)` is called on close.
+- Ordinary reads, polls and watchers pause while hidden; accepted writes
+  and OneNote content indexing can continue in the shell. Native shutdown
+  stops indexing and waits for accepted writes before exiting.
 - Local changes are detected by **one** `inotifywait` process, started on
   open and killed on close (~4 MB RSS, idle at 0 % CPU), debounced 400 ms, and
   ignoring our own writes.
@@ -174,6 +187,9 @@ shared temp directory (see [security.md](security.md)).
 
 - Target: Omarchy 4 (Quattro) / Quickshell as shipped; Qt 6.11 at time of
   writing.
+- Standalone build floor: Qt 6.8, C++17, CMake 3.21 and Python 3.9.
+  Development verification uses the installed Qt version; distribution
+  packaging and a wider desktop/version test matrix remain follow-up work.
 - The plugin id `io.github.andreivinca.note-note` is permanent — the
   marketplace treats ids as immutable.
 - Manifest `version` is bumped on every release and is what the marketplace

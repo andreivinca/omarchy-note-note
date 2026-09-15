@@ -1,6 +1,6 @@
 import QtQuick
 import QtQuick.Controls as QQC
-import qs.Commons
+import "../../design"
 import "../editing"
 
 Tool {

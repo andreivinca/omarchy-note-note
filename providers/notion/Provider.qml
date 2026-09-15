@@ -1,9 +1,8 @@
-import Quickshell
-import Quickshell.Io
+import "../../services/platform"
 import QtQuick
 import "../../services/processes"
-import qs.Commons
-import qs.Ui
+import "../../design"
+import "../../design/controls"
 
 // Notion: the pages shared with an internal integration, through the
 // official API (notion.py). Setup is a pasted integration secret, stored by
@@ -55,7 +54,7 @@ Item {
     }
   }
 
-  readonly property string dir: Qt.resolvedUrl(".").toString().replace(/^file:\/\//, "").replace(/\/$/, "")
+  readonly property string dir: Platform.localPath(Qt.resolvedUrl(".")).replace(/\/$/, "")
   readonly property string script: dir + "/notion.py"
 
   signal updated()
@@ -317,6 +316,7 @@ Item {
   // providers/onenote/Provider.qml).
   ProcessRunner { id: scriptRunner }
   readonly property bool busy: scriptRunner.active > 0
+  readonly property bool writeBusy: root.rq && root.rq.revision >= 0 ? root.rq.pendingFor(root, true) > 0 : false
 
   function runScript(args, payload, ctx) {
     scriptRunner.run({ command: ["python3", root.script].concat(args),
@@ -326,41 +326,39 @@ Item {
   }
 
   // ── processes ───────────────────────────────────────────────────────
-  Process {
+  ProcessTask {
     id: statusProc
     command: ["python3", root.script, "status"]
-    stdout: StdioCollector {
-      onStreamFinished: {
-        var st = root.parse(this.text)
-        root.configured = st.configured === true
-        root.workspace = st.workspace || ""
-        if (!root.configured) {
-          root.pages = []
-          root.bodies = ({})
-          rebuild()
-          return
-        }
-        cachedProc.running = true
-        root.listPages(false)
+    raw: true
+    onFinished: function(result) {
+      var st = root.parse(result.text || "")
+      root.configured = st.configured === true
+      root.workspace = st.workspace || ""
+      if (!root.configured) {
+        root.pages = []
+        root.bodies = ({})
+        rebuild()
+        return
       }
+      cachedProc.running = true
+      root.listPages(false)
     }
   }
   // The cache, read straight off disk: no request, so no lane — the sidebar
   // fills instantly and keeps filling while Notion is parked.
-  Process {
+  ProcessTask {
     id: cachedProc
     command: ["python3", root.script, "list", "--cached"]
-    stdout: StdioCollector {
-      onStreamFinished: {
-        var res = root.parse(this.text)
-        if (!res.error && Array.isArray(res.pages)) {
-          root.pages = res.pages
-        }
-        root.rebuild()
+    raw: true
+    onFinished: function(result) {
+      var res = root.parse(result.text || "")
+      if (!res.error && Array.isArray(res.pages)) {
+        root.pages = res.pages
       }
+      root.rebuild()
     }
   }
-  Process { id: logoutProc; command: ["python3", root.script, "logout"]; onExited: { root.bodies = ({}); root.refresh() } }
+  ProcessTask { id: logoutProc; command: ["python3", root.script, "logout"]; onFinished: { root.bodies = ({}); root.refresh() } }
 
   // ── setup: the provider's own screen ────────────────────────────────
   property bool setupBusy: false

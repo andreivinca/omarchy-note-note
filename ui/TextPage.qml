@@ -1,6 +1,6 @@
 import QtQuick
-import qs.Commons
-import qs.Ui
+import "../design"
+import "../design/controls"
 
 // A page of monospace text standing in for the workspace: a heading and a
 // line under it saying what the text is, the text itself filling the rest,

@@ -1,5 +1,5 @@
 import QtQuick
-import qs.Commons
+import "../design"
 
 // What the sidebar becomes while a search is running. It is its own panel on
 // purpose: a result is a place you are going, not a row you keep — so there is

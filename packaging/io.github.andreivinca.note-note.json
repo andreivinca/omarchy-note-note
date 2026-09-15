@@ -1,0 +1,59 @@
+{
+  "app-id": "io.github.andreivinca.note-note",
+  "runtime": "org.kde.Platform",
+  "runtime-version": "6.11",
+  "sdk": "org.kde.Sdk",
+  "command": "note-note",
+  "branch": "stable",
+  "finish-args": [
+    "--socket=wayland",
+    "--socket=fallback-x11",
+    "--share=ipc",
+    "--share=network",
+    "--device=dri",
+    "--filesystem=~/Notes:create",
+    "--filesystem=xdg-config/kdeglobals:ro",
+    "--filesystem=xdg-config/omarchy/shell.toml:ro",
+    "--filesystem=xdg-config/omarchy/current:ro",
+    "--filesystem=xdg-config/omarchy/themes:ro",
+    "--filesystem=~/.local/state/omarchy/current:ro"
+  ],
+  "cleanup": [
+    "/include",
+    "/lib/pkgconfig",
+    "/lib/*.la",
+    "/share/man",
+    "/share/doc",
+    "/share/note-note/services/theme"
+  ],
+  "modules": [
+    {
+      "name": "inotify-tools",
+      "buildsystem": "autotools",
+      "config-opts": ["--disable-doxygen", "--disable-static"],
+      "post-install": [
+        "install -Dm644 COPYING /app/share/licenses/inotify-tools/COPYING"
+      ],
+      "sources": [
+        {
+          "type": "archive",
+          "archive-type": "tar-gzip",
+          "url": "https://codeload.github.com/inotify-tools/inotify-tools/tar.gz/refs/tags/4.25.9.0",
+          "sha256": "d33a4fd24c72c2d08893f129d724adf725b93dae96c359e4f4e9f32573cc853b"
+        }
+      ]
+    },
+    {
+      "name": "note-note",
+      "buildsystem": "cmake-ninja",
+      "config-opts": ["-DCMAKE_BUILD_TYPE=Release", "-DBUILD_TESTING=OFF"],
+      "sources": [
+        {
+          "type": "dir",
+          "path": "..",
+          "skip": [".git", ".flatpak-builder", "build", "cpp/build", "graphify-out", "__pycache__"]
+        }
+      ]
+    }
+  ]
+}

@@ -1,6 +1,6 @@
 import QtQuick
-import qs.Commons
-import qs.Ui
+import "../design"
+import "../design/controls"
 import "KeyBindings.js" as KeyBindings
 
 // Search field with keyboard navigation and a shortcut hint.

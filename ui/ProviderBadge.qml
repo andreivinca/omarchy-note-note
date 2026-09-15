@@ -1,6 +1,6 @@
 import QtQuick
-import qs.Commons
-import qs.Ui
+import "../design"
+import "../design/controls"
 import "statusbar" as Status
 
 // App-owned content: the status bar does not know about providers or badges.

@@ -1,9 +1,8 @@
-import Quickshell
-import Quickshell.Io
+import "../../services/platform"
 import QtQuick
 import "../../services/processes"
-import qs.Commons
-import qs.Ui
+import "../../design"
+import "../../design/controls"
 
 // OneNote: notebooks → sections → pages. One tab holding the whole tree by
 // default, or — the host's notebookTabs setting — a binder tab per
@@ -75,7 +74,7 @@ Item {
     }
   }
 
-  readonly property string dir: Qt.resolvedUrl(".").toString().replace(/^file:\/\//, "").replace(/\/$/, "")
+  readonly property string dir: Platform.localPath(Qt.resolvedUrl(".")).replace(/\/$/, "")
   readonly property string script: dir + "/onenote.py"
 
   signal updated()
@@ -505,6 +504,7 @@ Item {
   ProcessRunner { id: scriptRunner }
   ProcessRunner { id: searchRunner }
   readonly property bool busy: scriptRunner.active > 0
+  readonly property bool writeBusy: root.rq && root.rq.revision >= 0 ? root.rq.pendingFor(root, true) > 0 : false
 
   function runScript(args, payload, ctx) {
     root.runProcess(scriptRunner, args, payload || undefined, function(result) { ctx.done(result) })
@@ -572,7 +572,7 @@ Item {
 
   SearchCache {
     id: searchCache
-    ready: root.ready
+    ready: root.ready && !(root.host && root.host.closing)
     inventoryReady: root.searchInventoryReady
     inventoryComplete: root.searchInventoryComplete
     session: root.ms ? root.ms.cacheSession : ""
@@ -881,31 +881,30 @@ Item {
   // still fills while the account is parked, which is the point of reading it
   // outside the lane.
   readonly property bool listing: cachedProc.running || (root.rq ? root.rq.depth > 0 : false)
-  Process {
+  ProcessTask {
     id: cachedProc
     property string session: ""
     onStarted: session = root.ms ? root.ms.cacheSession : ""
     environment: root.ms ? root.ms.env : ({})
     command: ["python3", root.script, "list", "--cached"]
-    stdout: StdioCollector {
-      onStreamFinished: {
-        if (cachedProc.session !== (root.ms ? root.ms.cacheSession : "")) {
-          return
-        }
-        var res = root.parse(this.text)
-        if (!res.error) {
-          if (Array.isArray(res.sections)) {
-            root.onSections = res.sections
-          }
-          if (Array.isArray(res.pages)) {
-            root.pages = res.pages
-            root.searchInventoryReady = res.inventoryReady === true
-            root.searchInventoryComplete = res.inventoryComplete === true
-          }
-        }
-        root.rebuild()
+    raw: true
+    onFinished: function(result) {
+      if (cachedProc.session !== (root.ms ? root.ms.cacheSession : "")) {
+        return
       }
+      var res = root.parse(result.text || "")
+      if (!res.error) {
+        if (Array.isArray(res.sections)) {
+          root.onSections = res.sections
+        }
+        if (Array.isArray(res.pages)) {
+          root.pages = res.pages
+          root.searchInventoryReady = res.inventoryReady === true
+          root.searchInventoryComplete = res.inventoryComplete === true
+        }
+      }
+      root.rebuild()
     }
   }
-  Process { id: clearProc; environment: root.ms ? root.ms.env : ({}); command: ["python3", root.script, "clear-cache"] }
+  ProcessTask { id: clearProc; environment: root.ms ? root.ms.env : ({}); command: ["python3", root.script, "clear-cache"] }
 }

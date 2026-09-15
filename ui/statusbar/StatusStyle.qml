@@ -1,5 +1,5 @@
 import QtQuick
-import qs.Commons
+import "../../design"
 
 // Optional shared appearance for the generic controls. Custom controls do
 // not need this type, and the layout host never reads it.

@@ -1,7 +1,7 @@
 import QtQuick
 import QtQml.Models
-import qs.Commons
-import qs.Ui
+import "../design"
+import "../design/controls"
 
 // The active notebook: header, note previews or provider tree, and actions.
 //

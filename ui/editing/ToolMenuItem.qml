@@ -1,7 +1,7 @@
 import QtQuick
 import QtQuick.Layouts
 import QtQuick.Controls as QQC
-import qs.Commons
+import "../../design"
 import ".." as AppUi
 
 QQC.MenuItem {

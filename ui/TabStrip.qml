@@ -1,6 +1,6 @@
 import QtQuick
-import qs.Commons
-import qs.Ui
+import "../design"
+import "../design/controls"
 
 // Scrollable notebook tabs, with provider logos when available.
 Item {

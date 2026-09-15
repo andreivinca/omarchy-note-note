@@ -1,7 +1,8 @@
 # Security rules and review history
 
-This plugin runs **unsandboxed inside the user's shell process**, holds OAuth
-tokens for their mailbox and notebooks, and parses content that arrives from
+The plugin runs **unsandboxed inside the user's shell process**; the
+standalone application runs as the same user in its own process. Both hold OAuth
+tokens for their mailbox and notebooks and parse content that arrives from
 the network. The marketplace reviewers read the code carefully and found five
 distinct classes of problem. Each one is written down here with the rule it
 produced, so it does not come back.
@@ -48,6 +49,14 @@ can replace or grow either file between the check and load"*).
   proc.write(payload)          // 3. bounded payload
   proc.stdinEnabled = false    // 4. close → the script sees EOF
   ```
+
+`ProcessTask` now enforces this ordering for both hosts: start a writable
+pipe, wait for `started`, write the payload, then close stdin. The native
+backend uses QProcess; the plugin adapter uses Quickshell. Clipboard image
+bytes also travel on stdin from Qt to the common private staging helper.
+Native state and cache paths are documented in [the storage map](standalone.md#storage).
+The standalone activation socket in `$XDG_RUNTIME_DIR` carries no payload;
+connecting only requests that the existing window come forward.
 
 ### 4. Never let remote content choose a URL you attach a credential to
 

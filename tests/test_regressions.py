@@ -1,5 +1,7 @@
 """Content preservation and confirmed IO regressions; temporary files only."""
 import html
+import base64
+import json
 import os
 from pathlib import Path
 import re
@@ -33,6 +35,23 @@ class Files(unittest.TestCase):
 
     def tearDown(self):
         self.work.cleanup()
+
+    def test_native_clipboard_staging_is_private_and_validated(self):
+        data = b"synthetic clipboard image"
+        staging = self.root / "cache with spaces/paste"
+        command = [sys.executable, str(ROOT / "services/clipboard/clipboard.py"), "image-stdin", str(staging)]
+        result = subprocess.run(command, input=json.dumps({"mime": "image/png", "data": base64.b64encode(data).decode()}),
+                                capture_output=True, text=True, timeout=5, check=True)
+        payload = json.loads(result.stdout)
+        pasted = Path(payload["path"])
+        self.assertEqual(pasted.read_bytes(), data)
+        self.assertEqual(pasted.parent, staging)
+        self.assertEqual(pasted.stat().st_mode & 0o777, 0o600)
+        self.assertEqual(staging.stat().st_mode & 0o777, 0o700)
+        for invalid in ({"mime": "image/png", "data": "%%%"}, {"mime": "text/html", "data": "eA=="}, []):
+            result = subprocess.run(command, input=json.dumps(invalid), capture_output=True, text=True, timeout=5, check=True)
+            self.assertIn("error", json.loads(result.stdout))
+        self.assertEqual(list(staging.iterdir()), [pasted])
 
     def operation(self, action, **payload):
         return operations.execute(dict(root=str(self.root), file=str(self.note), action=action, **payload))

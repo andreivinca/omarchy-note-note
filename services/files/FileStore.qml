@@ -1,3 +1,4 @@
+import "../platform"
 import QtQuick
 import "../processes"
 import "../requests"
@@ -5,7 +6,8 @@ import "../requests"
 // One confirmed, ordered writer per destination; reads keep framed failures.
 Item {
   id: store
-  readonly property string lib: Qt.resolvedUrl("../../lib/").toString().replace(/^file:\/\//, "")
+  readonly property string lib: Platform.localPath(Qt.resolvedUrl("../../lib/"))
+  readonly property bool busy: runner.active > 0 || writes.depth > 0
   signal failed(string message)
   ProcessRunner { id: runner }
   RequestQueue { id: writes; domain: "files" }

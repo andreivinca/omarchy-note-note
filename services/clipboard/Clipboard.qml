@@ -1,20 +1,19 @@
-import Quickshell
+import "../platform"
 import "../processes"
 import QtQuick
 
 // The clipboard, for pasting into a note: its image, and its text for the
 // plain paste.
 //
-// Wayland keeps the clipboard in the compositor, so the work happens in
-// `clipboard.py` (wl-paste, bounded reads, a screenshot scaled down to
-// something a backend will take). Pasted files are staged in the cache until
-// the note is saved and the backend hands the image back as its own.
+// The native host reads QClipboard; the plugin reads through wl-paste.
+// clipboard.py shares the staging and image scaling policy. Pasted files
+// stay in the cache until the note is saved into its provider.
 Item {
   id: root
 
-  readonly property string dir: Qt.resolvedUrl(".").toString().replace(/^file:\/\//, "").replace(/\/$/, "")
+  readonly property string dir: Platform.localPath(Qt.resolvedUrl(".")).replace(/\/$/, "")
   readonly property string script: dir + "/clipboard.py"
-  readonly property string stagingDir: Quickshell.env("HOME") + "/.cache/omarchy/note-note-paste"
+  readonly property string stagingDir: Platform.pasteDir
 
   // Does the clipboard hold a picture?  callback(true|false)
   // Cheap: it only asks the compositor what types are on offer.
@@ -45,6 +44,15 @@ Item {
   ProcessRunner { id: runner }
 
   function run(args, callback) {
+    if (!Platform.backend.omarchy) {
+      var result = Platform.backend.clipboard(args[0])
+      if (args[0] === "image" && !result.error) {
+        return runner.run({ command: ["python3", root.script, "image-stdin", root.stagingDir],
+                            payload: JSON.stringify(result), timeoutMs: 60000 }, callback)
+      }
+      callback(result)
+      return { cancel: function() {} }
+    }
     return runner.run({ command: ["python3", root.script].concat(args), timeoutMs: 60000 }, callback)
   }
 }

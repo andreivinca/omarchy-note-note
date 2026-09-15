@@ -32,8 +32,8 @@ from provider_io import (  # noqa: E402
 import notion_md  # noqa: E402
 
 HOME = os.path.expanduser("~")
-STATE_DIR = os.path.join(os.environ.get("XDG_STATE_HOME", HOME + "/.local/state"), "omarchy")
-CACHE_DIR = os.path.join(os.environ.get("XDG_CACHE_HOME", HOME + "/.cache"), "omarchy")
+STATE_DIR = os.environ.get("NOTE_NOTE_STATE_DIR") or os.path.join(os.environ.get("XDG_STATE_HOME", HOME + "/.local/state"), "omarchy")
+CACHE_DIR = os.environ.get("NOTE_NOTE_CACHE_DIR") or os.path.join(os.environ.get("XDG_CACHE_HOME", HOME + "/.cache"), "omarchy")
 TOKEN_FILE = os.path.join(STATE_DIR, "note-note-notion.json")
 CACHE = os.path.join(CACHE_DIR, "note-note-notion.json")
 API = "https://api.notion.com/v1"

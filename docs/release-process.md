@@ -2,7 +2,9 @@
 
 ## Identity
 
-- Repository: <https://github.com/andreivinca/omarchy-note-note> (public, MIT)
+- Development repository: <https://github.com/andreivinca/note-note> (public, MIT).
+- Omarchy plugin distribution: <https://github.com/andreivinca/omarchy-note-note>.
+  Existing marketplace installs and plugin updates use this repository.
 - Plugin id: `io.github.andreivinca.note-note` — **permanent**; the
   marketplace never reuses ids, and the id appears in every install command
   and keybind.
@@ -11,6 +13,16 @@
   reference to any employer.
 
 ## Cutting a release
+
+Build and verify local standalone and plugin archives using the
+[release archive commands](standalone.md#release-archives). Outputs and
+checksums go to `build/dist/<version>/`. Creating these artifacts does not
+publish a GitHub release, merge the development branch or update the marketplace.
+
+Build the standalone Flatpak separately using the [Flatpak guide](flatpak.md).
+It uses the same release version and shared application, with its own
+runtime, permissions and bundle checksum.
+
 
 1. Work is committed **only when the author asks for it**.
 2. Bump `version` in `manifest.json` (semver: breaking layout/contract change
@@ -23,6 +35,20 @@
 
 Keep the README, `providers/PROVIDERS.md` and `docs/` in the same commit as
 the behaviour they describe.
+
+## Publishing to the Omarchy repository
+
+Develop and release the shared application in `andreivinca/note-note`.
+Merge the published release commit into `andreivinca/omarchy-note-note`'s
+`master`, retaining its plugin distribution notice and installation URL.
+Keep the upstream version and plugin ID. Preserve the existing Git history
+so installed plugins can fast-forward through their normal update command.
+
+Before pushing, validate a clean checkout with `omarchy plugin validate .`,
+run the plugin suites and Wayland host checks described in [testing](testing.md),
+and verify a fast-forward upgrade from the previous distribution commit.
+Publish only the tested commit. Marketplace verification is a separate
+request; publishing here does not verify a newer marketplace snapshot.
 
 ## Marketplace (omarchyplugins.com)
 

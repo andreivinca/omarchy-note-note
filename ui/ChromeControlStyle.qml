@@ -1,5 +1,5 @@
 import QtQuick
-import qs.Commons
+import "../design"
 
 // Theme-relative surface and sizing for chrome inputs.
 QtObject {

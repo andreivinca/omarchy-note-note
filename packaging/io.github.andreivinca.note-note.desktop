@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=Note Note
+Comment=Local Markdown, OneNote, Sticky Notes and Notion
+Exec=note-note
+Icon=io.github.andreivinca.note-note
+Terminal=false
+Categories=Office;
+Keywords=notes;markdown;onenote;notion;
+StartupNotify=true

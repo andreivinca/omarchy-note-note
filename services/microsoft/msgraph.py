@@ -35,9 +35,9 @@ from provider_io import (  # noqa: E402,F401
 )
 
 HOME = os.path.expanduser("~")
-CONFIG = os.path.join(os.environ.get("XDG_CONFIG_HOME", HOME + "/.config"), "omarchy/note-note.json")
-STATE_DIR = os.path.join(os.environ.get("XDG_STATE_HOME", HOME + "/.local/state"), "omarchy")
-CACHE_DIR = os.path.join(os.environ.get("XDG_CACHE_HOME", HOME + "/.cache"), "omarchy")
+CONFIG = os.environ.get("NOTE_NOTE_ACCOUNT_CONFIG") or os.path.join(os.environ.get("XDG_CONFIG_HOME", HOME + "/.config"), "omarchy/note-note.json")
+STATE_DIR = os.environ.get("NOTE_NOTE_STATE_DIR") or os.path.join(os.environ.get("XDG_STATE_HOME", HOME + "/.local/state"), "omarchy")
+CACHE_DIR = os.environ.get("NOTE_NOTE_CACHE_DIR") or os.path.join(os.environ.get("XDG_CACHE_HOME", HOME + "/.cache"), "omarchy")
 # Each provider signs in on its own: it points the script at its own token
 # file (NOTE_NOTE_MS_TOKEN), asks only for its own scopes (NOTE_NOTE_MS_SCOPES)
 # and names its own app registration (NOTE_NOTE_MS_CLIENT_ID) — Sticky Notes

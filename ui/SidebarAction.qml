@@ -1,6 +1,6 @@
 import QtQuick
-import qs.Commons
-import qs.Ui
+import "../design"
+import "../design/controls"
 
 // A sidebar footer action. Creation actions can collect a name in place,
 // using the same row geometry and appearance as ordinary actions.

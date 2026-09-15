@@ -1,8 +1,8 @@
 import QtQuick
 import QtQml.Models
 import QtQuick.Controls as QQC
-import qs.Commons
-import qs.Ui
+import "../../design"
+import "../../design/controls"
 import ".." as AppUi
 
 QQC.Menu {

@@ -1,7 +1,7 @@
 import QtQuick
 import QtQuick.Controls as QQC
-import qs.Commons
-import qs.Ui
+import "../design"
+import "../design/controls"
 
 // Presentation only. Python supplies conflicts and validates all choices
 // against a fresh remote read before writing any resolved content.

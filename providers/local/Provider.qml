@@ -1,5 +1,4 @@
-import Quickshell
-import Quickshell.Io
+import "../../services/platform"
 import QtQuick
 import "../../services/processes"
 import "../../services/requests"
@@ -52,16 +51,16 @@ Item {
   // historic shape — or, false, a single "Notes" tab holding the folders as
   // fold-out trees, the same shape the remote providers use.
   property bool notebookTabs: true
-  property string notesDir: Quickshell.env("NOTE_NOTE_DIR") || (Quickshell.env("HOME") + "/Notes")
+  property string notesDir: Platform.env("NOTE_NOTE_DIR") || (Platform.env("HOME") + "/Notes")
   // notesDir as everything below reads it: "~" expands here, not in the
   // host — the path is this provider's to interpret, and it reaches
   // processes as a literal argv entry, never through a shell, so nothing
   // else would expand it. An emptied setting falls back to the default.
   readonly property string notesRoot: {
-    var p = root.notesDir || Quickshell.env("NOTE_NOTE_DIR") || (Quickshell.env("HOME") + "/Notes")
-    return p.charAt(0) === "~" ? Quickshell.env("HOME") + p.substring(1) : p
+    var p = root.notesDir || Platform.env("NOTE_NOTE_DIR") || (Platform.env("HOME") + "/Notes")
+    return p.charAt(0) === "~" ? Platform.env("HOME") + p.substring(1) : p
   }
-  readonly property string dir: Qt.resolvedUrl(".").toString().replace(/^file:\/\//, "").replace(/\/$/, "")
+  readonly property string dir: Platform.localPath(Qt.resolvedUrl(".")).replace(/\/$/, "")
   // Both readers refuse symlinks and special files and race a deadline
   // (docs/security.md, rule 9): a path under ~/Notes is user-writable and
   // cannot be trusted to be a plain file.
@@ -335,6 +334,7 @@ Item {
     }
   }
   readonly property bool busy: mutations.depth > 0 || runner.active > 0
+  readonly property bool writeBusy: mutations.depth > 0
   property int mutationRevision: 0
   property var deleting: ({})
 
@@ -485,16 +485,17 @@ Item {
   }
   function poll() { root.refresh() }
   Timer { id: relistDebounce; interval: 400; onTriggered: root.refresh() }
-  Process {
+  ProcessTask {
     id: watchProc
+    timeoutMs: 0
+    maxOutputBytes: 1024 * 1024
     command: ["inotifywait", "-m", "-r", "-q", "-e", "create,delete,move,close_write", "--format", "%e %w%f", "--", root.notesRoot]
-    stdout: SplitParser {
-      onRead: function(line) {
-        if (/\/\.(order|notebooks)(\s|$)/.test(line)) {
-          return  // our bookkeeping files
-        }
-        relistDebounce.restart()
+    streaming: true
+    onLineReceived: function(line) {
+      if (/\/\.(order|notebooks)(\s|$)/.test(line)) {
+        return  // our bookkeeping files
       }
+      relistDebounce.restart()
     }
   }
 

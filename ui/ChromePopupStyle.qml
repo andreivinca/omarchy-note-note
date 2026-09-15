@@ -1,5 +1,5 @@
 import QtQuick
-import qs.Commons
+import "../design"
 
 // Shared by application menus, editing menus and their popup panels.
 QtObject {

@@ -37,7 +37,7 @@ import time
 import uuid
 
 HOME = os.path.expanduser("~")
-CACHE_DIR = os.path.join(os.environ.get("XDG_CACHE_HOME", HOME + "/.cache"), "omarchy")
+CACHE_DIR = os.environ.get("NOTE_NOTE_CACHE_DIR") or os.path.join(os.environ.get("XDG_CACHE_HOME", HOME + "/.cache"), "omarchy")
 # One directory, two files per key: <key>.json (the state) and <key>.lock (the
 # flock). Overridable so the selftest never touches the real budget.
 DEFAULT_DIR = os.path.join(CACHE_DIR, "note-note-rate")

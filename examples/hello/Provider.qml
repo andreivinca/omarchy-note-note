@@ -1,10 +1,9 @@
 import QtQuick
-import qs.Commons
-import qs.Ui
+import QtQuick.Controls
 
 // The smallest useful provider: one section, notes kept in memory, and a
 // setup screen of its own (a name) that it stores in its state. Copy it to
-// ~/.config/omarchy/note-note/providers/hello/ to see it in the sidebar.
+// the active host's providers/hello/ directory to see it in the sidebar.
 Item {
   id: root
 
@@ -23,6 +22,8 @@ Item {
 
   property var host: null
   property var services: null
+  readonly property var style: services ? services.style : null
+  readonly property var colors: services ? services.colors : null
 
   signal updated()
   signal statusRequested(string text)
@@ -117,44 +118,42 @@ Item {
     id: setupView
     FocusScope {
       property string current: ""
-      width: parent ? parent.width : Style.space(600)
+      width: parent ? parent.width : root.style.space(600)
       height: column.implicitHeight
 
       Column {
       id: column
-      spacing: Style.spacing.md
-      leftPadding: Style.spacing.md
-      topPadding: Style.spacing.md
+      spacing: root.style.spacing.md
+      leftPadding: root.style.spacing.md
+      topPadding: root.style.spacing.md
 
       Text {
         textFormat: Text.PlainText
         text: "This example provider keeps notes in memory and only needs to know your name. Settings never leave the provider."
-        color: Color.menu.text
-        font.family: Style.font.menuFamily
-        font.pixelSize: Style.font.body
-        width: Style.space(520)
+        color: root.colors.menu.text
+        font.family: root.style.font.menuFamily
+        font.pixelSize: root.style.font.body
+        width: root.style.space(520)
         wrapMode: Text.Wrap
       }
       TextField {
         id: nameField
-        width: Style.space(320)
+        width: root.style.space(320)
         text: current
         placeholderText: "Your name"
-        foreground: Color.menu.text
-        accent: Color.accent
-        font.family: Style.font.menuFamily
+        color: root.colors.menu.text
+        selectionColor: root.colors.accent
+        font.family: root.style.font.menuFamily
         focus: true
         Keys.onReturnPressed: saveButton.clicked()
       }
       Row {
-        spacing: Style.spacing.sm
+        spacing: root.style.spacing.sm
         Button {
           id: saveButton
           text: "Save"
-          iconText: "󰆓"
-          bordered: true
-          foreground: Color.menu.text
-          accent: Color.accent
+          palette.buttonText: root.colors.menu.text
+          palette.highlight: root.colors.accent
           onClicked: {
             var v = nameField.text.trim()
             if (!v) {
@@ -169,9 +168,8 @@ Item {
         }
         Button {
           text: "Cancel"
-          bordered: true
-          foreground: Color.menu.text
-          accent: Color.accent
+          palette.buttonText: root.colors.menu.text
+          palette.highlight: root.colors.accent
           onClicked: root.viewCleared()
         }
       }

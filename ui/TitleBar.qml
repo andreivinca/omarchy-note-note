@@ -1,7 +1,7 @@
 import QtQuick
 import QtQuick.Controls as QQC
-import qs.Commons
-import qs.Ui
+import "../design"
+import "../design/controls"
 
 // Notebook tabs, search and the application menu.
 Item {
@@ -17,6 +17,7 @@ Item {
   property var sections: []
   property var matchCounts: ({})
   property string activeKey: ""
+  property bool supportsOverlay: true
   property bool detached: false
   // True while any page stands in for the workspace — settings or the key
   // bindings. The bar only needs to know that the notes are not on screen,
@@ -207,7 +208,7 @@ Item {
           { id: "keys",
             icon: "󰌌",
             label: "Key bindings" }
-        ]
+        ].filter(function(row) { return row.id !== "detach" || root.supportsOverlay })
 
         padding: popupStyle.padding + Border.left(popupStyle.borderSpec)
         background: BorderSurface {

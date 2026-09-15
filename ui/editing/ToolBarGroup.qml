@@ -1,6 +1,6 @@
 import QtQuick
-import qs.Commons
-import qs.Ui
+import "../../design"
+import "../../design/controls"
 import ".." as AppUi
 
 Rectangle {
@@ -91,7 +91,7 @@ Rectangle {
           radius: Math.max(0, group.radius - group.panelPadding)
           borderSpec: Border.none()
           // Labeled menus use the ordinary tool hover fill even at rest.
-          background: labeledMenu ? Style.hoverFillFor(foreground, accent) : "transparent"
+          backgroundColor: labeledMenu ? Style.hoverFillFor(foreground, accent) : "transparent"
           active: menu.opened || modelData.panelOpen
           selected: modelData.checked
           foreground: Util.alpha(group.editor.foreground, 0.72)
